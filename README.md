@@ -41,3 +41,12 @@ The repository was empty when this baseline was created. The initial donor inven
 This branch adds an executable, tenant-scoped sales work queue, a bounded 'autopilot' import-and-triage command, source-aware StarFruitMe and KIGOR handoff importers, date-decayed buying signals, evidence-only internal sales briefs, and deterministic inbound reply suppression. These are **sales-domain** functions, not a new model scheduler or replacement of existing FruitStack services. See docs/ADOPTION_OPENOUTBOUND.md and tests/test_integration.py.
 
 The system still lacks real scheduled data discovery, live BlackberryMe identity confirmations, live model-role execution, outbound dispatch, website UI, Setter/Closer and revenue verification; do not describe it as a finished autonomous sales team.
+
+
+## Native FruitStack sales missions (P0.3 development)
+
+The feature branch now includes an optional **real PlumMe UNI execution adapter** using the existing `PlumMeService.run_neuron(NeuronRequest)`, with bounded Head of Sales → Market Intelligence → SDR roles, source-constrained recommendations, durable business mission states and model receipt IDs. These are internal sales research workers, not authorized customer-contact agents.
+
+`discover-starfruit` directly reads **existing authorized StarFruitMe MCP v2 discovery jobs** via `find_companies` and `get_company`. `sales-run` composes read-only Discovery → intake → internal triage → three PlumMe role stages in one command. It never triggers new external scraping, sends email or makes calls.
+
+Docs: `docs/FRUITSTACK_SALES_MISSIONS.md`, `docs/INTEGRATION_STARFRUIT_MCP.md`, `docs/INTEGRATED_SALES_PIPELINE.md`. GitHub CI runs 32 offline tests/contract checks on the current PR. Actual host/provider execution, MangoMe canonical WorkIdentity binding, BlackberryMe live identity, product UI, independent legal permission and actual sales are still **unverified or not implemented**.
