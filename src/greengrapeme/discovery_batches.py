@@ -45,8 +45,8 @@ class DiscoveryBatches:
         A crash between planning and SalesMission creation is recoverable by
         repeating the SAME source snapshot. A changed snapshot is rejected.
         """
-        if not records or len(records) > 100:
-            raise ValueError("discovery cohort must contain 1..100 source records")
+        if not records or len(records) > 1000:
+            raise ValueError("discovery cohort must contain 1..1000 source records")
         ordered = sorted(records, key=lambda r: r.opportunity_id)
         if len({r.opportunity_id for r in ordered}) != len(ordered):
             raise ValueError("duplicate source account ID")

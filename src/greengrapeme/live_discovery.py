@@ -27,45 +27,98 @@ def _result(result, operation: str) -> dict:
     return content
 
 
+class SourceCapacityExceeded(ValueError):
+    """Source returned more candidates than this admitted job can process."""
+    def __init__(self, total: int, limit: int):
+        self.total = total
+        self.limit = limit
+        super().__init__(f"StarFruitMe has {total} candidates, admitted limit is {limit}")
+
+
+class SourceSnapshotError(ValueError):
+    """Inconsistent or incomplete paginated StarFruitMe source snapshot."""
+
+
 async def read_starfruit_companies(client: SourceToolClient, *,
                                    job_id: str, offer_id: str,
                                    limit: int = 100) -> list[Opportunity]:
-    """Read staged candidates and original observation references via MCP.
+    """Read and validate EVERY page within the authorized bounded source cohort.
 
-    This operation neither creates discovery jobs nor runs external scrapers.
+    StarFruitMe provides ordered candidate_id pagination and total_matching.
+    No partial company data is returned on source overflow or inconsistency.
+    The source does not expose a transactional snapshot token: changes can
+    still occur between reads; this implementation detects duplicates,
+    drifting counts and changes to the first page as a best-effort fence.
     """
     if not isinstance(job_id, str) or not _JOB.fullmatch(job_id):
         raise ValueError("invalid StarFruitMe job_id")
     if not isinstance(offer_id, str) or not offer_id.strip() or len(offer_id) > 160:
         raise ValueError("invalid offer_id")
-    if type(limit) is not int or not 1 <= limit <= 500:
-        raise ValueError("limit must be 1..500")
-    listing = _result(await client.call_tool(
-        "find_companies", {"job_id": job_id, "limit": limit, "offset": 0}), "find_companies")
-    if listing.get("job_id") != job_id or not isinstance(listing.get("companies"), list):
-        raise ValueError("StarFruitMe response job/scheme mismatch")
-    if len(listing["companies"]) > limit:
-        raise ValueError("StarFruitMe returned more records than requested")
-    records: list[Opportunity] = []
-    seen: set[str] = set()
-    for candidate in listing["companies"]:
-        if not isinstance(candidate, dict):
-            raise ValueError("invalid StarFruitMe company row")
-        cid = candidate.get("candidate_id")
-        if not isinstance(cid, str) or not 1 <= len(cid) <= 160 or cid in seen:
-            raise ValueError("duplicate or invalid StarFruitMe candidate_id")
-        seen.add(cid)
+    if type(limit) is not int or not 1 <= limit <= 1000:
+        raise ValueError("limit must be 1..1000")
+
+    page_size = min(100, limit)
+    first_page_ids = None
+    all_candidates = []
+    seen = set()
+    expected_total = None
+    offset = 0
+
+    while expected_total is None or offset < expected_total:
+        request_limit = min(page_size, limit - offset)
+        if request_limit <= 0:
+            raise SourceSnapshotError("source candidate limit exhausted prematurely")
+        listing = _result(await client.call_tool(
+            "find_companies",
+            {"job_id": job_id, "limit": request_limit, "offset": offset}),
+            "find_companies")
+        total = listing.get("total_matching")
+        rows = listing.get("companies")
+        if (listing.get("job_id") != job_id or
+                type(total) is not int or total < 0 or
+                type(listing.get("offset")) is not int or listing["offset"] != offset or
+                type(listing.get("limit")) is not int or listing["limit"] != request_limit or
+                not isinstance(rows, list) or len(rows) > request_limit):
+            raise SourceSnapshotError("StarFruitMe pagination metadata mismatch")
+        if expected_total is None:
+            expected_total = total
+            if total > limit:
+                raise SourceCapacityExceeded(total, limit)
+        elif total != expected_total:
+            raise SourceSnapshotError("StarFruitMe source total changed during pagination")
+        if len(rows) != min(request_limit, expected_total - offset):
+            raise SourceSnapshotError("StarFruitMe returned an incomplete candidate page")
+        page_ids = []
+        for candidate in rows:
+            if not isinstance(candidate, dict):
+                raise SourceSnapshotError("invalid StarFruitMe company row")
+            cid = candidate.get("candidate_id")
+            if not isinstance(cid, str) or not 1 <= len(cid) <= 160 or cid in seen:
+                raise SourceSnapshotError("duplicate or invalid StarFruitMe candidate_id")
+            seen.add(cid)
+            page_ids.append(cid)
+            all_candidates.append(candidate)
+        if first_page_ids is None:
+            first_page_ids = page_ids
+        offset += len(rows)
+
+    if offset != expected_total or len(all_candidates) != expected_total:
+        raise SourceSnapshotError("StarFruitMe pagination coverage incomplete")
+
+    records = []
+    for candidate in all_candidates:
+        cid = candidate["candidate_id"]
         detail = _result(await client.call_tool(
             "get_company", {"job_id": job_id, "candidate_id": cid, "observation_limit": 10}),
             "get_company")
         row = detail.get("candidate")
         if not isinstance(row, dict) or row.get("candidate_id") != cid:
-            raise ValueError("StarFruitMe candidate detail mismatch")
+            raise SourceSnapshotError("StarFruitMe candidate detail mismatch")
         if detail.get("canonical_record") is not False or detail.get("golden_company_id"):
-            raise ValueError("unexpected canonical status in staging response")
+            raise SourceSnapshotError("unexpected canonical status in staging response")
         name = row.get("name")
         if not isinstance(name, str) or not name.strip():
-            continue  # a place without its own name cannot yet be a sales account
+            raise SourceSnapshotError("unnamed StarFruitMe candidate requires source reconciliation")
         evidence = []
         for observation in detail.get("observations", []):
             if not isinstance(observation, dict):
@@ -92,6 +145,19 @@ async def read_starfruit_companies(client: SourceToolClient, *,
             company_name=name.strip(), offer_id=offer_id,
             evidence=tuple(evidence), verified_company=False
         ))
+
+    if expected_total:
+        # Best-effort drift check; not a database-wide snapshot lock.
+        head = _result(await client.call_tool(
+            "find_companies",
+            {"job_id": job_id, "limit": page_size, "offset": 0}),
+            "find_companies")
+        refreshed = head.get("companies")
+        if (head.get("job_id") != job_id or head.get("total_matching") != expected_total
+                or not isinstance(refreshed, list)
+                or [r.get("candidate_id") if isinstance(r, dict) else None
+                    for r in refreshed] != first_page_ids):
+            raise SourceSnapshotError("StarFruitMe source changed after pagination")
     return records
 
 

@@ -13,7 +13,8 @@ import json
 import re
 from typing import Any, Protocol
 
-from .live_discovery import _result, read_starfruit_companies
+from .live_discovery import (_result, read_starfruit_companies,
+                             SourceCapacityExceeded, SourceSnapshotError)
 from .mango_binding import MangoMissionBinding
 from .blackberry_bridge import (
     BlackberryReviewStore, research_with_installed_blackberry, research_fingerprint
@@ -64,8 +65,8 @@ class DiscoverySpec:
             raise ValueError("mode must be existing or new")
         for label in ("offer_id", "objective", "icp"):
             _required(getattr(self, label), label, 160 if label == "offer_id" else 2000)
-        if type(self.max_accounts) is not int or not 1 <= self.max_accounts <= 100:
-            raise ValueError("max_accounts must be 1..100")
+        if type(self.max_accounts) is not int or not 1 <= self.max_accounts <= 1000:
+            raise ValueError("max_accounts must be 1..1000")
         if type(self.max_searches) is not int or not 1 <= self.max_searches <= 10:
             raise ValueError("max_searches must be 1..10")
         if type(self.source_rights_acknowledged) is not bool:
@@ -355,10 +356,22 @@ class DiscoveryJobQueue:
                 return self.get(tenant, request_id)
             try:
                 records = await source.read(job_id, spec.offer_id, spec.max_accounts)
-                outcome = self.store.ingest(tenant, records)
-            except Exception:
-                # Read-only status remains retryable; do not misreport source coverage.
+            except SourceCapacityExceeded as exc:
+                self._transition(
+                    tenant, request_id, state, "BLOCKED_SOURCE_CAPACITY",
+                    result={"total_matching": exc.total,
+                            "admitted_limit": exc.limit, "imported": 0},
+                    error_kind="SOURCE_EXCEEDS_ADMITTED_ACCOUNT_LIMIT")
                 return self.get(tenant, request_id)
+            except SourceSnapshotError:
+                self._transition(
+                    tenant, request_id, state, "BLOCKED_SOURCE_REVISION",
+                    error_kind="SOURCE_PAGINATION_INCONSISTENT")
+                return self.get(tenant, request_id)
+            except Exception:
+                # Unknown read failure: retryable, but cannot claim completeness.
+                return self.get(tenant, request_id)
+            outcome = self.store.ingest(tenant, records)
             if outcome["conflict"]:
                 self._transition(tenant, request_id, state, "BLOCKED_SOURCE_REVISION",
                                  result={"intake": outcome})

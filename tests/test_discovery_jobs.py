@@ -16,6 +16,7 @@ from greengrapeme.discovery_catalog import DiscoveryCatalog
 from greengrapeme.discovery_jobs import (
     DiscoveryJobQueue, DiscoverySpec, TrustedWorkAdmission
 )
+from greengrapeme.live_discovery import SourceCapacityExceeded, SourceSnapshotError
 from greengrapeme.missions import NeuronProposal
 from greengrapeme.operations import SalesWorkspace
 from greengrapeme.sales import Evidence, Opportunity
@@ -343,6 +344,42 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual(source.calls,["create","run"])
         asyncio.run(self.jobs.advance("A","job-00000001",source,allow_external_source=True))
         self.assertEqual(source.calls,["create","run"])
+
+    def test_source_overflow_blocks_without_importing_partial_accounts(self):
+        class OverflowSource(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                raise SourceCapacityExceeded(1201, limit)
+        source = OverflowSource()
+        self.jobs.create("A","job-00000001",old_spec())
+        outcome = asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(outcome["state"],"BLOCKED_SOURCE_CAPACITY")
+        self.assertEqual(outcome["error_kind"],"SOURCE_EXCEEDS_ADMITTED_ACCOUNT_LIMIT")
+        self.assertEqual(outcome["result"]["total_matching"],1201)
+        self.assertEqual(outcome["result"]["imported"],0)
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_inconsistent_pagination_blocks_with_no_partial_import(self):
+        class DriftingSource(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                raise SourceSnapshotError("source total changed between pages")
+        self.jobs.create("A","job-00000001",old_spec())
+        outcome = asyncio.run(self.jobs.advance(
+            "A","job-00000001",DriftingSource(),
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(outcome["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(outcome["error_kind"],"SOURCE_PAGINATION_INCONSISTENT")
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_account_limit_up_to_1000_is_valid(self):
+        candidate = DiscoverySpec(mode="existing", job_id=JOB,
+            offer_id="offer", objective="Find B2B leads", icp="Companies",
+            max_accounts=1000)
+        self.assertEqual(candidate.max_accounts, 1000)
+        with self.assertRaisesRegex(ValueError,"max_accounts"):
+            DiscoverySpec(mode="existing", job_id=JOB,
+                offer_id="offer",objective="Find",icp="Companies",max_accounts=1001)
 
     def test_source_revision_conflict_blocks(self):
         self.jobs.create("A","job-00000001",old_spec())

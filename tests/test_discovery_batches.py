@@ -209,6 +209,25 @@ class BatchesTests(unittest.TestCase):
         self.assertEqual([b["accounts"] for b in result["result"]["batch_statuses"]],
                          [25,25,10])
 
+    def test_101_accounts_span_five_isolated_missions(self):
+        extra = "batch-job-101-accounts"
+        self.source = ManySource(101)
+        self.queue.create("tenant-A", extra, DiscoverySpec(
+            mode="existing", job_id=JOB, offer_id="offer",
+            objective="Find B2B companies", icp="German B2B companies",
+            max_accounts=1000))
+        result = asyncio.run(self.queue.advance(
+            "tenant-A", extra, self.source,
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"], "BATCH_AWAITING_BLACKBERRY")
+        self.assertEqual(result["result"]["discovered"], 101)
+        self.assertEqual(result["result"]["batch_count"], 5)
+        sizes = [b["accounts"] for b in result["result"]["batch_statuses"]]
+        self.assertEqual(sizes, [25,25,25,25,1])
+        missions = DiscoveryBatches(self.store).list("tenant-A", extra)
+        self.assertEqual(len({
+            acc["id"] for group in missions for acc in group["accounts"]}),101)
+
     def test_revocation_stops_batch_before_new_research(self):
         self.advance()
         result=asyncio.run(self.queue.advance(

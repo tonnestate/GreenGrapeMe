@@ -74,3 +74,8 @@ Die UI verwaltet nun persistente Discovery-Jobs statt ausschließlich importiert
 **Offline nachweisbar:** Eingabe-/Quellenlimits, idempotente Job-IDs, eigene Tenant-Scopes, API-Origin-/Token-Pflicht, neue Source-Jobs mit doppeltem Host-/User-Gate, Replaysperre bei unklaren Resultaten, Quellenkonfliktblockade, Sales-Work-Creation und gemockte MangoMe-/PlumMe-Kette. `tests/test_discovery_jobs.py`.
 
 **Noch offen:** reale externe Source-Nutzungsberechtigung und tatsächliche Daten auf dem FruitStack-Host, MangoMe Live-Mongo-/Recovery, BlackBerryMe-ID-Linkage, nachweisbare Provider-Gesamtstrecke, freie SaaS-Anmeldung, Kampagnen/Setter/Closer, bezahlter Abschluss. Die neue UI darf nicht öffentlich bereitgestellt werden.
+
+
+## Pagination Acceptance – 1,000 candidates maximum per request
+
+The StarFruitMe MCP read adapter must consume `total_matching`/offset pages (<=100/page), not just the first page. A count above `max_accounts` must yield `BLOCKED_SOURCE_CAPACITY` with zero imported records, never a green partial Discovery. Page drift and missing source names fail closed as `BLOCKED_SOURCE_REVISION`. Test fixtures may simulate this contract; actual source snapshot consistency still requires a live StarFruitMe host with donor-side snapshot/version semantics.

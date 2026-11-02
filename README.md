@@ -86,3 +86,10 @@ Zwischen StarFruitMe-Import und MangoMe-Admission liegt nun `AWAITING_BLACKBERRY
 Discovery jobs with **26–100** returned source accounts are now split into deterministic, immutable `<=25`-account SalesMissions with independent source fingerprints, BlackberryMe research progress, MangoMe canonical admission and PlumMe cognitive receipts. A source with 60 records creates 25+25+10 scopes. Every batch must reach `REVIEW_READY` before the parent job is marked `REVIEW_READY`; missing host services leave the queue pending instead of bypassing admission. Batch status and completion counters are visible in the existing Discovery UI. Existing jobs with 1–25 records retain the original mission IDs and behavior.
 
 This is **not unlimited source coverage**: one request currently reads at most 100 source candidates and StarFruitMe's first-result page. More than 100, paging, recurring jobs, true legal identity and real end-to-end host tests remain outstanding. See `docs/DISCOVERY_MISSIONS_UI.md`.
+
+
+## P0.4: source-complete StarFruitMe pagination with explicit limits
+
+The StarFruitMe source reader now consumes all `find_companies` pages using its actual `offset`, `limit` and `total_matching` response. It fetches up to **1,000** source candidates per authorized Discovery request and routes them into the existing immutable **25-account** MangoMe/PlumMe sales batches (up to 40 batches). The browser lets the operator select a limit from 1–1,000. No source candidate is silently dropped because the first page ended.
+
+If the source reports **more than the configured limit**, the job becomes `BLOCKED_SOURCE_CAPACITY` with `total_matching`, `admitted_limit` and **imported=0**. If a page, candidate or returned total changes, it becomes `BLOCKED_SOURCE_REVISION` with `SOURCE_PAGINATION_INCONSISTENT`. These failures cannot be reported as full research completion. Source pagination is best-effort consistent: StarFruitMe's contract has no transactional cross-call snapshot identifier and a mid-run source mutation could escape detection without a donor-side snapshot/version token.
