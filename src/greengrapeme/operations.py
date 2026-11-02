@@ -108,11 +108,18 @@ class SalesWorkspace:
                     conflict_ids.add(oid)
             if conflict_ids:
                 for oid in sorted(conflict_ids):
-                    self._enqueue(db, tenant, oid, "MARKET_INTELLIGENCE",
-                                  "SOURCE_REVISION_REVIEW",
-                                  {"source_changed": True, "source_batch_rejected": True})
+                    # A duplicate *inside* a fresh source batch has no stored
+                    # account to review. Do not enqueue an orphan work item.
+                    existing = db.execute("""SELECT 1 FROM opportunities
+                        WHERE tenant=? AND opportunity_id=?""",
+                        (tenant, oid)).fetchone()
+                    if existing:
+                        self._enqueue(db, tenant, oid, "MARKET_INTELLIGENCE",
+                                      "SOURCE_REVISION_REVIEW",
+                                      {"source_changed": True, "source_batch_rejected": True})
                     self._audit(db, tenant, oid, "SOURCE_REVISION_CONFLICT",
-                                {"batch_rejected": True})
+                                {"batch_rejected": True,
+                                 "existing_account": bool(existing)})
                 return {"new": 0, "unchanged": 0, "conflict": len(conflict_ids)}
             for record in records:
                 payload = json.dumps(asdict(record), sort_keys=True)
