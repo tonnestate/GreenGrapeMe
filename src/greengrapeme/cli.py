@@ -7,6 +7,7 @@ import json
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
+from .reply_effects import ReplyEffects
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
 from .live_discovery import read_from_installed_starfruit
@@ -80,6 +81,18 @@ def main(argv: list[str] | None = None) -> int:
     step.add_argument("--evidence-ref", required=True)
     step.add_argument("--reporter-ref", required=True)
     step.add_argument("--followup-at", default="")
+    reply_prepare = sub.add_parser("pilot-reply-prepare",
+        help="Record an immutable inbound reply reference; NO dispatch")
+    reply_prepare.add_argument("--pilot-id", required=True)
+    reply_prepare.add_argument("--case-id", required=True)
+    reply_prepare.add_argument("--reply-id", required=True)
+    reply_prepare.add_argument("--recipient-ref", required=True)
+    reply_prepare.add_argument("--content-ref", required=True)
+    reply_prepare.add_argument("--content-sha256", required=True)
+    replies = sub.add_parser("pilot-replies",
+        help="Read guarded reply-effect state; no provider operations")
+    replies.add_argument("--pilot-id", required=True)
+    replies.add_argument("--case-id", required=True)
     reply = sub.add_parser("reply")
     reply.add_argument("--opportunity", required=True)
     reply.add_argument("--message-id", required=True)
@@ -204,6 +217,14 @@ def main(argv: list[str] | None = None) -> int:
             expected_state=a.expected_state,to_state=a.to_state,
             reporter_ref=a.reporter_ref,evidence_ref=a.evidence_ref,
             followup_at=a.followup_at)
+    elif a.command == "pilot-reply-prepare":
+        result = ReplyEffects(store).prepare(
+            a.tenant,a.pilot_id,a.case_id,a.reply_id,
+            recipient_ref=a.recipient_ref,content_ref=a.content_ref,
+            content_sha256=a.content_sha256)
+    elif a.command == "pilot-replies":
+        result = {"items":ReplyEffects(store).list(
+            a.tenant,a.pilot_id,a.case_id)}
     elif a.command == "reply":
         result = {"category": store.ingest_reply(a.tenant, a.opportunity, a.message_id,
                                                   a.body, subject=a.subject)}

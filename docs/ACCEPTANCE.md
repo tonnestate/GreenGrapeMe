@@ -103,3 +103,8 @@ Pilot commercial terms and prospect-relevant events are tenant-scoped and persis
 ## G1: report-only inbound sales flow – implemented, not autonomous outreach
 
 Pilot inbound intake, conditional operator transition, follow-up scheduling, meeting, delivery and signature claims are source/tenant scoped, durable, idempotent and never result in actual customer communication. Each successful sales milestone creates its existing PilotLedger REPORTED event transactionally. Unverified accounts or CRM/referral intake NEVER confer messaging consent. Case progression does not independently verify contracts or produce revenue. Tests must prove no auto-send and no confirmed payment as a side effect. Live CRM/consent/calendar/prospect-provider integration remains a release blocker.
+
+
+## P0/23 – Inbound reply effect bridge (not a live provider)
+
+Reply metadata preparation, immutable content hash and recipient ref, real PomeloMe model/authority contract, independent host permission check, opt-out/source revision fence, durable pre-dispatch state and read-only PomeloMe reconciliation are implemented. Tests use faithful stubs of PomeloMe request/response types and show no unapproved contact action. This does not constitute real consent, an installed mail adapter, a provider-accepted message or a live dispatch test. A second opt-out/recipient/payload check at the installed adapter's physical send boundary remains mandatory; the pilot DB and PomeloMe ledger do not share an atomic transaction.

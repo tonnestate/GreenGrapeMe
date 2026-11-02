@@ -114,3 +114,8 @@ Added `PilotLedger` in `src/greengrapeme/pilot_metrics.py`: tenant-isolated pilo
 ## Inbound-to-deal pilot sales workflow
 
 `src/greengrapeme/pilot_sales_flow.py` adds a tenant-isolated **operator-attested** inbound-to-contract funnel reusing `SalesWorkspace` accounts and `PilotLedger` non-financial events. Steps are transactionally written with reported (not verified) qualification/meeting/proposal/signature entries; optional due-date follow-ups **never send messages**. CLI `pilot-inbound`, `pilot-step`, `pilot-cases`; local browser only reads `/api/pilot-cases`. See `docs/PILOT_SALES_FLOW.md`.
+
+
+## PomeloMe-gebundene Reply-Effects – kein eigener Dispatcher
+
+GreenGrapeMe kann zu einem vorhandenen, mit Quellen dokumentierten Inbound-Fall eine unveränderliche Referenz auf eine Reply-Nachricht vorbereiten. Der Host kann ausschließlich nach unabhängiger Kontakt-/Zweckfreigabe und tatsächlicher PomeloMe-`AuthorityEnvelope` einen `IRREVERSIBLE`-`EffectIntent` an den vorhandenen `EffectGateway` übergeben. Offline-Tests sichern Consent-/Scope-/Suppression-Fences und die Nicht-Wiederholung unklarer Provider-Antworten. Der konkrete zuständige PomeloMe-Kommunikationsadapter und die echte Consent-Quelle **fehlen weiterhin**; es findet daher noch kein produktiver Versand statt. Details: `docs/INBOUND_REPLY_EFFECTS.md`.

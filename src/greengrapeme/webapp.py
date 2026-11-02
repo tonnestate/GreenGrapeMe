@@ -19,6 +19,7 @@ from .discovery_jobs import DiscoveryJobQueue, DiscoverySpec
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
+from .reply_effects import ReplyEffects
 
 
 def _response(start_response: Callable, code: str, body: bytes,
@@ -131,6 +132,9 @@ def create_app(catalog: DiscoveryCatalog, *, tenant: str, token: str):
                 data = PilotLedger(catalog.store).summary(tenant, single("id"))
             elif path == "/api/pilot-cases":
                 data = PilotSalesFlow(catalog.store).list(tenant, single("pilot"))
+            elif path == "/api/pilot-replies":
+                data = {"items":ReplyEffects(catalog.store).list(
+                    tenant, single("pilot"), single("case"))}
             else:
                 return _response(start_response, "404 Not Found",
                                  b'{"error":"not_found"}')
