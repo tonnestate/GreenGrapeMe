@@ -39,3 +39,7 @@ PYTHONPATH=src python -m greengrapeme.cli --tenant <trusted-tenant> --db sales.d
 ```
 
 **Nächste zwingende Abnahmen:** tatsächliche Host-Permission/Consent-Engine, konkret angebundener Provider-/Pomelo-Adapter einschließlich Adapter-seitiger letzter Prüfung, Live-FruitStack-Host-Test und effektiver Opt-out-Latenzmessung. Erst danach darf ein realer Versandtest unter expliziter Freigabe durchgeführt werden. Kein autonomer Outbound, kein KI-generiertes Contact Grant, keine faktischen Umsätze und kein öffentliches SaaS-Deployment werden behauptet.
+
+## Zusätzliche Receipt-Bindung (QA-Nachtrag)
+
+Ein flüchtiger `EffectGateway.execute`-Erfolgswert genügt **nicht** zur bestätigten Provider-Annahme. Die Integrationsschicht liest aus PomeloMe erneut den dauerhaften Effect-Datensatz und prüft die exakte ursprüngliche `effect_id`, den irreversiblen Toolnamen, die Idempotency-ID, Tenant/Pilot/Case/Opportunity, Empfänger-Referenz, Content-Referenz samt SHA-256, Kanal, Zweck und den hostseitigen Permission-Receipt. Zusätzlich müssen die `RECONCILED`-Observation im Gateway-Resultat und im dauerhaften Store übereinstimmen. Bei jeder Abweichung bleibt `DISPATCH_UNCERTAIN` erhalten; ein Re-Send ist ausgeschlossen. Ein offline simuliertes Gateway beweist nach wie vor keinen realen Versand.

@@ -62,18 +62,25 @@ class FakeGateway:
         self.store=EffectStore()
     def execute(self,intent,authority):
         self.calls.append((intent,authority))
+        self.store.effects[intent.effect_id]={
+            "effect_id":intent.effect_id,"tool":intent.tool,
+            "effect_class":intent.effect_class,
+            "intent":{
+                "effect_id":intent.effect_id,"tool":intent.tool,
+                "idempotency_key":intent.idempotency_key,
+                "args":dict(intent.args)},
+            "state":"DISPATCHED","observation":None}
         if self.mode=="timeout":
             # An eventual provider receipt can be detected by Pomelo later.
             raise TimeoutError("response lost at provider boundary")
         if self.mode=="unknown":
-            self.store.effects[intent.effect_id]={
-                "state":"WAITING_APPROVAL","observation":None}
+            self.store.effects[intent.effect_id]["state"]="WAITING_APPROVAL"
             return SimpleNamespace(state="WAITING_APPROVAL",observation=None)
         successful=self.mode=="success"
         result={"success":successful,
                 "external_ref":"provider-message-001" if successful else None}
-        self.store.effects[intent.effect_id]={
-            "state":"RECONCILED","observation":result}
+        self.store.effects[intent.effect_id].update(
+            state="RECONCILED",observation=result)
         return SimpleNamespace(state="RECONCILED",
             observation=SimpleNamespace(**result))
 
@@ -190,9 +197,9 @@ class ReplyEffectsTests(unittest.TestCase):
             self.send(gateway=gateway)
         self.assertEqual(len(gateway.calls),1)
         # The independent PomeloMe effect store later receives provider proof.
-        gateway.store.effects[row["effect_id"]]={
-            "state":"RECONCILED","observation":{
-                "success":True,"external_ref":"provider-message-001"}}
+        gateway.store.effects[row["effect_id"]].update(
+            state="RECONCILED",observation={
+                "success":True,"external_ref":"provider-message-001"})
         recovered=self.effects.reconcile(*self.key,gateway=gateway)
         self.assertEqual(recovered["state"],"PROVIDER_ACCEPTED")
         self.assertEqual(len(gateway.calls),1)
@@ -206,6 +213,23 @@ class ReplyEffectsTests(unittest.TestCase):
         self.assertIsNone(changed["provider_ref"])
         self.assertEqual(self.effects.reconcile(*self.key,gateway=gateway)["state"],
                          "DISPATCH_UNCERTAIN")
+
+    def test_mismatched_durable_provider_receipt_cannot_claim_success(self):
+        self.prepare()
+        gateway=FakeGateway("success")
+        original=gateway.execute
+        def forged(intent,authority):
+            result=original(intent,authority)
+            gateway.store.effects[intent.effect_id]["intent"]["args"][
+                "recipient_ref"]="urn:crm:wrong:recipient-999"
+            return result
+        gateway.execute=forged
+        row=self.send(gateway=gateway)
+        self.assertEqual(row["state"],"DISPATCH_UNCERTAIN")
+        self.assertIsNone(row["provider_ref"])
+        self.assertEqual(self.effects.reconcile(*self.key,gateway=gateway)[
+                         "state"],"DISPATCH_UNCERTAIN")
+        self.assertEqual(len(gateway.calls),1)
 
     def test_provider_failure_records_failure_not_success(self):
         self.prepare()

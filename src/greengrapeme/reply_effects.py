@@ -249,7 +249,51 @@ class ReplyEffects:
                     AND reply_id=? AND state='DISPATCH_IN_FLIGHT'""",
                     (self.store._now(),tenant,pilot_id,case_id,reply_id))
             return self.get(tenant,pilot_id,case_id,reply_id)
-        return self._finalize(tenant,pilot_id,case_id,reply_id,result)
+        durable=self._row(tenant,pilot_id,case_id,reply_id)
+        verified=self._confirmed_from_gateway(durable,gateway,result)
+        return self._finalize(tenant,pilot_id,case_id,reply_id,verified)
+
+    @staticmethod
+    def _matches_durable_effect(row: dict, effect: dict | None) -> bool:
+        """A returned result is NOT evidence without the exact Pomelo intent."""
+        if not isinstance(effect,dict) or effect.get("state")!="RECONCILED":
+            return False
+        intent=effect.get("intent")
+        if not isinstance(intent,dict) or not isinstance(intent.get("args"),dict):
+            return False
+        args=intent["args"]
+        if (effect.get("effect_id")!=row["effect_id"] or
+                effect.get("tool")!=_TOOL or
+                str(effect.get("effect_class"))!="IRREVERSIBLE" or
+                intent.get("effect_id")!=row["effect_id"] or
+                intent.get("tool")!=_TOOL or
+                intent.get("idempotency_key")!=row["effect_id"]):
+            return False
+        for key,expected in {
+            "tenant":row["tenant"],"pilot_id":row["pilot_id"],
+            "case_id":row["case_id"],"opportunity_id":row["opportunity_id"],
+            "recipient_ref":row["recipient_ref"],"content_ref":row["content_ref"],
+            "content_sha256":row["content_sha256"],
+            "channel":_CHANNEL,"purpose":_PURPOSE,
+            "effect_id":row["effect_id"],
+            "permission_receipt_ref":row["permission_receipt_ref"]
+        }.items():
+            if args.get(key)!=expected:
+                return False
+        return isinstance(effect.get("observation"),dict)
+
+    def _confirmed_from_gateway(self, row: dict, gateway: Any, result: Any) -> Any:
+        """Never promote a transient return without a matching durable receipt."""
+        effect=gateway.store.get_effect(row["effect_id"])
+        if not self._matches_durable_effect(row,effect):
+            return None
+        observation=effect["observation"]
+        model_observation=getattr(result,"observation",None)
+        if (str(getattr(result,"state",None))!="RECONCILED" or
+                getattr(model_observation,"success",None)!=observation.get("success") or
+                getattr(model_observation,"external_ref",None)!=observation.get("external_ref")):
+            return None
+        return result
 
     def _finalize(self, tenant,pilot_id,case_id,reply_id,result):
         state=str(getattr(result,"state",""))
@@ -293,11 +337,9 @@ class ReplyEffects:
         if gateway is None or not hasattr(gateway,"store"):
             raise PermissionError("trusted PomeloMe gateway required")
         effect=gateway.store.get_effect(row["effect_id"])
-        if not effect or effect.get("state")!="RECONCILED":
+        if not self._matches_durable_effect(row,effect):
             return row
-        obs=effect.get("observation")
-        if not isinstance(obs,dict):
-            return row
+        obs=effect["observation"]
         class Result:
             state="RECONCILED"
             observation=type("EffectObservationView",(),obs)()
