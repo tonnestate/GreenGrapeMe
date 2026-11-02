@@ -11,6 +11,7 @@ from .live_discovery import read_from_installed_starfruit
 from .pipeline import run_sales_pipeline
 from .blackberry_bridge import research_with_installed_blackberry, BlackberryReviewStore
 from .sources import kigor_records, starfruit_records
+from .webapp import serve
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,9 +71,15 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("--mission-id", required=True)
     proposals = sub.add_parser("mission-proposals")
     proposals.add_argument("--mission-id", required=True)
+    viewer = sub.add_parser("serve", help="Local read-only Discovery UI, loopback only")
+    viewer.add_argument("--port", type=int, default=8765)
+    viewer.add_argument("--token-env", default="GG_VIEWER_TOKEN")
     a = p.parse_args(argv)
     store = SalesWorkspace(a.db)
-    if a.command in {"import", "autopilot"}:
+    if a.command == "serve":
+        serve(db=a.db, tenant=a.tenant, port=a.port, token_env=a.token_env)
+        return 0
+    elif a.command in {"import", "autopilot"}:
         rows = starfruit_records(a.path, a.offer_id) if a.source == "starfruitme" else kigor_records(a.path, a.offer_id)
         result = store.ingest(a.tenant, rows)
         if a.command == "autopilot":
