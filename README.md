@@ -59,3 +59,9 @@ GreenGrapeMe now optionally reuses the **actual BlackberryMe MCP tools** to plan
 A trusted FruitStack host can bind an existing SalesMission to MangoMe's **actual guarded `enter_work`** canonical WorkIdentity and records only the project/family/spec/plan/slice references. The caller must prove the current user intent and correct tenant/workspace; failed/ambiguous admission is durably fenced before the MangoMe call to stop duplicate canonical work admission. There is no new general agent/work-truth store.
 
 See `docs/INTEGRATION_BLACKBERRY_MCP.md` and `docs/INTEGRATION_MANGOME_WORK.md`. The tests are **offline contract checks** with injected MCP/MangoMe responses; the actual FruitStack host, authenticated user context, DNS egress controls, canonical MangoMe MongoDB and live LinkedIn/website provider access have not been tested in this repository. This remains an in-development, non-deployed, non-sending sales application.
+
+## Discovery product preview (0.4 development)
+
+The feature branch now includes a **working local web application** for GreenGrapeMe's own Discovery and Sales Operations data: browser search/filter/pagination, sourced company dossiers, dated buying signals, suppression status, BlackberryMe review, work tasks, and FruitStack sales mission overview. It reads the **same tenant-scoped sales state** populated by StarFruitMe and `sales-run`; it does not duplicate the company catalog.
+
+Start with `GG_VIEWER_TOKEN` set to a random secret of at least 24 characters: `PYTHONPATH=src python -m greengrapeme.cli --tenant local-customer --db sales.sqlite serve --port 8765` and open `http://127.0.0.1:8765/`. **Local loopback preview only**: GET APIs require the token, all mutations are rejected; do not deploy this token-based prototype as a public SaaS. This is a read-only Discovery workspace, not full autonomous source-job control, not a marketing permission grant, and not a revenue-producing product. See `docs/DISCOVERY_PRODUCT.md`.

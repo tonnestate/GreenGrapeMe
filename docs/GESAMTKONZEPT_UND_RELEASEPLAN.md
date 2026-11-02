@@ -373,3 +373,12 @@ Die nachstehenden Punkte sind **Code-/Offline-Integrationsstand**, kein Nachweis
 - **Vorrangige nächste Abnahme:** Ein tatsächlich laufender FruitStack-Host muss StarFruitMe → BlackberryMe → PlumMe → MangoMe über echte, erlaubte Daten und einen identifizierten authentifizierten Operator durchführen. Der anschließende Schritt ist die echte Discovery-Oberfläche und danach der autorisierte Sales-Effect-Pfad, nicht ein weiteres generisches Agentenframework.
 
 Keine automatische Mail/LinkedIn/Telefon-Kontaktaufnahme, kein live verifizierter Closer, keine Kunden-Umsatzverifikation oder freigegebene SaaS-Produktionsstufe.
+
+## 13. Implementierungsnachtrag – bedienbare Discovery-Software (02.11.2026)
+
+- `src/greengrapeme/discovery_catalog.py`: durchsuchbare, mandantenbezogene Ansicht der bereits importierten Opportunity-/Unternehmensdaten mit Such-/Offer-/Statusfilter, Evidenz, zeitlichem Kaufsignal-Score, Sperrstatus, BlackberryMe-Recherche, Aufgaben und Missionen. Keine zweite Company-Master-Datenbank.
+- `src/greengrapeme/webapp.py` und `src/greengrapeme/web/`: lokaler Browser-Arbeitsplatz mit mandantenfestem Viewer, geheimnisgeschützter GET-API, restriktiven Browser-Headern und ohne Schreib-/Versandpfad. `cli serve` startet ausschließlich an Loopback. Es ist **keine produktionsfähige SaaS-Anmeldung**.
+- `tests/test_discovery_product.py`: acht zusätzliche Offline-Vertragstests für Suche, Detail, Quellen, Mandantentrennung, Tokenpflicht, Read-only, Darstellung und sichere Eingabegrenzen.
+- **Offene Kernlücke:** Das Web-Frontend kann einen bestehenden Quell-/Agentenprozess nur betrachten, noch keinen autorisierten Discovery-Job starten, überwachen oder validiert mit MangoMe/PlumMe vollständig ausführen. Ein SaaS-Kundensystem braucht echte Org-/Nutzerrechte, Betriebs-/Datenzugriffsgrenzen, TLS, Secrets, Recovery, Kontakterlaubnis und ein separates abgestimmtes Sales-Effect-Protokoll.
+
+Erfolgsmaßstab für den nächsten Product-Gate: Ein echter, legal zulässiger Discovery-Job wird aus der Oberfläche gestartet, ausgeführt, den zugehörigen Firmendatensätzen und Rollenprüfungen zugeordnet, und der Endanwender sieht einen nachvollziehbaren Abschluss-/Fehlerstatus – **ohne** doppelte Datenwahrheit oder fingierte Sales-Umsetzung.
