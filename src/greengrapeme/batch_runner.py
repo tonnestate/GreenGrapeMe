@@ -114,15 +114,39 @@ async def advance_batch(queue, tenant: str, request_id: str, spec,
         for batch in batches:
             if batch["state"] != "RESEARCHED":
                 continue
-            # MangoMe's own durable pre-dispatch fence prevents duplicate
-            # canonical work even if this caller crashes before local mark.
+            # MangoMe deliberately deduplicates identical user requests.
+            # All slices of ONE Discovery request must continue the SAME
+            # explicitly admitted WorkIdentity, never create parallel work.
+            binder = MangoMissionBinding(queue.store)
+            prior = [candidate for candidate in batches
+                     if candidate["state"] in ("ADMITTED", "REVIEW_READY")]
+            work_ref = None
+            if prior:
+                bound = [binder.status(tenant, b["mission_id"]) for b in prior]
+                if any(not isinstance(item, dict) or
+                       not item.get("mango_work_id") for item in bound):
+                    queue._transition(tenant, request_id, state,
+                                      "ADMISSION_UNCERTAIN",
+                                      error_kind="CANONICAL_PARENT_WORK_MISSING")
+                    return queue.get(tenant, request_id)
+                work_ids = {item["mango_work_id"] for item in bound}
+                if len(work_ids) != 1:
+                    queue._transition(tenant, request_id, state,
+                                      "ADMISSION_UNCERTAIN",
+                                      error_kind="CANONICAL_PARENT_WORK_CONFLICT")
+                    return queue.get(tenant, request_id)
+                work_ref = next(iter(work_ids))
+            # Existing WorkIdentity is carried into MangoMe via its explicit
+            # work_ref argument; its own durable pre-dispatch fence protects
+            # ambiguous dispatch and prevents blind duplicate admission.
             try:
-                MangoMissionBinding(queue.store).admit(
+                binder.admit(
                     tenant, batch["mission_id"],
                     actor_id=admission.actor_id,
                     current_user_request=admission.current_user_request,
                     authorized_workspace=admission.workspace,
-                    host_authorized=True, backend=admission.backend)
+                    host_authorized=True, backend=admission.backend,
+                    work_ref=work_ref)
             except Exception:
                 queue._transition(tenant, request_id, state,
                                   "ADMISSION_UNCERTAIN",
