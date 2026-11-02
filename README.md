@@ -93,3 +93,10 @@ This is **not unlimited source coverage**: one request currently reads at most 1
 The StarFruitMe source reader now consumes all `find_companies` pages using its actual `offset`, `limit` and `total_matching` response. It fetches up to **1,000** source candidates per authorized Discovery request and routes them into the existing immutable **25-account** MangoMe/PlumMe sales batches (up to 40 batches). The browser lets the operator select a limit from 1–1,000. No source candidate is silently dropped because the first page ended.
 
 If the source reports **more than the configured limit**, the job becomes `BLOCKED_SOURCE_CAPACITY` with `total_matching`, `admitted_limit` and **imported=0**. If a page, candidate or returned total changes, it becomes `BLOCKED_SOURCE_REVISION` with `SOURCE_PAGINATION_INCONSISTENT`. These failures cannot be reported as full research completion. Source pagination is best-effort consistent: StarFruitMe's contract has no transactional cross-call snapshot identifier and a mid-run source mutation could escape detection without a donor-side snapshot/version token.
+
+
+## FruitStack host contract correction and preflight (02.11.2026)
+
+Verified against the current upstream source contracts, GreenGrapeMe now consumes **MangoMe's real `enter_work` response**: project, family, **WorkIdentity**, normative baseline, plan and slice. MangoMe explicitly returns `spec=None` and `spec_admitted=False`, so GreenGrapeMe no longer invents an admitted Specification. Canonical WorkIdentity is not a completed/verified task; MangoMe remains sole owner of its truth/approval gates. Existing-work candidates and ambiguous admissions require independent canonical reconciliation.
+
+A new **read-only host preflight** (`PYTHONPATH=src python -m greengrapeme.host_preflight --job-id ... --workspace ...`) inspects the actual StarFruitMe/BlackberryMe/PlumMe/MangoMe contracts without starting collectors, models or customer communications. Instructions: `docs/HOST_PREFLIGHT.md`. Preflight success is **not** a live end-to-end test or production authorization.

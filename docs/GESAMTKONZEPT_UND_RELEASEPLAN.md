@@ -419,3 +419,12 @@ Der konkrete StarFruitMe-MCP-v2-Vertrag `find_companies(job_id, limit, offset)` 
 Liegt `total_matching` über dem beauftragten Limit, wird vor jeder Detailübernahme auf `BLOCKED_SOURCE_CAPACITY` mit Quellgesamtzahl und `imported=0` geschaltet. Ändern sich Pagination oder Kandidaten während der Erfassung, wird der Auftrag mit `SOURCE_PAGINATION_INCONSISTENT` blockiert. Vollständigkeit innerhalb des gesetzten Limits ist das Ziel; das System behauptet **keine unlimitierte Quell-/Unternehmensabdeckung**. StarFruitMe hat derzeit keinen konsistenten Snapshot-/Cursor-Token über mehrere MCP-Calls – ein verbleibender technischer Release-Gate.
 
 Mehr als 1.000 Kandidaten benötigen einen geplanten, versionierten Cursor-/Teilmengen-Workflow und eine verifizierte Quelle, bevor von einer vollständig abgeschlossenen Discovery gesprochen werden darf. Kein Outreach, kein Live-Host-E2E-Test, keine neuen SaaS-Rechte.
+
+
+## 18. Host-Vertrag korrigiert und lesbarer FruitStack-Preflight (02.11.2026)
+
+Bei der echten Upstream-Inspektion wurde ein bis dahin von Testdoubles verdeckter MangoMe-Integrationsfehler gefunden: `enter_work` erzeugt keine automatisch freigegebene Specification, sondern eine kanonische **WorkIdentity** mit **normative_baseline**; `spec=None` und `spec_admitted=False`. GreenGrapeMe erfordert jetzt diese tatsächliche WorkIdentity/Family/Project-Linie und Persistenzattribute, speichert nur belegte IDs und verwechselt eine lokale Autoritätsannotation nicht mit einem MangoMe-Provider-Receipt. `EXISTING_WORK_CANDIDATE` bleibt ohne bewusstes Reconciliation-/WorkRef-Verfahren blockiert.
+
+Neu: `src/greengrapeme/host_preflight.py` als separat ausführbarer, standardmäßig **effect-freier** Diagnoselauf. Er prüft StarFruitMe ausschließlich an einer hostautorisierten vorhandenen Job-ID, BlackberryMe durch MCP-Toollisting, MangoMe durch API-/Workspace-Vertragsprüfung und PlumMe durch no-effect NeuronRequest/UNI-Schema. Die Probe meldet `ready_for_controlled_host_trial` nur bei vier PASS und immer `production_ready=false`. `tests/test_host_preflight.py` und aktualisierte Mango-/Discovery-Batch-Vertragstests sichern diese Grenze ab.
+
+Die eigentliche Host-Abnahme bleibt **offen**, bis GreenGrapeMe in der realen FruitStack-Installation eine autorisierte Discovery und die anschließende Work-/Neuron-Ausführung mit echten Provider-Receipts ohne Fabrication nachweist. SaaS-Login/RBAC und Kampagnen/Setter/Closer wurden bewusst nicht vorgezogen.

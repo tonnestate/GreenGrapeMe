@@ -79,3 +79,10 @@ Die UI verwaltet nun persistente Discovery-Jobs statt ausschließlich importiert
 ## Pagination Acceptance – 1,000 candidates maximum per request
 
 The StarFruitMe MCP read adapter must consume `total_matching`/offset pages (<=100/page), not just the first page. A count above `max_accounts` must yield `BLOCKED_SOURCE_CAPACITY` with zero imported records, never a green partial Discovery. Page drift and missing source names fail closed as `BLOCKED_SOURCE_REVISION`. Test fixtures may simulate this contract; actual source snapshot consistency still requires a live StarFruitMe host with donor-side snapshot/version semantics.
+
+
+## Host contract and real WorkIdentity admission – correction
+
+- Confirmed by upstream contract inspection: `mangome.mcp_server.enter_work` delegates to `WorkGovernedMangoMeService.enter_work` and returns canonical `work_identity` and `normative_baseline`, but **no admitted Specification** (`spec=None`, `spec_admitted=False`). GreenGrapeMe now validates this actual response shape, immutable work lineage and `persistence.identity=CANONICAL` / `working_state=PROGRESSIVE`. The previously fabricated Mango fake envelope has been replaced in offline integration fixtures.
+- Added `greengrapeme.host_preflight`: a real-host, **read-only**, per-component runtime check. It requires host authorization for an existing StarFruitMe job and the actual attached MangoMe workspace. There is **no** claimed successful live-host execution, no provider call to PlumMe, no MangoMe work admission and no legal entity verification. Offline tests verify preflight scope and failure behavior.
+- Still not accepted: authenticated and source-authorized live four-component host test with exact work and receipt IDs, MangoMe existing-work candidate handling for multi-batch admissions, stable provider/source snapshot proof and customer-facing sales-effect authority.
