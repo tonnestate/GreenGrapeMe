@@ -15,7 +15,9 @@ from typing import Any, Protocol
 
 from .live_discovery import _result, read_starfruit_companies
 from .mango_binding import MangoMissionBinding
-from .blackberry_bridge import BlackberryReviewStore, research_with_installed_blackberry
+from .blackberry_bridge import (
+    BlackberryReviewStore, research_with_installed_blackberry, research_fingerprint
+)
 from .missions import SalesMissionEngine, NeuronRunner
 from .operations import SalesWorkspace
 
@@ -328,6 +330,11 @@ class DiscoveryJobQueue:
                 self._transition(tenant, request_id, "RUN_IN_FLIGHT", "SOURCE_DONE",
                                  result={"run_summary": ran})
             else:
+                # A previously authorized job might have lost tenant permission.
+                if job_id not in allowed_existing_jobs:
+                    self._transition(tenant, request_id, state, "BLOCKED_SOURCE_POLICY",
+                                     error_kind="EXISTING_SOURCE_JOB_ACCESS_REVOKED")
+                    return self.get(tenant, request_id)
                 # Reading an existing job must validate it exists at the source.
                 try:
                     source_status = await source.status(job_id)
@@ -340,6 +347,10 @@ class DiscoveryJobQueue:
             entry = self.get(tenant, request_id)
             state = entry["state"]
         if state == "SOURCE_DONE":
+            if spec.mode == "existing" and job_id not in allowed_existing_jobs:
+                self._transition(tenant, request_id, state, "BLOCKED_SOURCE_POLICY",
+                                 error_kind="EXISTING_SOURCE_JOB_ACCESS_REVOKED")
+                return self.get(tenant, request_id)
             try:
                 records = await source.read(job_id, spec.offer_id, spec.max_accounts)
                 outcome = self.store.ingest(tenant, records)
@@ -390,6 +401,38 @@ class DiscoveryJobQueue:
             engine = SalesMissionEngine(self.store)
             scope = engine.account_ids(tenant, mission_id)
             review_store = BlackberryReviewStore(self.store)
+            # Check the entire immutable cohort BEFORE reaching MangoMe.
+            # Cached research is valid only for the exact name/objective/inputs.
+            with self.store._db() as db:
+                checks = db.execute("""SELECT m.opportunity_id,m.source_sha256,
+                         o.source_json,s.reason AS suppressed,b.input_sha256
+                    FROM sales_mission_accounts m
+                    LEFT JOIN opportunities o ON o.tenant=m.tenant
+                         AND o.opportunity_id=m.opportunity_id
+                    LEFT JOIN suppressions s ON s.tenant=m.tenant
+                         AND s.opportunity_id=m.opportunity_id
+                    LEFT JOIN sales_blackberry_reviews b ON b.tenant=m.tenant
+                         AND b.opportunity_id=m.opportunity_id
+                    WHERE m.tenant=? AND m.mission_id=?
+                    ORDER BY m.opportunity_id""", (tenant, mission_id)).fetchall()
+            if not checks or len(checks) != len(scope) or any(
+                item["source_json"] is None or item["suppressed"] is not None or
+                hashlib.sha256(item["source_json"].encode("utf-8")).hexdigest()
+                    != item["source_sha256"]
+                for item in checks
+            ):
+                self._transition(tenant, request_id, state, "BLOCKED_SOURCE_REVISION",
+                                 error_kind="ACCOUNT_CHANGED_OR_SUPPRESSED")
+                return self.get(tenant, request_id)
+            for item in checks:
+                source_data = json.loads(item["source_json"])
+                expected = research_fingerprint(
+                    item["opportunity_id"], source_data["company_name"],
+                    spec.objective, (), "", "")
+                if item["input_sha256"] is not None and item["input_sha256"] != expected:
+                    self._transition(tenant, request_id, state, "BLOCKED_BLACKBERRY_REVISION",
+                                     error_kind="RESEARCH_CONTEXT_CHANGED")
+                    return self.get(tenant, request_id)
             remaining = [oid for oid in scope if review_store.get(tenant, oid) is None]
             if not remaining:
                 self._transition(tenant, request_id, state, "AWAITING_CANONICAL_WORK",

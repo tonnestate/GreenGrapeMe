@@ -262,6 +262,53 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual(outcome["state"],"BLOCKED_NO_SOURCE")
         self.assertEqual(outcome["result"]["discovered"],0)
 
+    def test_research_from_another_objective_cannot_be_reused(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher()
+        self.runjob(researcher=researcher)
+        self.runjob(researcher=researcher)
+        self.jobs.create("A","job-00000002",DiscoverySpec(
+            mode="existing",job_id=JOB,offer_id="offer",
+            objective="Different commercial objective",icp="German B2B software"))
+        self.runjob(rid="job-00000002")
+        result=self.runjob(rid="job-00000002",researcher=researcher)
+        self.assertEqual(result["state"],"BLOCKED_BLACKBERRY_REVISION")
+        self.assertEqual(result["error_kind"],"RESEARCH_CONTEXT_CHANGED")
+        self.assertEqual(len(researcher.calls),1)
+
+    def test_host_revocation_blocks_existing_source_before_status_or_read(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.jobs._transition("A","job-00000001","QUEUED","SOURCE_READY",
+                              external_job_id=JOB)
+        result=asyncio.run(self.jobs.advance("A","job-00000001",self.source))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(result["error_kind"],"EXISTING_SOURCE_JOB_ACCESS_REVOKED")
+        self.assertEqual(self.source.calls,[])
+        self.jobs.create("A","job-00000002",old_spec())
+        self.jobs._transition("A","job-00000002","QUEUED","SOURCE_DONE",
+                              external_job_id=JOB)
+        result=asyncio.run(self.jobs.advance("A","job-00000002",self.source))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(self.source.calls,[])
+
+    def test_suppression_after_blackberry_plan_blocks_mango(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher()
+        self.runjob(researcher=researcher)
+        with self.store._db() as db:
+            db.execute("INSERT INTO suppressions VALUES(?,?,?,?)",
+                       ("A","starfruitme:"+JOB+":candidate1","OPT_OUT",
+                        self.store._now()))
+        host=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(actor_id="operator",workspace=self.temp.name,
+                current_user_request="Find customers",backend=host)
+        result=self.runjob(researcher=researcher,admission=admission,
+                           neuron=StubNeuron())
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(host.calls,0)
+
     def test_new_source_denied_without_host_rights_and_ack(self):
         self.jobs.create("A","job-00000001",new_spec(ack=True))
         result=self.runjob(allow_external_source=False)
