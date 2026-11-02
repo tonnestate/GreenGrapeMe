@@ -108,6 +108,20 @@ class DiscoverySpec:
         return cls(**data)
 
 
+def _source_coverage(summary: dict, job_id: str) -> str:
+    """Require actual StarFruitMe search completion before accepting candidates.
+
+    COMPLETED_WITH_GAPS is not sufficient evidence for a full source run.
+    An interrupted bounded source call must never masquerade as COMPLETE.
+    """
+    if not isinstance(summary, dict) or summary.get("job_id") != job_id:
+        return "UNKNOWN"
+    state = summary.get("job_state")
+    if state not in ("IN_PROGRESS", "COMPLETED_WITH_GAPS", "COMPLETED_NO_KNOWN_GAPS"):
+        return "UNKNOWN"
+    return state
+
+
 class DiscoverySource(Protocol):
     async def create(self, spec: DiscoverySpec) -> dict: ...
     async def run(self, job_id: str, *, max_searches: int) -> dict: ...
@@ -330,6 +344,15 @@ class DiscoveryJobQueue:
                     self._transition(tenant, request_id, "RUN_IN_FLIGHT",
                                      "ADMISSION_UNCERTAIN", error_kind="SOURCE_RUN_AMBIGUOUS")
                     return self.get(tenant, request_id)
+                coverage = _source_coverage(ran.get("summary") if isinstance(ran, dict)
+                                            else None, job_id)
+                if coverage != "COMPLETED_NO_KNOWN_GAPS":
+                    self._transition(
+                        tenant, request_id, "RUN_IN_FLIGHT", "BLOCKED_SOURCE_COVERAGE",
+                        result={"source_job_state": coverage, "external_job_id": job_id,
+                                "imported": 0},
+                        error_kind="SOURCE_SEARCH_INCOMPLETE_OR_WITH_GAPS")
+                    return self.get(tenant, request_id)
                 self._transition(tenant, request_id, "RUN_IN_FLIGHT", "SOURCE_DONE",
                                  result={"run_summary": ran})
             else:
@@ -341,9 +364,15 @@ class DiscoveryJobQueue:
                 # Reading an existing job must validate it exists at the source.
                 try:
                     source_status = await source.status(job_id)
-                    if not isinstance(source_status, dict):
-                        raise ValueError("source status missing")
+                    coverage = _source_coverage(source_status, job_id)
                 except Exception:
+                    return self.get(tenant, request_id)
+                if coverage != "COMPLETED_NO_KNOWN_GAPS":
+                    self._transition(
+                        tenant, request_id, state, "BLOCKED_SOURCE_COVERAGE",
+                        result={"source_job_state": coverage,
+                                "external_job_id": job_id, "imported": 0},
+                        error_kind="SOURCE_SEARCH_INCOMPLETE_OR_WITH_GAPS")
                     return self.get(tenant, request_id)
                 self._transition(tenant, request_id, state, "SOURCE_DONE",
                                  result={"source_status": source_status})
