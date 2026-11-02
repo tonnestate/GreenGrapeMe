@@ -78,6 +78,47 @@ class PilotProductTests(unittest.TestCase):
         self.assertEqual(report["platform_payment_confirmed_cents"],0)
         self.assertEqual(report["pricing_validation"],"NOT_PROVEN")
 
+    def test_inbound_case_cli_and_read_only_api(self):
+        stream=StringIO()
+        with redirect_stdout(stream):
+            code=main(["--db",str(self.path),"--tenant","tenant-1",
+                       "pilot-inbound","--pilot-id","pilot-001",
+                       "--case-id","inbound-001","--company","Example GmbH",
+                       "--channel","CRM_INBOUND",
+                       "--evidence-ref","urn:crm:inbound:record-001",
+                       "--reporter-ref","operator-001"])
+        self.assertEqual(code,0)
+        case=json.loads(stream.getvalue())
+        self.assertEqual(case["state"],"INBOUND_REVIEW")
+        self.assertEqual(case["contact_authority"],"NONE")
+        with redirect_stdout(StringIO()) as saved:
+            code=main(["--db",str(self.path),"--tenant","tenant-1",
+                       "pilot-step","--pilot-id","pilot-001",
+                       "--case-id","inbound-001","--step-id","step-001",
+                       "--expected-state","INBOUND_REVIEW",
+                       "--to-state","QUALIFIED_REPORTED",
+                       "--evidence-ref","urn:crm:qualification:record-001",
+                       "--reporter-ref","operator-001"])
+        self.assertEqual(code,0)
+        self.assertEqual(json.loads(saved.getvalue())["state"],"QUALIFIED_REPORTED")
+        # The local viewer only reads the operator's reported case.
+        env={"REQUEST_METHOD":"GET","PATH_INFO":"/api/pilot-cases",
+             "QUERY_STRING":"pilot=pilot-001","wsgi.input":BytesIO(b""),
+             "CONTENT_LENGTH":"0","HTTP_X_GREEN_GRAPE_TOKEN":TOKEN}
+        setup_testing_defaults(env)
+        status={}
+        def start(code,headers):
+            status["code"]=code
+        body=json.loads(b"".join(self.app(env,start)))
+        self.assertTrue(status["code"].startswith("200"))
+        self.assertEqual(body["total"],1)
+        self.assertEqual(body["items"][0]["state"],"QUALIFIED_REPORTED")
+        self.assertEqual(body["items"][0]["contact_authority"],"NONE")
+        self.assertEqual(self.ledger.summary("tenant-1","pilot-001")[
+                         "source_confirmed_event_count"],0)
+        status,body=request(self.app,"/api/pilot-cases",method="POST")
+        self.assertTrue(status.startswith("405"))
+
     def test_cli_can_create_another_pilot_without_inventing_receipts(self):
         stream=StringIO()
         with redirect_stdout(stream):
