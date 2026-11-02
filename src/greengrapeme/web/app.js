@@ -88,10 +88,17 @@ async function discovery(){
  const body=$("discovery-list");body.replaceChildren();
  for(const entry of response.items){
   const tr=document.createElement("tr");
+  const result=entry.result||{};
+  let progress=entry.error_kind||((result.discovered!=null)
+    ?String(result.discovered)+" Unternehmen":"–");
+  if(Array.isArray(result.batch_statuses)){
+    const completed=result.batch_statuses.filter(b=>b.state==="REVIEW_READY").length;
+    progress=result.batch_statuses.length+" Gruppen, "+completed+"/"+
+      result.batch_statuses.length+" abgeschlossen · "+result.total_accounts+" Unternehmen";
+    if(entry.error_kind)progress=entry.error_kind+" · "+progress;
+  }
   for(const v of [entry.request_id,entry.mode,entry.offer_id,
-    entry.external_job_id||"–",entry.state,
-    entry.error_kind||((entry.result&&entry.result.discovered!=null)
-      ?String(entry.result.discovered)+" Unternehmen":"–")])cell(tr,v);
+    entry.external_job_id||"–",entry.state,progress])cell(tr,v);
   body.appendChild(tr);
  }
  if(!response.items.length){
