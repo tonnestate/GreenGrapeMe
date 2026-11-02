@@ -76,13 +76,13 @@ class MangoMissionBinding:
         with store._db() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS mango_sales_bindings (
                     tenant TEXT NOT NULL, mission_id TEXT NOT NULL,
-                    input_sha256 TEXT NOT NULL, binding_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
+                    input_sha256 TEXT NOT NULL, state TEXT NOT NULL,
+                    binding_json TEXT, created_at TEXT NOT NULL,
                     PRIMARY KEY (tenant, mission_id))""")
 
     def _get_bound_row(self, tenant: str, mission_id: str):
         with self.store._db() as db:
-            return db.execute("""SELECT input_sha256,binding_json
+            return db.execute("""SELECT input_sha256,state,binding_json
                                 FROM mango_sales_bindings WHERE tenant=? AND mission_id=?""",
                               (tenant, mission_id)).fetchone()
 
@@ -90,7 +90,12 @@ class MangoMissionBinding:
         tenant = self.store._required(tenant, "tenant")
         mission_id = self.store._required(mission_id, "mission")
         row = self._get_bound_row(tenant, mission_id)
-        return json.loads(row["binding_json"]) if row else None
+        if not row:
+            return None
+        if row["state"] != "BOUND":
+            return {"state": "ADMISSION_UNCERTAIN", "tenant": tenant,
+                    "mission_id": mission_id, "requires_canonical_reconciliation": True}
+        return json.loads(row["binding_json"])
 
     def admit(self, tenant: str, mission_id: str, *,
               actor_id: str, current_user_request: str,
@@ -132,7 +137,25 @@ class MangoMissionBinding:
         if existing:
             if existing["input_sha256"] != fingerprint:
                 raise ValueError("Mango work binding changed; reconcile canonical work first")
+            if existing["state"] != "BOUND":
+                raise RuntimeError("Mango admission uncertain; reconcile canonical work before retry")
             return json.loads(existing["binding_json"])
+
+        # Durable intent precedes the external MangoMe admission. If the host
+        # crashes after dispatch, a repeated call must NOT blindly re-admit work.
+        with self.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute("""SELECT input_sha256,state FROM mango_sales_bindings
+                                WHERE tenant=? AND mission_id=?""",
+                             (tenant, mission_id)).fetchone()
+            if old:
+                raise RuntimeError("Mango admission already claimed; reconcile before retry")
+            db.execute("""INSERT INTO mango_sales_bindings
+                         (tenant,mission_id,input_sha256,state,binding_json,created_at)
+                         VALUES(?,?,?,'ADMISSION_IN_FLIGHT',NULL,?)""",
+                       (tenant, mission_id, fingerprint, self.store._now()))
+            self.store._audit(db, tenant, mission_id, "MANGO_ADMISSION_INTENT",
+                              {"input_sha256": fingerprint})
 
         raw = backend.enter_work(
             actor_id=actor_id, request_text=current_user_request,
@@ -166,16 +189,15 @@ class MangoMissionBinding:
         ).__dict__
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            old = db.execute("""SELECT input_sha256,binding_json
-                              FROM mango_sales_bindings WHERE tenant=? AND mission_id=?""",
+            old = db.execute("""SELECT input_sha256,state FROM mango_sales_bindings
+                              WHERE tenant=? AND mission_id=?""",
                              (tenant, mission_id)).fetchone()
-            if old:
-                if old["input_sha256"] != fingerprint or json.loads(old["binding_json"]) != binding:
-                    raise ValueError("parallel Mango admission produced conflicting canonical work")
-                return binding
-            db.execute("INSERT INTO mango_sales_bindings VALUES(?,?,?,?,?)",
-                       (tenant, mission_id, fingerprint,
-                        json.dumps(binding, sort_keys=True), self.store._now()))
+            if (not old or old["input_sha256"] != fingerprint or
+                    old["state"] != "ADMISSION_IN_FLIGHT"):
+                raise RuntimeError("Mango admission fence changed; reconcile canonical state")
+            db.execute("""UPDATE mango_sales_bindings SET state='BOUND',binding_json=?
+                         WHERE tenant=? AND mission_id=? AND state='ADMISSION_IN_FLIGHT'""",
+                       (json.dumps(binding, sort_keys=True), tenant, mission_id))
             self.store._audit(db, tenant, mission_id, "MANGO_WORK_ADMITTED",
                               {"family_id": binding["mango_family_id"],
                                "slice_id": binding["mango_slice_id"],
