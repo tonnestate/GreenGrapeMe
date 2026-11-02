@@ -12,7 +12,10 @@ from .pipeline import run_sales_pipeline
 from .blackberry_bridge import research_with_installed_blackberry, BlackberryReviewStore
 from .sources import kigor_records, starfruit_records
 from .webapp import serve
-from .discovery_jobs import DiscoveryJobQueue, InstalledStarFruitSource, TrustedWorkAdmission
+from .discovery_jobs import (
+    DiscoveryJobQueue, InstalledStarFruitSource, TrustedWorkAdmission,
+    InstalledBlackberryResearch
+)
 from .mango_binding import InstalledMangoHostBackend
 from os import environ
 import time
@@ -92,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
         allowed_existing = frozenset(
             x.strip() for x in environ.get("GG_ALLOWED_EXISTING_STARFRUIT_JOBS", "").split(",")
             if x.strip())
+        researcher = (InstalledBlackberryResearch()
+                      if environ.get("GG_ENABLE_BLACKBERRY_RESEARCH") == "1" else None)
         trusted = all(environ.get(k) for k in (
             "GG_HOST_ACTOR", "GG_HOST_WORKSPACE", "GG_HOST_CURRENT_USER_REQUEST"))
         if trusted and environ.get("GG_HOST_AUTHORIZATION_GRANTED") == "1":
@@ -109,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             result = asyncio.run(queue.run_next(
                 a.tenant, source, allow_external_source=allowed,
                 allowed_existing_jobs=allowed_existing,
+                researcher=researcher,
                 admission=admission, neuron=neuron))
             if result is not None:
                 print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)

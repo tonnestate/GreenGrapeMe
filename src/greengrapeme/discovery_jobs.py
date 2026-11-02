@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 from .live_discovery import _result, read_starfruit_companies
 from .mango_binding import MangoMissionBinding
+from .blackberry_bridge import BlackberryReviewStore, research_with_installed_blackberry
 from .missions import SalesMissionEngine, NeuronRunner
 from .operations import SalesWorkspace
 
@@ -22,10 +23,12 @@ from .operations import SalesWorkspace
 _ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{7,79}$")
 _STAR_ID = re.compile(r"^[a-f0-9]{24}$")
 _NACE = re.compile(r"^[0-9]{2}\.[0-9]{2}$")
-_WORKABLE = ("QUEUED", "SOURCE_READY", "SOURCE_DONE", "AWAITING_CANONICAL_WORK", "ADMITTED")
+_WORKABLE = ("QUEUED", "SOURCE_READY", "SOURCE_DONE", "AWAITING_BLACKBERRY",
+             "AWAITING_CANONICAL_WORK", "ADMITTED")
 _TERMINAL = ("REVIEW_READY", "BLOCKED_SOURCE_POLICY", "BLOCKED_SOURCE_REVISION",
              "BLOCKED_CHANGED_MISSION_INPUT", "BLOCKED_NO_SOURCE", "UNKNOWN")
-_UNCERTAIN = ("CREATE_IN_FLIGHT", "RUN_IN_FLIGHT", "ADMISSION_UNCERTAIN")
+_UNCERTAIN = ("CREATE_IN_FLIGHT", "RUN_IN_FLIGHT", "BLACKBERRY_IN_FLIGHT",
+              "BLACKBERRY_UNCERTAIN", "ADMISSION_UNCERTAIN")
 
 
 def _required(value, label, max_len=200):
@@ -158,6 +161,22 @@ class TrustedWorkAdmission:
     backend: Any
 
 
+class AccountResearcher(Protocol):
+    async def research(self, store: SalesWorkspace, tenant: str,
+                       opportunity_id: str, objective: str) -> dict: ...
+
+
+class InstalledBlackberryResearch:
+    """Reuses existing BlackberryMe plan_company only; no website/contact calls."""
+
+    async def research(self, store: SalesWorkspace, tenant: str,
+                       opportunity_id: str, objective: str) -> dict:
+        return await research_with_installed_blackberry(
+            store=store, tenant=tenant, opportunity_id=opportunity_id,
+            objective=objective, role_titles=(),
+            linkedin_company="", website_url="")
+
+
 class DiscoveryJobQueue:
     def __init__(self, store: SalesWorkspace):
         self.store = store
@@ -248,6 +267,7 @@ class DiscoveryJobQueue:
     async def advance(self, tenant: str, request_id: str, source: DiscoverySource,
                       *, allow_external_source: bool = False,
                       allowed_existing_jobs: frozenset[str] = frozenset(),
+                      researcher: AccountResearcher | None = None,
                       admission: TrustedWorkAdmission | None = None,
                       neuron: NeuronRunner | None = None) -> dict:
         """Bounded one-job progression; unknown side effects are NEVER retried."""
@@ -331,6 +351,10 @@ class DiscoveryJobQueue:
                                  result={"intake": outcome})
                 return self.get(tenant, request_id)
             mission_id = "discovery-" + request_id
+            if not records:
+                self._transition(tenant, request_id, state, "BLOCKED_NO_SOURCE",
+                                 result={"discovered": 0}, error_kind="NO_SOURCED_ACCOUNTS")
+                return self.get(tenant, request_id)
             if len(records) > 25:
                 self._transition(tenant, request_id, state, "BLOCKED_ACCOUNT_CAPACITY",
                                  result={"discovered": len(records), "max_cohort": 25},
@@ -353,9 +377,74 @@ class DiscoveryJobQueue:
                     self._transition(tenant, request_id, state, "BLOCKED_CHANGED_MISSION_INPUT")
                     return self.get(tenant, request_id)
             self.store.run_cycle(tenant)
-            self._transition(tenant, request_id, state, "AWAITING_CANONICAL_WORK",
+            self._transition(tenant, request_id, state, "AWAITING_BLACKBERRY",
                              result={"intake": outcome, "discovered": len(records),
-                                     "sales_mission_id": mission_id})
+                                     "sales_mission_id": mission_id,
+                                     "blackberry_research": "PENDING_UNVERIFIED"})
+            entry = self.get(tenant, request_id)
+            state = entry["state"]
+        if state == "AWAITING_BLACKBERRY":
+            if researcher is None:
+                return self.get(tenant, request_id)
+            mission_id = "discovery-" + request_id
+            engine = SalesMissionEngine(self.store)
+            scope = engine.account_ids(tenant, mission_id)
+            review_store = BlackberryReviewStore(self.store)
+            remaining = [oid for oid in scope if review_store.get(tenant, oid) is None]
+            if not remaining:
+                self._transition(tenant, request_id, state, "AWAITING_CANONICAL_WORK",
+                                 result={"sales_mission_id": mission_id,
+                                         "blackberry_researched": len(scope),
+                                         "legal_identity": "NOT_VERIFIED",
+                                         "contact_authority": "NONE"})
+            else:
+                oid = remaining[0]
+                with self.store._db() as db:
+                    source_row = db.execute("""SELECT s.reason AS suppressed,o.source_json,
+                           m.source_sha256 FROM sales_mission_accounts m
+                           LEFT JOIN opportunities o ON o.tenant=m.tenant
+                             AND o.opportunity_id=m.opportunity_id
+                           LEFT JOIN suppressions s ON s.tenant=m.tenant
+                             AND s.opportunity_id=m.opportunity_id
+                           WHERE m.tenant=? AND m.mission_id=? AND m.opportunity_id=?""",
+                           (tenant, mission_id, oid)).fetchone()
+                if (not source_row or source_row["suppressed"] is not None or
+                        source_row["source_json"] is None or
+                        hashlib.sha256(source_row["source_json"].encode("utf-8")).hexdigest() !=
+                        source_row["source_sha256"]):
+                    self._transition(tenant, request_id, state, "BLOCKED_SOURCE_REVISION",
+                                     error_kind="ACCOUNT_CHANGED_OR_SUPPRESSED")
+                    return self.get(tenant, request_id)
+                if not self._transition(tenant, request_id, state, "BLACKBERRY_IN_FLIGHT",
+                                        result={"sales_mission_id": mission_id,
+                                                "reviewing_account_id": oid}):
+                    return self.get(tenant, request_id)
+                try:
+                    reviewed = await researcher.research(
+                        self.store, tenant, oid, spec.objective)
+                    if (not isinstance(reviewed, dict) or
+                            reviewed.get("opportunity_id") != oid or
+                            reviewed.get("account_linkage") != "UNVERIFIED" or
+                            reviewed.get("contact_authority") != "NONE" or
+                            reviewed.get("donor_status") not in (
+                                "UNRESOLVED", "PARTIAL", "CONFLICT", "VERIFIED")):
+                        raise ValueError("BlackberryMe account review violated the contract")
+                    persisted = review_store.get(tenant, oid)
+                    if persisted != reviewed:
+                        raise ValueError("BlackberryMe review receipt is not durable")
+                except Exception:
+                    self._transition(tenant, request_id, "BLACKBERRY_IN_FLIGHT",
+                                     "BLACKBERRY_UNCERTAIN",
+                                     error_kind="BLACKBERRY_RESEARCH_UNCERTAIN")
+                    return self.get(tenant, request_id)
+                self._transition(tenant, request_id, "BLACKBERRY_IN_FLIGHT",
+                                 "AWAITING_BLACKBERRY",
+                                 result={"sales_mission_id": mission_id,
+                                         "reviewed_account_id": oid,
+                                         "blackberry_researched":
+                                             len(scope) - len(remaining) + 1,
+                                         "total_accounts": len(scope)})
+                return self.get(tenant, request_id)
             entry = self.get(tenant, request_id)
             state = entry["state"]
         if state == "AWAITING_CANONICAL_WORK" and admission is not None:
@@ -391,12 +480,15 @@ class DiscoveryJobQueue:
     async def run_next(self, tenant: str, source: DiscoverySource, *,
                        allow_external_source: bool = False,
                        allowed_existing_jobs: frozenset[str] = frozenset(),
+                       researcher: AccountResearcher | None = None,
                        admission: TrustedWorkAdmission | None = None,
                        neuron: NeuronRunner | None = None) -> dict | None:
         tenant = self.store._required(tenant, "tenant")
-        valid = _WORKABLE if admission and neuron else (
-            "QUEUED", "SOURCE_READY", "SOURCE_DONE"
-        )
+        valid = ("QUEUED", "SOURCE_READY", "SOURCE_DONE")
+        if researcher is not None:
+            valid += ("AWAITING_BLACKBERRY",)
+        if admission is not None and neuron is not None:
+            valid += ("AWAITING_CANONICAL_WORK", "ADMITTED")
         with self.store._db() as db:
             row = db.execute(
                 "SELECT request_id FROM discovery_product_jobs WHERE tenant=? "
@@ -409,4 +501,5 @@ class DiscoveryJobQueue:
             tenant, row["request_id"], source,
             allow_external_source=allow_external_source,
             allowed_existing_jobs=allowed_existing_jobs,
+            researcher=researcher,
             admission=admission, neuron=neuron)

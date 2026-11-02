@@ -394,3 +394,12 @@ Erfolgsmaßstab für den nächsten Product-Gate: Ein echter, legal zulässiger D
 - **Nicht erledigt:** echter Installations-/Host-Live-Smoke über die vier FruitStack-Komponenten, obligatorische BlackberryMe-Rechtsträgerzuordnung, geplante Wiederholung/Suche/Änderungsmonitoring, SaaS-Authentifizierung, Effekt- und Revenue-Strecke. Kein produktiver Kundenkontakt, kein durchgängiges Closing.
 
 Verbindliches Gate für 0.4.0 bleibt **realer hostautorisierter Discovery-Lauf mit überprüfbaren Quellen**, nicht eine erfolgreiche Testdouble-Ausführung. Dokument: `docs/DISCOVERY_MISSIONS_UI.md`.
+
+
+## 15. Implementierungsnachtrag – geschützte Sales-Kohorten und BlackberryMe-Zwischenschritt (02.11.2026)
+
+GreenGrapeMe bindet eine SalesMission nun an die **unveränderliche Menge tatsächlicher Accounts aus ihrem eigenen Discovery-Job**, einschließlich Quellfingerprint. Dadurch können andere Jobs für dasselbe Angebot die AI-Kontextbasis nicht unbemerkt verändern. Änderungen und Suppression blockieren die weitere KI-Ausführung; übergroße Kohorten werden offengelegt und nicht stillschweigend als komplett abgearbeitet gezählt.
+
+Der Discovery-Worker besitzt einen eigenen, bewusst beschränkten **BlackberryMe-Research-Gate**, mit hostseitigem `GG_ENABLE_BLACKBERRY_RESEARCH=1`. Es wird ausschließlich das bereits existierende, lokale Planungswerkzeug für Quellen-/Rechtsträgerprüfung aufgerufen und das Ergebnis tenantbezogen persistiert. Ohne diese Recherche geht kein Discovery-Job zur MangoMe-Arbeitsaufnahme; selbst ein erfolgreich abgeschlossener Plan ist **keine verifizierte juristische Identität** und gewährt kein Senderecht. Unklare Provider-Antworten bleiben vor einem erneuten Aufruf gesperrt.
+
+Nächster notwendiger Beweis: Source-authorisiertes, echtes StarFruitMe/BlackberryMe/MangoMe/PlumMe-Host-E2E, anschließend belastbare Firmenidentität, sichere Korrekturen/Reconciliation, Batch-Splitting und dann autonome erlaubte Campaign-/Setter-Effects.

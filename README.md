@@ -72,3 +72,10 @@ Start with `GG_VIEWER_TOKEN` set to a random secret of at least 24 characters: `
 Aus der lokalen Discovery-Oberfläche heraus lassen sich nun **bestehende StarFruitMe-Jobs** auswerten und **nach ausdrücklicher Host-Rechtefreigabe** begrenzte neue Discovery-Aufträge anlegen. Die Aufträge werden persistent mit Quelle, Angebot, ICP, Zustand und Quelleffekt-Fence gespeichert; ein separater `discover-worker` verarbeitet sie. Nach dem Account-Import erzeugt GreenGrapeMe einen Business-SalesMission-Auftrag und wartet auf die **tatsächliche MangoMe-WorkAdmission**. Erst ein vertrauenswürdiger Host kann über das bestehende PlumMe-UNI die drei internen Sales-Neurons ausführen. Externer Versand bleibt deaktiviert.
 
 Der Webserver sendet keine Aufträge an Drittprovider. Lokal startet man `serve` (UI) und separat `discover-worker`; ohne Hostkonfiguration wird **kein neuer externer Scraper gestartet**. Siehe `docs/DISCOVERY_MISSIONS_UI.md` für genaue Start-/Sicherheitsgrenzen. Release 1.0 und realer Host-End-to-End-Nachweis bleiben offen.
+
+
+## Isolierte Sales-Missionen und BlackberryMe-Research-Gate
+
+Die Discovery-Queue erzeugt nun eine feste, quellenfingerprint-gebundene **Sales-Account-Kohorte je Mission**, statt alle Kunden desselben Angebots zu vermischen. Die AI-Stages stoppen bei Quellenänderungen oder Opt-outs; Kohorten mit mehr als 25 Accounts werden transparent blockiert, bis eine echte Batch-Mission umgesetzt ist.
+
+Zwischen StarFruitMe-Import und MangoMe-Admission liegt nun `AWAITING_BLACKBERRY`. Nur wenn der vertrauenswürdige Host `GG_ENABLE_BLACKBERRY_RESEARCH=1` setzt und das echte BlackberryMe-MCP-Paket installiert ist, werden die vorhandenen Company-Research-Pläne je Account automatisch erstellt und dauerhaft protokolliert. Sie **verifizieren keinen Rechtsträger** und verleihen **keinerlei Kontaktbefugnis**. Unklare Rechercheergebnisse werden gesperrt, nicht automatisch wiederholt. Siehe `docs/DISCOVERY_MISSIONS_UI.md` für den Prüfstand und offene Releases.
