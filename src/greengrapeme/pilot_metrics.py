@@ -174,7 +174,12 @@ class PilotLedger:
                        WHERE tenant=? AND pilot_id=? AND event_id=?""",
                        (tenant,pilot_id,event_id)).fetchone()
             if old:
-                if tuple(old)[:10] != record:
+                # A replay that omits occurred_at must keep the timestamp
+                # assigned on FIRST acceptance. Compare only caller-supplied
+                # invariant fields; explicitly supplied dates remain strict.
+                previous = tuple(old)[:10]
+                if (previous[:7] != record[:7] or previous[8:] != record[8:]
+                        or (occurred_at is not None and previous[7] != record[7])):
                     raise ValueError("pilot event ID reused with changed evidence")
                 return dict(old)
             now = self.store._now()
