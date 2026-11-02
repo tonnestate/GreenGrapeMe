@@ -50,3 +50,12 @@ The feature branch now includes an optional **real PlumMe UNI execution adapter*
 `discover-starfruit` directly reads **existing authorized StarFruitMe MCP v2 discovery jobs** via `find_companies` and `get_company`. `sales-run` composes read-only Discovery → intake → internal triage → three PlumMe role stages in one command. It never triggers new external scraping, sends email or makes calls.
 
 Docs: `docs/FRUITSTACK_SALES_MISSIONS.md`, `docs/INTEGRATION_STARFRUIT_MCP.md`, `docs/INTEGRATED_SALES_PIPELINE.md`. GitHub CI runs 32 offline tests/contract checks on the current PR. Actual host/provider execution, MangoMe canonical WorkIdentity binding, BlackberryMe live identity, product UI, independent legal permission and actual sales are still **unverified or not implemented**.
+
+
+## BlackberryMe account review and MangoMe canonical work binding
+
+GreenGrapeMe now optionally reuses the **actual BlackberryMe MCP tools** to plan company research, classify buyer-side roles, and perform separately requested legal-identity reconciliation. The result is a tenant-scoped, evidence-linked business review and a bounded context input to existing PlumMe Sales Missions; `VERIFIED` by BlackberryMe never silently upgrades the independent StarFruitMe account linkage, and **no sending authority** follows.
+
+A trusted FruitStack host can bind an existing SalesMission to MangoMe's **actual guarded `enter_work`** canonical WorkIdentity and records only the project/family/spec/plan/slice references. The caller must prove the current user intent and correct tenant/workspace; failed/ambiguous admission is durably fenced before the MangoMe call to stop duplicate canonical work admission. There is no new general agent/work-truth store.
+
+See `docs/INTEGRATION_BLACKBERRY_MCP.md` and `docs/INTEGRATION_MANGOME_WORK.md`. The tests are **offline contract checks** with injected MCP/MangoMe responses; the actual FruitStack host, authenticated user context, DNS egress controls, canonical MangoMe MongoDB and live LinkedIn/website provider access have not been tested in this repository. This remains an in-development, non-deployed, non-sending sales application.
