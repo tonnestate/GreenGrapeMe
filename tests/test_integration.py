@@ -101,6 +101,17 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(s.overview("tenant")["opportunities"], 1)
             self.assertEqual(s.run_cycle("tenant")["ready_for_review"], 2)
 
+    def test_message_id_cannot_target_another_opportunity(self):
+        with TemporaryDirectory() as tmp:
+            store = SalesWorkspace(Path(tmp)/"s.db")
+            store.ingest("tenant", [
+                Opportunity("a", "A GmbH", "offer", ()),
+                Opportunity("b", "B GmbH", "offer", ()),
+            ])
+            self.assertEqual(store.ingest_reply("tenant", "a", "msg1", "hello"), "NEEDS_CLASSIFICATION")
+            with self.assertRaisesRegex(ValueError, "idempotency key reused"):
+                store.ingest_reply("tenant", "b", "msg1", "hello")
+
     def test_inbound_reply_cannot_cross_tenant(self):
         with TemporaryDirectory() as tmp:
             s = SalesWorkspace(Path(tmp)/"s.db")
