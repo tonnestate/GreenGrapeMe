@@ -172,9 +172,11 @@ class SalesWorkspace:
             if not db.execute("SELECT 1 FROM opportunities WHERE tenant=? AND opportunity_id=?",
                               (tenant, opportunity_id)).fetchone():
                 raise ValueError("unknown tenant opportunity")
-            old = db.execute("SELECT result FROM inbox WHERE tenant=? AND message_id=?",
+            old = db.execute("SELECT result, opportunity_id FROM inbox WHERE tenant=? AND message_id=?",
                              (tenant, message_id)).fetchone()
             if old:
+                if old["opportunity_id"] != opportunity_id:
+                    raise ValueError("message idempotency key reused for another opportunity")
                 return old["result"]
             db.execute("INSERT INTO inbox VALUES(?,?,?,?,?)",
                        (tenant, message_id, opportunity_id, category, self._now()))
