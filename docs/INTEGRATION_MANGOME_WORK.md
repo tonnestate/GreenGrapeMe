@@ -22,7 +22,7 @@ The currently checked MangoMe v0.3.22 implementation of `enter_work` resides at 
 - `host_authorized=True` is **not** a cryptographic credential. The trusted FruitStack / SaaS host must authenticate the operator and enforce actor/tenant/mission rights **before** calling this module. Exposing this directly to arbitrary clients is forbidden.
 - MangoMe LOCAL_HOST is a cooperative, non-tamper-resistant trust boundary; service isolation and MongoDB role separation are required for untrusted SaaS tenants.
 - No model/agent self-claims completion. MangoMe receives the explicit current user intent and owns its own admission and verification.
-- A failed/ambiguous admission (including crash between host dispatch and local reference commit) requires canonical reconciliation. **No blindly repeated admission or automatic side effect** should be triggered from that failure. This module does not yet include a durable pre-dispatch admission fence; that is a remaining deployment gate.
+- A **durable ADMISSION_IN_FLIGHT intent fence** is written before calling MangoMe. A failed/ambiguous admission (including a crash between host dispatch and local reference commit) remains **ADMISSION_UNCERTAIN**, blocks any blind retry and requires a trusted operator to reconcile canonical MangoMe work before proceeding. An automatic recovery and verification protocol is still a separate deployment gate.
 - No general external Send/Call permission is acquired by this binding. PomeloMe/MangoMe effects and channel law remain separate.
 - No actual MangoMe MongoDB host run is claimed; tests use a contract-faithful fake backend only.
 
