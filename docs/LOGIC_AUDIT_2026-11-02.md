@@ -24,3 +24,12 @@ Regressionstests simulieren offene/fehlerhafte Quellenjobs, fehlende Abschlusszu
 5. **Produktive SaaS-Authentifizierung, rechtmäßige Campaign-/Setter-/Closer-Effekte und RevOps-Umsatzbelege fehlen.** Der lokale Viewer-Token und Operator-Env-Flags sind keine öffentliche Multi-Tenant-Sicherheitslösung.
 
 **Fazit:** Drei konkrete P0-Logikfehler sind korrigiert und offline regressionsgetestet. Das ersetzt keine echte Provider-/SaaS-Abnahme und legitimiert keine automatischen Kundenkontakte.
+
+
+## Zusätzlich behobener Datenintegritätsfehler – gemischte Quell-Charge
+
+**Vorher:** Der bisherige `SalesWorkspace.ingest` importierte Datensätze der Reihe nach. Wenn ein Batch neue Firmen und zugleich eine abweichende Version einer vorhandenen Firma enthielt, wurden neue Firmen schon dauerhaft importiert, bevor GreenGrapeMe den späteren Konflikt erkannte und den Parent-Job blockierte. Das führte zu Teilbeständen außerhalb der akzeptierten Discovery-Mission.
+
+**Nachher:** `ingest` materialisiert die Batch-Eingabe und prüft bei `BEGIN IMMEDIATE` alle eingehenden Identitäten/Quell-Payloads vor dem ersten Import. Jede Abweichung einer bestehenden Opportunity oder konkurrierende Payloads für dieselbe neue ID lehnen die gesamte Batch-Insertion atomar ab. Bestehende Firmen erhalten einen Konflikt-Audit-/Prüfdatensatz; neu auftauchende IDs ohne gespeicherte Firmenakte erzeugen keinen verwaisten Review-Task. Rückgabe: `new=0` und eine positive Konfliktanzahl. Zwei zusätzliche Regressionstests decken Mischchargen und mehrfach widersprüchliche Neu-IDs ab.
+
+Diese atomare Vorprüfung ist nötig, damit ein wegen Identitätskonflikten abgelehnter Auftrag keine stillen neuen Opportunities in den Vertriebsdaten zurücklässt.
