@@ -8,6 +8,7 @@ from .operations import SalesWorkspace
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
 from .live_discovery import read_from_installed_starfruit
+from .pipeline import run_sales_pipeline
 from .sources import kigor_records, starfruit_records
 
 
@@ -38,6 +39,15 @@ def main(argv: list[str] | None = None) -> int:
     live.add_argument("--job-id", required=True)
     live.add_argument("--offer-id", required=True)
     live.add_argument("--limit", type=int, default=100)
+    full = sub.add_parser("sales-run", help="Existing StarFruitMe MCP discovery and PlumMe 3-role mission")
+    full.add_argument("--job-id", required=True)
+    full.add_argument("--offer-id", required=True)
+    full.add_argument("--mission-id", required=True)
+    full.add_argument("--objective", required=True)
+    full.add_argument("--icp", required=True)
+    full.add_argument("--max-accounts", type=int, default=100)
+    full.add_argument("--max-steps", type=int, default=3)
+    full.add_argument("--max-cost-usd", type=float, default=0.0)
     create = sub.add_parser("mission-create", help="Create a durable sales-domain mission")
     create.add_argument("--mission-id", required=True)
     create.add_argument("--offer-id", required=True)
@@ -73,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
         result = {"discovered": len(records),
                   "intake": store.ingest(a.tenant, records),
                   "work": store.run_cycle(a.tenant)}
+    elif a.command == "sales-run":
+        result = asyncio.run(run_sales_pipeline(
+            store=store, tenant=a.tenant,
+            job_id=a.job_id, offer_id=a.offer_id,
+            mission_id=a.mission_id, objective=a.objective, icp=a.icp,
+            neuron=PlumMeSalesNeuron(max_cost_usd=a.max_cost_usd),
+            max_accounts=a.max_accounts, max_steps=a.max_steps))
     elif a.command == "mission-create":
         result = SalesMissionEngine(store).create(
             a.tenant, a.mission_id, a.offer_id, a.objective, a.icp)
