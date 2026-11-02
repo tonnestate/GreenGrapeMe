@@ -132,6 +132,21 @@ class BlackberryBridgeTests(unittest.TestCase):
                                               client=fake, objective="B2B"))
             self.assertEqual(fake.calls, [])
 
+    def test_public_website_filter_rejects_internal_targets(self):
+        for website in (
+            "https://127.0.0.1", "https://[::1]", "https://localhost",
+            "https://intranet.internal", "https://corp.local",
+            "https://example.org:8443", "https://user:pw@example.org"
+        ):
+            fake = BlackberryFake()
+            with self.subTest(url=website):
+                with self.assertRaises(ValueError):
+                    asyncio.run(evaluate_blackberry_account(
+                        fake, account_name="Example", opportunity_id="a",
+                        objective="B2B", linkedin_company="Example",
+                        website_url=website))
+                self.assertEqual(fake.calls, [])
+
     def test_site_url_has_to_be_https(self):
         fake = BlackberryFake()
         with self.assertRaisesRegex(ValueError, "HTTPS"):
