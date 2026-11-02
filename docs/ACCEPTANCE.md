@@ -94,3 +94,7 @@ The StarFruitMe MCP read adapter must consume `total_matching`/offset pages (<=1
 - A single Discovery request's later batches must continue its existing MangoMe WorkIdentity using explicit `work_ref`, not repeat implicitly deduplicated user-intent admission.
 - A PlumMe output cannot be stored without repeating all mission account hash and suppression checks in the same database write transaction. Mid-flight opt-out/source change leaves no accepted proposal.
 - Passing GitHub CI is not a substitute for a real pinned-host integration trial with retained evidence.
+
+## G0 commercial pilot measurement – implemented local instrument, not a passing business case
+
+Pilot commercial terms and prospect-relevant events are tenant-scoped and persistent. Unverified reported payments remain `REPORTED`, count as 0 source-confirmed revenue, and cannot turn `pricing_validation` into success. Provider receipt reconciliation is host-only and requires a durable matching independent provider receipt; no real provider is yet connected. Local UI and GET APIs only read data. Customer realized payments, platform revenues and provider costs are separate measures; incremental attributable uplift and audited profitability stay `NOT_PROVEN` without additional data. Requires real paid pilots, verified external receipts and cost completeness before a go-to-market decision.

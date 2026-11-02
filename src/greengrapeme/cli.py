@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 from .operations import SalesWorkspace
+from .pilot_metrics import PilotLedger
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
 from .live_discovery import read_from_installed_starfruit
@@ -39,6 +40,26 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("overview")
     sub.add_parser("queue")
     sub.add_parser("rankings")
+    sub.add_parser("pilots", help="List source-qualified commercial pilot reports")
+    pilot_make = sub.add_parser("pilot-create", help="Record pilot commercial terms (not revenue)")
+    pilot_make.add_argument("--pilot-id", required=True)
+    pilot_make.add_argument("--offer-id", required=True)
+    pilot_make.add_argument("--label", required=True)
+    pilot_make.add_argument("--monthly-fee-cents", type=int, required=True)
+    pilot_make.add_argument("--setup-fee-cents", type=int, default=0)
+    pilot_event = sub.add_parser("pilot-record", help="Record a REPORTED event only; never independently verified")
+    pilot_event.add_argument("--pilot-id", required=True)
+    pilot_event.add_argument("--event-id", required=True)
+    pilot_event.add_argument("--kind", required=True, choices=(
+        "LEAD_ACCEPTED","MEETING_HELD","PROPOSAL_DELIVERED","DEAL_SIGNED",
+        "CUSTOMER_PAYMENT_RECEIVED","PLATFORM_PAYMENT_RECEIVED","PROVIDER_COST_INCURRED"))
+    pilot_event.add_argument("--opportunity-id", default="")
+    pilot_event.add_argument("--amount-cents", type=int, default=0)
+    pilot_event.add_argument("--evidence-ref", required=True)
+    pilot_event.add_argument("--reporter-ref", required=True)
+    pilot_event.add_argument("--occurred-at")
+    pilot_report = sub.add_parser("pilot-report")
+    pilot_report.add_argument("--pilot-id", required=True)
     reply = sub.add_parser("reply")
     reply.add_argument("--opportunity", required=True)
     reply.add_argument("--message-id", required=True)
@@ -135,6 +156,21 @@ def main(argv: list[str] | None = None) -> int:
         result = store.rankings(a.tenant)
     elif a.command == "queue":
         result = store.queue(a.tenant)
+    elif a.command == "pilot-create":
+        result = PilotLedger(store).create(
+            a.tenant, a.pilot_id, a.offer_id, a.label,
+            monthly_fee_cents=a.monthly_fee_cents,
+            setup_fee_cents=a.setup_fee_cents)
+    elif a.command == "pilot-record":
+        result = PilotLedger(store).record(
+            a.tenant, a.pilot_id, a.event_id, a.kind,
+            opportunity_id=a.opportunity_id, amount_cents=a.amount_cents,
+            evidence_ref=a.evidence_ref, reporter_ref=a.reporter_ref,
+            occurred_at=a.occurred_at)
+    elif a.command == "pilot-report":
+        result = PilotLedger(store).summary(a.tenant, a.pilot_id)
+    elif a.command == "pilots":
+        result = PilotLedger(store).list(a.tenant)
     elif a.command == "reply":
         result = {"category": store.ingest_reply(a.tenant, a.opportunity, a.message_id,
                                                   a.body, subject=a.subject)}

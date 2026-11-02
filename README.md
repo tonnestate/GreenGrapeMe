@@ -105,3 +105,7 @@ A new **read-only host preflight** (`PYTHONPATH=src python -m greengrapeme.host_
 ## Logikprüfung und drei P0-Korrekturen (02.11.2026)
 
 Drei bislang von Offline-Tests nicht erfasste Fehler sind behoben: Unvollständige StarFruitMe-Suchläufe wurden fälschlich als abgeschlossen behandelt, identische Benutzeraufträge für weitere 25er-Batches kollidierten mit MangoMes WorkIdentity-Dublettenprüfung und Quelländerungen/Opt-outs während einer PlumMe-Ausführung konnten noch als Vorschläge persistiert werden. Die Korrekturen blockieren unvollständige Quellläufe, nutzen für die Batches einer Discovery dieselbe explizite kanonische WorkIdentity und prüfen Quellen/Suppression erneut bei der transaktionalen Neuron-Resultatannahme. Siehe `docs/LOGIC_AUDIT_2026-11-02.md`.
+
+## Evidence-based paid pilot measurements (02.11.2026)
+
+Added `PilotLedger` in `src/greengrapeme/pilot_metrics.py`: tenant-isolated pilot commercial terms (not revenue), immutable reported pipeline/payment events, a read-only pilot scorecard, a local operator CLI, and an optional host-only independent receipt reconciliation protocol. **No provider connector is installed**, so reported amounts always remain unverified until real host reconciliation. A reported/platform payment is never treated as client incremental value or as audited profit. Local `/api/pilots` and `/api/pilot` plus an existing-style UI tab are read-only. Implementation and tests: `docs/MONETIZATION_PILOT_PROOF.md`.

@@ -57,6 +57,23 @@ async function detail(id){
 }
 async function work(){const d=await request("/api/work");$("work-list").replaceChildren();for(const t of d.items){const tr=document.createElement("tr");for(const v of [t.opportunity_id,t.role,t.action,t.state])cell(tr,v);$("work-list").appendChild(tr);}}
 async function missions(){const d=await request("/api/missions");$("missions-list").replaceChildren();for(const m of d.items){const tr=document.createElement("tr");for(const v of [m.mission_id,m.offer_id,m.objective,m.status])cell(tr,v);$("missions-list").appendChild(tr);}}
+function formatEuro(cents){return new Intl.NumberFormat("de-DE",{style:"currency",currency:"EUR"}).format(cents/100);}
+async function pilots(){
+ const data=await request("/api/pilots");
+ const out=$("pilots-list");out.replaceChildren();
+ for(const p of data.items){
+  const tr=document.createElement("tr");
+  for(const value of [
+   p.label+" ("+p.pilot_id+")",p.offer_id,formatEuro(p.planned_monthly_fee_cents),
+   p.reported_event_count+" unbestätigte Ereignisse",
+   formatEuro(p.platform_payment_confirmed_cents),
+   formatEuro(p.client_payment_confirmed_cents),
+   p.pricing_validation==="PAID_PILOT_EVIDENCED"?"Quellenbestätigte Zahlung":"Nicht nachgewiesen"
+  ])cell(tr,value);
+  out.appendChild(tr);
+ }
+ if(!data.items.length){const tr=document.createElement("tr"),td=text(tr,"td","Noch keine bezahlten Pilotprojekte erfasst");td.colSpan=7;out.appendChild(tr);}
+}
 $("login-form").addEventListener("submit",async e=>{e.preventDefault();secret=$("token").value;$("login-error").textContent="";try{await overview();await companies();$("token").value="";$("login").hidden=true;$("workspace").hidden=false;}catch(e){secret="";$("login-error").textContent=e.message;}});
 $("logout").addEventListener("click",()=>{secret="";$("workspace").hidden=true;$("login").hidden=false;$("details").hidden=true;});
 $("filters").addEventListener("submit",e=>{e.preventDefault();offset=0;companies().catch(error);});
@@ -65,8 +82,8 @@ $("next").addEventListener("click",()=>{offset+=limit;companies().catch(error);}
 $("close-details").addEventListener("click",()=>{$("details").hidden=true;});
 for(const b of document.querySelectorAll("[data-view]"))b.addEventListener("click",()=>{
  const view=b.dataset.view;
- for(const v of ["companies","work","missions","discovery"]){$(v+"-view").hidden=view!==v;document.querySelector('[data-view="'+v+'"]').setAttribute("aria-current",view===v?"page":"false");}
- ({companies,work,missions,discovery})[view]().catch(error);
+ for(const v of ["companies","work","missions","discovery","pilots"]){$(v+"-view").hidden=view!==v;document.querySelector('[data-view="'+v+'"]').setAttribute("aria-current",view===v?"page":"false");}
+ ({companies,work,missions,discovery,pilots})[view]().catch(error);
 });
 async function post(path, body) {
  const response=await fetch(path,{
@@ -136,3 +153,5 @@ $("job-form").addEventListener("submit",async e=>{
 $("jobs-refresh").addEventListener("click",()=>discovery().catch(error));
 setInterval(()=>{if(secret&&!$("workspace").hidden&&!$("discovery-view").hidden)
   discovery().catch(error);},5000);
+
+$("pilots-refresh").addEventListener("click",()=>pilots().catch(error));

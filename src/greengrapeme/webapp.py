@@ -17,6 +17,7 @@ from wsgiref.simple_server import make_server
 from .discovery_catalog import DiscoveryCatalog
 from .discovery_jobs import DiscoveryJobQueue, DiscoverySpec
 from .operations import SalesWorkspace
+from .pilot_metrics import PilotLedger
 
 
 def _response(start_response: Callable, code: str, body: bytes,
@@ -123,6 +124,10 @@ def create_app(catalog: DiscoveryCatalog, *, tenant: str, token: str):
                 data = jobs.list(tenant)
             elif path == "/api/discovery-job":
                 data = jobs.get(tenant, single("id"))
+            elif path == "/api/pilots":
+                data = PilotLedger(catalog.store).list(tenant)
+            elif path == "/api/pilot":
+                data = PilotLedger(catalog.store).summary(tenant, single("id"))
             else:
                 return _response(start_response, "404 Not Found",
                                  b'{"error":"not_found"}')
