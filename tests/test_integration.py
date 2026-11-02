@@ -91,6 +91,38 @@ class IntegrationTests(unittest.TestCase):
             s.ingest("tenant", [Opportunity("s1", "Example", "offer", (), suppressed=True)])
             self.assertEqual(s.run_cycle("tenant")["blocked"], 1)
 
+    def test_identity_conflict_rejects_entire_mixed_ingest_batch(self):
+        with TemporaryDirectory() as tmp:
+            store=SalesWorkspace(Path(tmp)/"s.db")
+            original=Opportunity("existing", "Original GmbH", "offer", ())
+            changed=Opportunity("existing", "Changed GmbH", "offer", ())
+            new=Opportunity("new", "Unrelated GmbH", "offer", ())
+            store.ingest("tenant", [original])
+            outcome=store.ingest("tenant", [new, changed])
+            self.assertEqual(outcome, {"new":0,"unchanged":0,"conflict":1})
+            self.assertEqual(store.overview("tenant")["opportunities"],1)
+            with store._db() as db:
+                self.assertIsNone(db.execute("SELECT 1 FROM opportunities "
+                    "WHERE tenant=? AND opportunity_id=?",("tenant","new")).fetchone())
+                current=db.execute("SELECT company_name FROM opportunities "
+                    "WHERE tenant=? AND opportunity_id=?",("tenant","existing")).fetchone()
+                self.assertEqual(current["company_name"],"Original GmbH")
+                self.assertEqual(db.execute("SELECT count(*) FROM audit "
+                    "WHERE tenant=? AND event='OPPORTUNITY_IMPORTED'",
+                    ("tenant",)).fetchone()[0],1)
+            self.assertGreaterEqual(store.run_cycle("tenant")["ready_for_review"],1)
+
+    def test_conflicting_duplicates_in_one_source_batch_are_not_imported(self):
+        with TemporaryDirectory() as tmp:
+            store=SalesWorkspace(Path(tmp)/"s.db")
+            x=Opportunity("same", "First Name", "offer", ())
+            y=Opportunity("same", "Second Name", "offer", ())
+            good=Opportunity("safe", "Safe Name", "offer", ())
+            outcome=store.ingest("tenant",[x,good,y])
+            self.assertEqual(outcome["conflict"],1)
+            self.assertEqual(outcome["new"],0)
+            self.assertEqual(store.overview("tenant")["opportunities"],0)
+
     def test_changed_source_does_not_overwrite(self):
         with TemporaryDirectory() as tmp:
             s = SalesWorkspace(Path(tmp)/"s.db")
