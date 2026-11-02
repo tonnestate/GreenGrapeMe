@@ -18,6 +18,9 @@ async def advance_batch(queue, tenant: str, request_id: str, spec,
                         *, researcher=None, admission=None, neuron=None,
                         allowed_existing_jobs=frozenset()):
     registry = DiscoveryBatches(queue.store)
+    # Initialize the optional donor review schema before checking cached
+    # fingerprints, including on a brand-new store with zero prior reviews.
+    review_store = BlackberryReviewStore(queue.store)
     entry = queue.get(tenant, request_id)
     state = entry["state"]
     job_id = entry["external_job_id"]
