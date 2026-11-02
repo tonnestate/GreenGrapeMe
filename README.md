@@ -100,3 +100,8 @@ If the source reports **more than the configured limit**, the job becomes `BLOCK
 Verified against the current upstream source contracts, GreenGrapeMe now consumes **MangoMe's real `enter_work` response**: project, family, **WorkIdentity**, normative baseline, plan and slice. MangoMe explicitly returns `spec=None` and `spec_admitted=False`, so GreenGrapeMe no longer invents an admitted Specification. Canonical WorkIdentity is not a completed/verified task; MangoMe remains sole owner of its truth/approval gates. Existing-work candidates and ambiguous admissions require independent canonical reconciliation.
 
 A new **read-only host preflight** (`PYTHONPATH=src python -m greengrapeme.host_preflight --job-id ... --workspace ...`) inspects the actual StarFruitMe/BlackberryMe/PlumMe/MangoMe contracts without starting collectors, models or customer communications. Instructions: `docs/HOST_PREFLIGHT.md`. Preflight success is **not** a live end-to-end test or production authorization.
+
+
+## Logikprüfung und drei P0-Korrekturen (02.11.2026)
+
+Drei bislang von Offline-Tests nicht erfasste Fehler sind behoben: Unvollständige StarFruitMe-Suchläufe wurden fälschlich als abgeschlossen behandelt, identische Benutzeraufträge für weitere 25er-Batches kollidierten mit MangoMes WorkIdentity-Dublettenprüfung und Quelländerungen/Opt-outs während einer PlumMe-Ausführung konnten noch als Vorschläge persistiert werden. Die Korrekturen blockieren unvollständige Quellläufe, nutzen für die Batches einer Discovery dieselbe explizite kanonische WorkIdentity und prüfen Quellen/Suppression erneut bei der transaktionalen Neuron-Resultatannahme. Siehe `docs/LOGIC_AUDIT_2026-11-02.md`.

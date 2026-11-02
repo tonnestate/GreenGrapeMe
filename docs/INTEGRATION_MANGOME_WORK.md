@@ -53,3 +53,8 @@ Implemented integration code and offline contract tests; canonical release 0.3.0
 ## Read-only contract preflight (02.11.2026)
 
 Use `python -m greengrapeme.host_preflight --job-id <authorized-source-job> --workspace <authorized-mango-workspace>` from the **trusted, already configured FruitStack host**. The existing job ID must be included in the trusted host environment `GG_ALLOWED_EXISTING_STARFRUIT_JOBS`. The check introspects the actual PlumMe UNI contract, lists BlackberryMe MCP tools, verifies MangoMe's `enter_work` callable and current workspace, and reads one already-authorized StarFruitMe job's status. It **does not** admit new work, run a model, dispatch a collector, or authorize customer outreach. Passing preflight only establishes host readiness for a separately authorized E2E trial, not an E2E result. Full instructions: `docs/HOST_PREFLIGHT.md`.
+
+
+## Batch-bound WorkIdentity and explicit continuation
+
+MangoMe's real `enter_work` deduplicates identical normalized user requests. Therefore one Discovery job's first batch admits a canonical WorkIdentity and later batches MUST continue that explicit WorkIdentity with `work_ref`, expecting `EXISTING_WORK_BOUND` with the identical canonical work ID and each batch's separate plan/slice. Missing/mixed canonical parents or unexpected dispositions fail closed. This does not grant contact authority and does not merge independent Discovery requests without reconciliation.

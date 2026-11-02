@@ -428,3 +428,12 @@ Bei der echten Upstream-Inspektion wurde ein bis dahin von Testdoubles verdeckte
 Neu: `src/greengrapeme/host_preflight.py` als separat ausführbarer, standardmäßig **effect-freier** Diagnoselauf. Er prüft StarFruitMe ausschließlich an einer hostautorisierten vorhandenen Job-ID, BlackberryMe durch MCP-Toollisting, MangoMe durch API-/Workspace-Vertragsprüfung und PlumMe durch no-effect NeuronRequest/UNI-Schema. Die Probe meldet `ready_for_controlled_host_trial` nur bei vier PASS und immer `production_ready=false`. `tests/test_host_preflight.py` und aktualisierte Mango-/Discovery-Batch-Vertragstests sichern diese Grenze ab.
 
 Die eigentliche Host-Abnahme bleibt **offen**, bis GreenGrapeMe in der realen FruitStack-Installation eine autorisierte Discovery und die anschließende Work-/Neuron-Ausführung mit echten Provider-Receipts ohne Fabrication nachweist. SaaS-Login/RBAC und Kampagnen/Setter/Closer wurden bewusst nicht vorgezogen.
+
+
+## 19. P0-Logikprüfung und Reparatur (02.11.2026)
+
+StarFruitMe `run_discovery_job(max_searches)` ist ein begrenzter Verarbeitungsschritt, kein Beleg der vollständigen Abarbeitung. GreenGrapeMe akzeptiert jetzt nur `summary.job_state=COMPLETED_NO_KNOWN_GAPS` als Abschluss der geplanten Tasks; `IN_PROGRESS`, `COMPLETED_WITH_GAPS` und fehlende Statusbelege erzeugen `BLOCKED_SOURCE_COVERAGE` vor dem Import.
+
+MangoMe dedupliziert gleiche normalisierte Benutzeraufträge. Der erste Discovery-Batch erhält eine kanonische WorkIdentity; weitere Batches desselben Auftrags nutzen den ausdrücklich weitergereichten `work_ref` für ihre eigenen Pläne/Slices und verlangen `EXISTING_WORK_BOUND`. Unverbundene Aufträge werden nicht stillschweigend zusammengelegt.
+
+Nach jedem PlumMe-Lauf werden Quell-Hashes und Suppression nochmals **in der Resultat-Commit-Transaktion** geprüft. Bei Änderung wird das unbestätigte Ergebnis nicht persistiert: `SOURCE_INVALIDATED` und `BLOCKED_SOURCE_REVISION`. Der Host-Livetest und die verbindliche externe Quellen-/Personenverifikation bleiben offen. Detailbericht: `docs/LOGIC_AUDIT_2026-11-02.md`.

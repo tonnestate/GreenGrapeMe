@@ -86,3 +86,11 @@ The StarFruitMe MCP read adapter must consume `total_matching`/offset pages (<=1
 - Confirmed by upstream contract inspection: `mangome.mcp_server.enter_work` delegates to `WorkGovernedMangoMeService.enter_work` and returns canonical `work_identity` and `normative_baseline`, but **no admitted Specification** (`spec=None`, `spec_admitted=False`). GreenGrapeMe now validates this actual response shape, immutable work lineage and `persistence.identity=CANONICAL` / `working_state=PROGRESSIVE`. The previously fabricated Mango fake envelope has been replaced in offline integration fixtures.
 - Added `greengrapeme.host_preflight`: a real-host, **read-only**, per-component runtime check. It requires host authorization for an existing StarFruitMe job and the actual attached MangoMe workspace. There is **no** claimed successful live-host execution, no provider call to PlumMe, no MangoMe work admission and no legal entity verification. Offline tests verify preflight scope and failure behavior.
 - Still not accepted: authenticated and source-authorized live four-component host test with exact work and receipt IDs, MangoMe existing-work candidate handling for multi-batch admissions, stable provider/source snapshot proof and customer-facing sales-effect authority.
+
+
+## Logical acceptance after P0 review
+
+- Source completion requires the StarFruitMe-reported `job_state=COMPLETED_NO_KNOWN_GAPS`. A successful bounded run call alone does not establish complete source coverage. Other and unknown states become `BLOCKED_SOURCE_COVERAGE` and must not import any candidates.
+- A single Discovery request's later batches must continue its existing MangoMe WorkIdentity using explicit `work_ref`, not repeat implicitly deduplicated user-intent admission.
+- A PlumMe output cannot be stored without repeating all mission account hash and suppression checks in the same database write transaction. Mid-flight opt-out/source change leaves no accepted proposal.
+- Passing GitHub CI is not a substitute for a real pinned-host integration trial with retained evidence.
