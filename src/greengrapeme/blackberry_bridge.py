@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import ipaddress
 import json
+from urllib.parse import urlsplit
 from typing import Protocol, Any
 
 from .operations import SalesWorkspace
@@ -85,8 +87,27 @@ async def evaluate_blackberry_account(client: BlackberryClient, *,
         raise ValueError("role_titles must be <=20 titles")
     if not isinstance(linkedin_company, str) or not isinstance(website_url, str):
         raise ValueError("invalid identity references")
-    if website_url and not website_url.startswith("https://"):
-        raise ValueError("website must be an explicit HTTPS URL")
+    if len(linkedin_company) > 300 or len(website_url) > 1500:
+        raise ValueError("Blackberry identity reference too long")
+    if website_url:
+        parsed = urlsplit(website_url)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if (parsed.scheme != "https" or not hostname or parsed.username or parsed.password
+                or parsed.fragment or parsed.query or parsed.path not in ("", "/")):
+            raise ValueError("website must be an explicit HTTPS URL")
+        if (hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal"))
+                or hostname.endswith(".invalid") or "." not in hostname):
+            raise ValueError("non-public website host is not allowed")
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("IP literal website hosts are not allowed")
+        if parsed.port not in (None, 443):
+            raise ValueError("non-standard website port is not allowed")
+        # This is only an input filter. The executing host MUST prevent DNS
+        # rebinding, private network egress and redirects to disallowed targets.
     plan = _decoded_tool_result(await client.call_tool(
         "blackberry_plan_company",
         {"company_name": account_name, "objective": objective}),
