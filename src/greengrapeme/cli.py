@@ -12,6 +12,10 @@ from .pipeline import run_sales_pipeline
 from .blackberry_bridge import research_with_installed_blackberry, BlackberryReviewStore
 from .sources import kigor_records, starfruit_records
 from .webapp import serve
+from .discovery_jobs import DiscoveryJobQueue, InstalledStarFruitSource, TrustedWorkAdmission
+from .mango_binding import InstalledMangoHostBackend
+from os import environ
+import time
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,9 +78,40 @@ def main(argv: list[str] | None = None) -> int:
     viewer = sub.add_parser("serve", help="Local read-only Discovery UI, loopback only")
     viewer.add_argument("--port", type=int, default=8765)
     viewer.add_argument("--token-env", default="GG_VIEWER_TOKEN")
+    worker = sub.add_parser("discover-worker", help="Run durable Discovery queue with installed FruitStack capabilities")
+    worker.add_argument("--once", action="store_true", help="Process one queued item and exit")
+    worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
     store = SalesWorkspace(a.db)
-    if a.command == "serve":
+    if a.command == "discover-worker":
+        if not 1 <= a.interval <= 300:
+            p.error("interval must be 1..300 seconds")
+        queue = DiscoveryJobQueue(store)
+        source = InstalledStarFruitSource(donor=environ.get("GG_SOURCE_DONOR", "obscura"))
+        allowed = environ.get("GG_ALLOW_EXTERNAL_DISCOVERY") == "1" and environ.get("STARFRUITME_RIGHTS_CONFIRMED") == "1"
+        trusted = all(environ.get(k) for k in (
+            "GG_HOST_ACTOR", "GG_HOST_WORKSPACE", "GG_HOST_CURRENT_USER_REQUEST"))
+        if trusted and environ.get("GG_HOST_AUTHORIZATION_GRANTED") == "1":
+            admission = TrustedWorkAdmission(
+                actor_id=environ["GG_HOST_ACTOR"],
+                workspace=environ["GG_HOST_WORKSPACE"],
+                current_user_request=environ["GG_HOST_CURRENT_USER_REQUEST"],
+                backend=InstalledMangoHostBackend())
+            neuron = PlumMeSalesNeuron(
+                max_cost_usd=float(environ.get("GG_NEURON_COST_USD", "0")))
+        else:
+            admission = None
+            neuron = None
+        while True:
+            result = asyncio.run(queue.run_next(
+                a.tenant, source, allow_external_source=allowed,
+                admission=admission, neuron=neuron))
+            if result is not None:
+                print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
+            if a.once:
+                return 0
+            time.sleep(a.interval)
+    elif a.command == "serve":
         serve(db=a.db, tenant=a.tenant, port=a.port, token_env=a.token_env)
         return 0
     elif a.command in {"import", "autopilot"}:

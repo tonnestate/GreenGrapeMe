@@ -65,6 +65,67 @@ $("next").addEventListener("click",()=>{offset+=limit;companies().catch(error);}
 $("close-details").addEventListener("click",()=>{$("details").hidden=true;});
 for(const b of document.querySelectorAll("[data-view]"))b.addEventListener("click",()=>{
  const view=b.dataset.view;
- for(const v of ["companies","work","missions"]){$(v+"-view").hidden=view!==v;document.querySelector('[data-view="'+v+'"]').setAttribute("aria-current",view===v?"page":"false");}
- ({companies,work,missions})[view]().catch(error);
+ for(const v of ["companies","work","missions","discovery"]){$(v+"-view").hidden=view!==v;document.querySelector('[data-view="'+v+'"]').setAttribute("aria-current",view===v?"page":"false");}
+ ({companies,work,missions,discovery})[view]().catch(error);
 });
+async function post(path, body) {
+ const response=await fetch(path,{
+  method:"POST",headers:{"Content-Type":"application/json","X-Green-Grape-Token":secret},
+  credentials:"omit",cache:"no-store",body:JSON.stringify(body)
+ });
+ if(!response.ok)throw Error("Auftrag konnte nicht angelegt werden (HTTP "+response.status+")");
+ return response.json();
+}
+function discoveryMode(){
+ const fresh=$("job-mode").value==="new";
+ $("job-new").hidden=!fresh;$("job-existing").hidden=fresh;
+ $("job-star-id").required=!fresh;
+ for(const id of ["job-nace","job-south","job-west","job-north","job-east"])$(id).required=fresh;
+ $("job-rights").required=fresh;
+}
+async function discovery(){
+ const response=await request("/api/discovery-jobs");
+ const body=$("discovery-list");body.replaceChildren();
+ for(const entry of response.items){
+  const tr=document.createElement("tr");
+  for(const v of [entry.request_id,entry.mode,entry.offer_id,
+    entry.external_job_id||"–",entry.state,
+    entry.error_kind||((entry.result&&entry.result.discovered!=null)
+      ?String(entry.result.discovered)+" Unternehmen":"–")])cell(tr,v);
+  body.appendChild(tr);
+ }
+ if(!response.items.length){
+  const tr=document.createElement("tr"),td=text(tr,"td","Noch keine Discovery-Aufträge");td.colSpan=6;body.appendChild(tr);
+ }
+}
+$("job-mode").addEventListener("change",discoveryMode);
+discoveryMode();
+$("job-form").addEventListener("submit",async e=>{
+ e.preventDefault();
+ const mode=$("job-mode").value;
+ const spec={
+  mode,offer_id:$("job-offer").value,objective:$("job-objective").value,
+  icp:$("job-icp").value,max_accounts:Number($("job-max-accounts").value)
+ };
+ if(mode==="existing"){spec.job_id=$("job-star-id").value;}
+ else{
+  spec.nace=$("job-nace").value;
+  spec.search_terms=$("job-terms").value.split("\n").map(v=>v.trim()).filter(Boolean);
+  spec.south=Number($("job-south").value);spec.west=Number($("job-west").value);
+  spec.north=Number($("job-north").value);spec.east=Number($("job-east").value);
+  spec.max_searches=Number($("job-max-searches").value);
+  spec.source_rights_acknowledged=$("job-rights").checked;
+ }
+ const id="job-"+crypto.randomUUID();
+ $("job-submit").disabled=true;$("job-feedback").textContent="Auftrag wird gespeichert.";
+ try{
+  const created=await post("/api/discovery-jobs",{request_id:id,spec});
+  $("job-feedback").textContent="Auftrag "+created.request_id+" gespeichert: "+created.state+
+    ". Die Ausführung erfolgt ausschließlich durch den konfigurierten FruitStack-Worker.";
+  await discovery();
+ }catch(e){$("job-feedback").textContent=e.message;}
+ finally{$("job-submit").disabled=false;}
+});
+$("jobs-refresh").addEventListener("click",()=>discovery().catch(error));
+setInterval(()=>{if(secret&&!$("workspace").hidden&&!$("discovery-view").hidden)
+  discovery().catch(error);},5000);

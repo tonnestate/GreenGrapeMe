@@ -15,6 +15,7 @@ from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
 from .discovery_catalog import DiscoveryCatalog
+from .discovery_jobs import DiscoveryJobQueue, DiscoverySpec
 from .operations import SalesWorkspace
 
 
@@ -40,9 +41,45 @@ def create_app(catalog: DiscoveryCatalog, *, tenant: str, token: str):
     if not isinstance(token, str) or len(token) < 24 or token.strip() != token:
         raise ValueError("viewer token must be a nonblank random string of >=24 chars")
 
+    jobs = DiscoveryJobQueue(catalog.store)
+
     def app(environ, start_response):
         path = environ.get("PATH_INFO", "")
         method = environ.get("REQUEST_METHOD", "")
+        # Only a non-sending, local job-queue creation is writable.
+        if method == "POST" and path == "/api/discovery-jobs":
+            supplied = environ.get("HTTP_X_GREEN_GRAPE_TOKEN", "")
+            if not isinstance(supplied, str) or not hmac.compare_digest(
+                    supplied.encode("utf-8"), token.encode("utf-8")):
+                return _response(start_response, "401 Unauthorized",
+                                 b'{"error":"unauthorized"}')
+            if environ.get("CONTENT_TYPE", "").split(";")[0].strip().lower() != "application/json":
+                return _response(start_response, "415 Unsupported Media Type",
+                                 b'{"error":"json_required"}')
+            host = environ.get("HTTP_HOST", "")
+            origin = environ.get("HTTP_ORIGIN", "")
+            if not host or origin != "http://" + host or not (
+                host.startswith("127.0.0.1:") or host.startswith("[::1]:")):
+                return _response(start_response, "403 Forbidden",
+                                 b'{"error":"same_origin_required"}')
+            try:
+                length = int(environ.get("CONTENT_LENGTH", "0"))
+                if not 1 <= length <= 8192:
+                    raise ValueError("invalid body size")
+                raw = environ["wsgi.input"].read(length)
+                if len(raw) != length:
+                    raise ValueError("incomplete JSON")
+                payload = json.loads(raw)
+                if not isinstance(payload, dict) or set(payload) != {"request_id", "spec"}:
+                    raise ValueError("unexpected body keys")
+                spec = DiscoverySpec.parse(payload["spec"])
+                result = jobs.create(tenant, payload["request_id"], spec)
+            except (KeyError, ValueError, TypeError, OverflowError, UnicodeError,
+                    json.JSONDecodeError):
+                return _response(start_response, "400 Bad Request",
+                                 b'{"error":"invalid_request"}')
+            return _response(start_response, "202 Accepted",
+                json.dumps(result, ensure_ascii=False).encode("utf-8"))
         if method != "GET":
             return _response(start_response, "405 Method Not Allowed",
                              b'{"error":"read_only"}')
@@ -82,6 +119,10 @@ def create_app(catalog: DiscoveryCatalog, *, tenant: str, token: str):
                 data = catalog.missions(tenant)
             elif path == "/api/work":
                 data = catalog.work(tenant)
+            elif path == "/api/discovery-jobs":
+                data = jobs.list(tenant)
+            elif path == "/api/discovery-job":
+                data = jobs.get(tenant, single("id"))
             else:
                 return _response(start_response, "404 Not Found",
                                  b'{"error":"not_found"}')
