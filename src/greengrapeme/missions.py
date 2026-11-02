@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from .operations import SalesWorkspace
 
 STAGES = ("HEAD_OF_SALES", "MARKET_INTELLIGENCE", "SDR")
-TERMINAL = {"REVIEW_READY", "BLOCKED_NO_SOURCE", "UNKNOWN", "CANCELLED"}
+TERMINAL = {"REVIEW_READY", "BLOCKED_NO_SOURCE", "BLOCKED_SOURCE_REVISION", "UNKNOWN", "CANCELLED"}
 ALLOWED_ACTIONS = {"REVIEW", "RESEARCH", "NURTURE", "DEFER"}
 
 
@@ -97,26 +97,54 @@ class SalesMissionEngine:
               output_json TEXT, receipt_id TEXT, provider_status TEXT,
               cost_usd REAL, error_class TEXT, updated_at TEXT NOT NULL,
               PRIMARY KEY (tenant, mission_id, stage));
+            CREATE TABLE IF NOT EXISTS sales_mission_accounts (
+              tenant TEXT NOT NULL, mission_id TEXT NOT NULL,
+              opportunity_id TEXT NOT NULL, source_sha256 TEXT NOT NULL,
+              PRIMARY KEY(tenant,mission_id,opportunity_id));
             """)
 
     def create(self, tenant: str, mission_id: str, offer_id: str,
-               objective: str, icp: str) -> dict:
+               objective: str, icp: str,
+               account_ids: tuple[str, ...] | None = None) -> dict:
         tenant = self.store._required(tenant, "tenant")
         mission_id = _require(mission_id, "mission_id", 160)
         offer_id = _require(offer_id, "offer_id", 160)
         objective = _require(objective, "objective")
         icp = _require(icp, "icp")
+        if account_ids is not None:
+            if not isinstance(account_ids, tuple) or len(account_ids) > 25 or len(set(account_ids)) != len(account_ids):
+                raise ValueError("mission cohort must be a unique tuple of at most 25 accounts")
+            for account_id in account_ids:
+                _require(account_id, "opportunity_id", 160)
         now = self.store._now()
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM sales_missions WHERE tenant=? AND mission_id=?",
                           (tenant, mission_id)).fetchone():
                 raise ValueError("mission id already exists; read its status to continue")
+            if account_ids is None:
+                source_rows = db.execute("""SELECT opportunity_id,source_json FROM opportunities
+                       WHERE tenant=? AND offer_id=? ORDER BY opportunity_id LIMIT 25""",
+                       (tenant, offer_id)).fetchall()
+            elif account_ids:
+                placeholders = ",".join("?" for _ in account_ids)
+                source_rows = db.execute(
+                    "SELECT opportunity_id,source_json FROM opportunities WHERE tenant=? "
+                    "AND offer_id=? AND opportunity_id IN (" + placeholders + ")",
+                    (tenant, offer_id, *account_ids)).fetchall()
+                if len(source_rows) != len(account_ids):
+                    raise ValueError("cohort contains an unknown or wrong-offer account")
+            else:
+                source_rows = []
             db.execute("INSERT INTO sales_missions VALUES (?,?,?,?,?,?,?,?,?)",
                        (tenant, mission_id, offer_id, objective, _json({"icp": icp}),
                         "QUEUED", 0, now, now))
+            for source in source_rows:
+                db.execute("""INSERT INTO sales_mission_accounts VALUES(?,?,?,?)""",
+                           (tenant, mission_id, source["opportunity_id"],
+                            hashlib.sha256(source["source_json"].encode("utf-8")).hexdigest()))
             self.store._audit(db, tenant, mission_id, "SALES_MISSION_CREATED",
-                              {"offer_id": offer_id})
+                              {"offer_id": offer_id, "cohort_size": len(source_rows)})
         return self.status(tenant, mission_id)
 
     def status(self, tenant: str, mission_id: str) -> dict:
@@ -132,9 +160,21 @@ class SalesMissionEngine:
                                  WHERE tenant=? AND mission_id=? ORDER BY rowid""",
                                (tenant, mission_id)).fetchall()
         return {"tenant": tenant, "mission_id": mission_id, "offer_id": row["offer_id"],
-                "status": row["status"], "next_stage": (
+                "status": row["status"], "cohort_size": len(self.account_ids_raw(tenant, mission_id)),
+                "next_stage": (
                     STAGES[row["stage_index"]] if row["stage_index"] < len(STAGES) else None
                 ), "steps": [dict(x) for x in steps]}
+
+    def account_ids_raw(self, tenant: str, mission_id: str) -> tuple[str, ...]:
+        with self.store._db() as db:
+            return tuple(r["opportunity_id"] for r in db.execute(
+                """SELECT opportunity_id FROM sales_mission_accounts
+                   WHERE tenant=? AND mission_id=? ORDER BY opportunity_id""",
+                (tenant, mission_id)))
+
+    def account_ids(self, tenant: str, mission_id: str) -> tuple[str, ...]:
+        self.status(tenant, mission_id)
+        return self.account_ids_raw(tenant, mission_id)
 
     def _claim(self, tenant: str, mission_id: str) -> tuple[str, str, dict] | None:
         """Atomically claim one new stage; crash after claim => explicit UNKNOWN/RUNNING."""
@@ -148,11 +188,25 @@ class SalesMissionEngine:
                 return None
             if row["stage_index"] >= len(STAGES):
                 return None
-            records = db.execute("""SELECT o.source_json FROM opportunities o
-                   LEFT JOIN suppressions s ON s.tenant=o.tenant AND s.opportunity_id=o.opportunity_id
-                   WHERE o.tenant=? AND o.offer_id=? AND s.opportunity_id IS NULL
-                   ORDER BY o.opportunity_id LIMIT 25""",
-                   (tenant, row["offer_id"])).fetchall()
+            membership = db.execute("""SELECT m.opportunity_id,m.source_sha256,
+                          o.source_json,s.reason AS suppressed
+                    FROM sales_mission_accounts m
+                    LEFT JOIN opportunities o ON o.tenant=m.tenant
+                         AND o.opportunity_id=m.opportunity_id
+                    LEFT JOIN suppressions s ON s.tenant=m.tenant
+                         AND s.opportunity_id=m.opportunity_id
+                    WHERE m.tenant=? AND m.mission_id=?
+                    ORDER BY m.opportunity_id""", (tenant, mission_id)).fetchall()
+            if any(r["source_json"] is None or r["suppressed"] is not None or
+                   hashlib.sha256(r["source_json"].encode("utf-8")).hexdigest() != r["source_sha256"]
+                   for r in membership):
+                db.execute("""UPDATE sales_missions SET status='BLOCKED_SOURCE_REVISION',
+                         updated_at=? WHERE tenant=? AND mission_id=?""",
+                         (self.store._now(), tenant, mission_id))
+                self.store._audit(db, tenant, mission_id, "MISSION_COHORT_INVALIDATED",
+                                  {"reason": "REVISED_REMOVED_OR_SUPPRESSED_ACCOUNT"})
+                return None
+            records = membership
             accounts = []
             for record in records:
                 source = json.loads(record["source_json"])

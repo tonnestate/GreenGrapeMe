@@ -56,6 +56,10 @@ async def run_sales_pipeline(*,
                 "discovered": len(records), "intake": intake,
                 "mission_id": mission_id, "effects": 0}
 
+    if len(records) > 25:
+        return {"state": "BLOCKED_ACCOUNT_CAPACITY", "discovered": len(records),
+                "max_cohort": 25, "mission_id": mission_id, "effects": 0}
+
     engine = SalesMissionEngine(store)
     with store._db() as db:
         current = db.execute("""SELECT offer_id,objective,icp_json
@@ -67,12 +71,15 @@ async def run_sales_pipeline(*,
             raise ValueError("mission id reused with different business specification")
         # Do not change the eligible account universe under an in-progress
         # mission. A new source requires a new mission identity.
-        if intake["new"]:
+        if (intake["new"] or
+                set(engine.account_ids(tenant, mission_id)) !=
+                {record.opportunity_id for record in records}):
             return {"state": "BLOCKED_CHANGED_MISSION_INPUT",
                     "discovered": len(records), "intake": intake,
                     "mission_id": mission_id, "effects": 0}
     else:
-        engine.create(tenant, mission_id, offer_id, objective, icp)
+        engine.create(tenant, mission_id, offer_id, objective, icp,
+                      account_ids=tuple(record.opportunity_id for record in records))
 
     work = store.run_cycle(tenant)
     status = await engine.run(tenant, mission_id, neuron, max_steps=max_steps)

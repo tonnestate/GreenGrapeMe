@@ -331,15 +331,25 @@ class DiscoveryJobQueue:
                                  result={"intake": outcome})
                 return self.get(tenant, request_id)
             mission_id = "discovery-" + request_id
+            if len(records) > 25:
+                self._transition(tenant, request_id, state, "BLOCKED_ACCOUNT_CAPACITY",
+                                 result={"discovered": len(records), "max_cohort": 25},
+                                 error_kind="COHORT_EXCEEDS_CURRENT_MODEL_CAPACITY")
+                return self.get(tenant, request_id)
             engine = SalesMissionEngine(self.store)
             try:
-                engine.create(tenant, mission_id, spec.offer_id, spec.objective, spec.icp)
+                engine.create(tenant, mission_id, spec.offer_id, spec.objective, spec.icp,
+                              account_ids=tuple(r.opportunity_id for r in records))
             except ValueError:
                 # A prior successful create may precede a crash before transition.
                 with self.store._db() as db:
                     row = db.execute("""SELECT offer_id,objective,icp_json FROM sales_missions
                            WHERE tenant=? AND mission_id=?""",(tenant, mission_id)).fetchone()
-                if not row or row["offer_id"] != spec.offer_id or row["objective"] != spec.objective or json.loads(row["icp_json"]).get("icp") != spec.icp:
+                if (not row or row["offer_id"] != spec.offer_id or
+                        row["objective"] != spec.objective or
+                        json.loads(row["icp_json"]).get("icp") != spec.icp or
+                        set(engine.account_ids(tenant, mission_id)) !=
+                        {r.opportunity_id for r in records}):
                     self._transition(tenant, request_id, state, "BLOCKED_CHANGED_MISSION_INPUT")
                     return self.get(tenant, request_id)
             self.store.run_cycle(tenant)
