@@ -7,6 +7,7 @@ import json
 from .operations import SalesWorkspace
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
+from .live_discovery import read_from_installed_starfruit
 from .sources import kigor_records, starfruit_records
 
 
@@ -33,6 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     reply.add_argument("--message-id", required=True)
     reply.add_argument("--body", required=True)
     reply.add_argument("--subject", default="")
+    live = sub.add_parser("discover-starfruit", help="Read existing StarFruitMe MCP v2 discovery without scraping")
+    live.add_argument("--job-id", required=True)
+    live.add_argument("--offer-id", required=True)
+    live.add_argument("--limit", type=int, default=100)
     create = sub.add_parser("mission-create", help="Create a durable sales-domain mission")
     create.add_argument("--mission-id", required=True)
     create.add_argument("--offer-id", required=True)
@@ -62,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     elif a.command == "reply":
         result = {"category": store.ingest_reply(a.tenant, a.opportunity, a.message_id,
                                                   a.body, subject=a.subject)}
+    elif a.command == "discover-starfruit":
+        records = asyncio.run(read_from_installed_starfruit(
+            job_id=a.job_id, offer_id=a.offer_id, limit=a.limit))
+        result = {"discovered": len(records),
+                  "intake": store.ingest(a.tenant, records),
+                  "work": store.run_cycle(a.tenant)}
     elif a.command == "mission-create":
         result = SalesMissionEngine(store).create(
             a.tenant, a.mission_id, a.offer_id, a.objective, a.icp)
