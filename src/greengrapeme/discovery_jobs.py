@@ -18,6 +18,8 @@ from .mango_binding import MangoMissionBinding
 from .blackberry_bridge import (
     BlackberryReviewStore, research_with_installed_blackberry, research_fingerprint
 )
+from .discovery_batches import DiscoveryBatches
+from .batch_runner import advance_batch
 from .missions import SalesMissionEngine, NeuronRunner
 from .operations import SalesWorkspace
 
@@ -367,9 +369,25 @@ class DiscoveryJobQueue:
                                  result={"discovered": 0}, error_kind="NO_SOURCED_ACCOUNTS")
                 return self.get(tenant, request_id)
             if len(records) > 25:
-                self._transition(tenant, request_id, state, "BLOCKED_ACCOUNT_CAPACITY",
-                                 result={"discovered": len(records), "max_cohort": 25},
-                                 error_kind="COHORT_EXCEEDS_CURRENT_MODEL_CAPACITY")
+                # Every source row belongs to exactly one deterministic, bounded
+                # cognitive mission. Preserve the old single-batch behavior for
+                # jobs of <=25 accounts and do NOT silently drop excess rows.
+                registry = DiscoveryBatches(self.store)
+                try:
+                    registry.snapshot(
+                        tenant, request_id, records, offer_id=spec.offer_id,
+                        objective=spec.objective, icp=spec.icp)
+                except ValueError:
+                    self._transition(
+                        tenant, request_id, state, "BLOCKED_CHANGED_MISSION_INPUT",
+                        error_kind="IMMUTABLE_BATCH_PLAN_MISMATCH")
+                    return self.get(tenant, request_id)
+                self.store.run_cycle(tenant)
+                self._transition(
+                    tenant, request_id, state, "BATCH_AWAITING_BLACKBERRY",
+                    result={"discovered": len(records), "intake": outcome,
+                            **registry.summary(tenant, request_id),
+                            "blackberry_research": "PENDING_UNVERIFIED"})
                 return self.get(tenant, request_id)
             engine = SalesMissionEngine(self.store)
             try:
@@ -518,6 +536,12 @@ class DiscoveryJobQueue:
             elif result["status"] in ("BLOCKED_NO_SOURCE", "UNKNOWN"):
                 self._transition(tenant, request_id, state, result["status"],
                                  error_kind=result["status"])
+        if state in ("BATCH_AWAITING_BLACKBERRY",
+                     "BATCH_AWAITING_CANONICAL_WORK", "BATCH_ADMITTED"):
+            return await advance_batch(
+                self, tenant, request_id, spec, researcher=researcher,
+                admission=admission, neuron=neuron,
+                allowed_existing_jobs=allowed_existing_jobs)
         return self.get(tenant, request_id)
 
     async def run_next(self, tenant: str, source: DiscoverySource, *,
@@ -529,9 +553,10 @@ class DiscoveryJobQueue:
         tenant = self.store._required(tenant, "tenant")
         valid = ("QUEUED", "SOURCE_READY", "SOURCE_DONE")
         if researcher is not None:
-            valid += ("AWAITING_BLACKBERRY",)
+            valid += ("AWAITING_BLACKBERRY", "BATCH_AWAITING_BLACKBERRY")
         if admission is not None and neuron is not None:
-            valid += ("AWAITING_CANONICAL_WORK", "ADMITTED")
+            valid += ("AWAITING_CANONICAL_WORK", "ADMITTED",
+                      "BATCH_AWAITING_CANONICAL_WORK", "BATCH_ADMITTED")
         with self.store._db() as db:
             row = db.execute(
                 "SELECT request_id FROM discovery_product_jobs WHERE tenant=? "
