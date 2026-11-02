@@ -70,3 +70,12 @@ Vor dem BlackberryMe-Toolaufruf steht ein persistenter `BLACKBERRY_IN_FLIGHT`-Fe
 **Testgrenzen:** `tests/test_mission_cohorts.py` und zusätzliche Fälle in `test_discovery_jobs.py` prüfen getrennte Accounts bei identischem Angebot, falsch zugeordnete Mandanten, nachträgliche Suppression/Quelländerung, fehlende BlackberryMe-Recherche, verloren gegangene Antworten und keine automatische Wiederholung. Offline-Tests sind weiterhin kein Beweis für konfigurierten Live-Provider-/Rechtsdatenzugriff.
 
 **Noch offen:** unabhängige Unternehmens-Rechtsträgerverifikation und eindeutiges StarFruitMe↔BlackberryMe Matching (ein Firmenrechercheplan allein kann dies nicht leisten), Account-Batch-Splitting und Nachladen über die ersten 25 Kandidaten hinaus, tatsächliche Host-Smokes und die produktive autorisierte Kommunikations-/Setter-/Closer-Strecke.
+
+
+## Batch-Verarbeitung und UI-Anzeige (02.11.2026)
+
+Der Discovery-Worker unterstützt nun bis zu 100 zurückgegebene Kandidaten pro Aufruf. Bei 1–25 bleibt die bisherige einzelne, quellengebundene SalesMission erhalten; bei 26–100 werden deterministisch (nach Opportunity-ID sortiert) mehrere SalesMissions mit maximal 25 Accounts angelegt und in `sales_discovery_batches` gespeichert. Bei 60 Accounts entstehen die Gruppen 25+25+10. Die Gruppen besitzen eigenständige MangoMe-Work- und PlumMe-Ausführungsbelege, werden aber weiterhin vom *gleichen* GreenGrapeMe-Product-Worker verwaltet, ohne neue allgemeine Orchestrierung.
+
+Neue Aggregatzustände: `BATCH_AWAITING_BLACKBERRY`, `BATCH_AWAITING_CANONICAL_WORK`, `BATCH_ADMITTED`. Jede Gruppe muss ihre BlackberryMe-Recherche abgeschlossen haben, bevor die kanonische MangoMe-Aufnahme erfolgt. Alle Gruppen müssen nach echten Neuron-Resultaten den Status `REVIEW_READY` erreichen, bevor der Gesamtauftrag `REVIEW_READY` meldet. Bei unterbrochenen Abläufen werden persistierte Kohorten und externe Admission-Fences wiederverwendet; source hashes, spätere Opt-outs und fremde Tenant-Daten werden vor jeder weiteren Aktion geprüft.
+
+Die Weboberfläche zeigt Batch-Gesamtzahl, bereits abgeschlossene Gruppen und erfasste Accounts. **Keine Erfolgskennzahl behauptet reale Kundenkontakte.** Die implementierte Grenze von 100 Quellenkonten pro erster Abfrage stellt keine vollständige Pagination über einen gesamten StarFruitMe-Discovery-Job sicher; dies ist ein offenes Release-Gate. Tests im `tests/test_discovery_batches.py` verwenden eindeutige, offline simulierte Source-/BlackberryMe-/MangoMe-/PlumMe-Adapter – nicht den tatsächlichen Produktiv-Host.

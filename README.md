@@ -79,3 +79,10 @@ Der Webserver sendet keine Aufträge an Drittprovider. Lokal startet man `serve`
 Die Discovery-Queue erzeugt nun eine feste, quellenfingerprint-gebundene **Sales-Account-Kohorte je Mission**, statt alle Kunden desselben Angebots zu vermischen. Die AI-Stages stoppen bei Quellenänderungen oder Opt-outs; Kohorten mit mehr als 25 Accounts werden transparent blockiert, bis eine echte Batch-Mission umgesetzt ist.
 
 Zwischen StarFruitMe-Import und MangoMe-Admission liegt nun `AWAITING_BLACKBERRY`. Nur wenn der vertrauenswürdige Host `GG_ENABLE_BLACKBERRY_RESEARCH=1` setzt und das echte BlackberryMe-MCP-Paket installiert ist, werden die vorhandenen Company-Research-Pläne je Account automatisch erstellt und dauerhaft protokolliert. Sie **verifizieren keinen Rechtsträger** und verleihen **keinerlei Kontaktbefugnis**. Unklare Rechercheergebnisse werden gesperrt, nicht automatisch wiederholt. Siehe `docs/DISCOVERY_MISSIONS_UI.md` für den Prüfstand und offene Releases.
+
+
+## Release 0.4: Bounded Discovery account batching
+
+Discovery jobs with **26–100** returned source accounts are now split into deterministic, immutable `<=25`-account SalesMissions with independent source fingerprints, BlackberryMe research progress, MangoMe canonical admission and PlumMe cognitive receipts. A source with 60 records creates 25+25+10 scopes. Every batch must reach `REVIEW_READY` before the parent job is marked `REVIEW_READY`; missing host services leave the queue pending instead of bypassing admission. Batch status and completion counters are visible in the existing Discovery UI. Existing jobs with 1–25 records retain the original mission IDs and behavior.
+
+This is **not unlimited source coverage**: one request currently reads at most 100 source candidates and StarFruitMe's first-result page. More than 100, paging, recurring jobs, true legal identity and real end-to-end host tests remain outstanding. See `docs/DISCOVERY_MISSIONS_UI.md`.
