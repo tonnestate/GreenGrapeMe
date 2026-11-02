@@ -35,3 +35,9 @@ Head of Sales; Market Intelligence; SDR/Prospecting; Campaign/Personalization; F
 The repository was empty when this baseline was created. The initial donor inventory and evidence boundaries are in `docs/DONORS.md`, the executable acceptance requirements in `docs/ACCEPTANCE.md`. No claims of productive sales, live vendor integrations or live provider calls are made.
 
 **Target:** an end-to-end, evidence-bearing, economically measured sales system that can be integrated with FruitStack rather than a collection of isolated marketing demos.
+
+## Donor-derived implementation (feature branch)
+
+This branch adds an executable, tenant-scoped sales work queue, a bounded 'autopilot' import-and-triage command, source-aware StarFruitMe and KIGOR handoff importers, date-decayed buying signals, evidence-only internal sales briefs, and deterministic inbound reply suppression. These are **sales-domain** functions, not a new model scheduler or replacement of existing FruitStack services. See docs/ADOPTION_OPENOUTBOUND.md and tests/test_integration.py.
+
+The system still lacks real scheduled data discovery, live BlackberryMe identity confirmations, live model-role execution, outbound dispatch, website UI, Setter/Closer and revenue verification; do not describe it as a finished autonomous sales team.

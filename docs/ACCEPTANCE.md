@@ -62,3 +62,6 @@ Every transition has a stable work/opportunity identity, evidence receipts, acti
 ## Definition of release
 
 No claim of production readiness until G1–G5 have actual end-to-end tests, required legal/contract authority, host verification, failures/rollbacks, independent evidence and real measured conversion.
+## P0 follow-up: donor-derived execution slice
+
+Implemented in feature branch: StarFruitMe/KIGOR JSONL import contracts, persistent tenant-scoped sales work, source revision review, generated evidence briefs, dated buying signal scoring and rankings, suppression-aware inbound reply prechecks, bounded deterministic autopilot triage and offline integration tests. Attribution/pinned donor source: docs/ADOPTION_OPENOUTBOUND.md. Actual MCP runtime, BlackberryMe legal identity verification, FruitStack agent dispatch, real customer contact and signed sales remain later gates, not accepted results. Public repo must retain no private donor code or client data.
