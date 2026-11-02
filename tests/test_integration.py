@@ -122,6 +122,10 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(outcome["conflict"],1)
             self.assertEqual(outcome["new"],0)
             self.assertEqual(store.overview("tenant")["opportunities"],0)
+            with store._db() as db:
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM work_items WHERE tenant=?",
+                    ("tenant",)).fetchone()[0],0)
 
     def test_changed_source_does_not_overwrite(self):
         with TemporaryDirectory() as tmp:
