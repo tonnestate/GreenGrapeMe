@@ -361,3 +361,15 @@ Releases sind **Fertigstellungs-Gates**, keine Zeitversprechen. Kein Gate gilt a
 - UWG § 7: https://www.gesetze-im-internet.de/uwg_2004/__7.html
 
 **Hinweis:** Lizenz- und Anbieterangaben sind an die jeweils geprüften Revisionen/Produktdokumente gebunden; kundenspezifische Nutzungsbedingungen, EU-/DE-Konformität und tatsächliche Integrationsfähigkeit müssen im vorgesehenen Betrieb separat validiert werden. Dieses Dokument spezifiziert *was zu bauen und zu beweisen ist*, nicht fiktiv bereits gebaute oder verkaufte Leistungen.
+
+
+## 12. Implementierungsnachtrag – BlackberryMe und MangoMe (02.11.2026)
+
+Die nachstehenden Punkte sind **Code-/Offline-Integrationsstand**, kein Nachweis produktiver Live-Provider.
+
+- **BlackberryMe:** `src/greengrapeme/blackberry_bridge.py` nutzt die tatsächlichen MCP-Werkzeuge `blackberry_plan_company`, `blackberry_role_relevance` und optional `blackberry_resolve_company_identity`. Tenant-spezifische Recherchebelege und Rollenbewertungen gelangen in den Kontext der PlumMe-Sales-Mission. Identität des Discovery-Kandidaten bleibt **UNVERIFIED**, bis eine tatsächliche Account-Zuordnung nachgewiesen wurde; kein unkontrollierter Kontakt.
+- **MangoMe:** `src/greengrapeme/mango_binding.py` bindet über den bestehenden, hostgeschützten `enter_work`-Vertrag eine SalesMission an MangoMes kanonische Projekt-/Family-/Plan-/Slice-Identität. Die Ergebnisdatenhaltung in GreenGrapeMe speichert **nur Referenzen**, keine kopierte Governance-/Assurance-Wahrheit. Ein vor dem Host-Aufruf persistierter Intent-Fence stoppt Duplikataufnahmen nach unklaren Effekten. Für den aktiven SaaS-Betrieb fehlen die nachgewiesene Host-Authentifizierung, richtige Mandantenarbeitsräume, der Live-Mongo-End-to-End-Test und der unabhängige Recovery-Prozess.
+- **Offline-Vertragstests:** `tests/test_blackberry_bridge.py`, `test_blackberry_mission.py` und `test_mango_binding.py` prüfen Antwortvalidierung, Quellbindung, URL-Eingaben, Opt-outs, Replay, Tenant-Isolation, kanonische Referenzen und unklare Aufnahmeversuche.
+- **Vorrangige nächste Abnahme:** Ein tatsächlich laufender FruitStack-Host muss StarFruitMe → BlackberryMe → PlumMe → MangoMe über echte, erlaubte Daten und einen identifizierten authentifizierten Operator durchführen. Der anschließende Schritt ist die echte Discovery-Oberfläche und danach der autorisierte Sales-Effect-Pfad, nicht ein weiteres generisches Agentenframework.
+
+Keine automatische Mail/LinkedIn/Telefon-Kontaktaufnahme, kein live verifizierter Closer, keine Kunden-Umsatzverifikation oder freigegebene SaaS-Produktionsstufe.
