@@ -45,7 +45,15 @@ def _reference(ref: str) -> str:
 
 
 def _future_date(value: str) -> str:
-    date = datetime.fromisoformat(_instant(value))
+    if not isinstance(value, str):
+        raise ValueError("follow-up requires an ISO timestamp")
+    try:
+        date = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("invalid follow-up timestamp") from exc
+    if date.tzinfo is None or date.utcoffset() is None:
+        raise ValueError("follow-up timestamp must include its timezone")
+    date = date.astimezone(timezone.utc)
     now = datetime.now(timezone.utc)
     if not now < date <= now + timedelta(days=365):
         raise ValueError("follow-up due date must be within next 365 days")
