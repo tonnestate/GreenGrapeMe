@@ -21,14 +21,18 @@ class MangoHostFake:
         return self.response if self.response is not None else {
             "project": {"entity_id": "project-canonical"},
             "family": {"entity_id": "family-canonical"},
-            "spec": {"entity_id": "spec-canonical"},
+            "work_identity": {"entity_id": "work-canonical",
+                              "family_id": "family-canonical",
+                              "project_id": "project-canonical"},
+            "normative_baseline": {"entity_id": "baseline-canonical"},
+            "spec": None, "spec_admitted": False,
             "work": {
                 "plan": {"entity_id": "plan-canonical"},
                 "slice": {"entity_id": "slice-canonical"}
             },
-            "authority": "USER_INTENT_RELAYED_BY_CLIENT",
-            "truth_level": "CANONICAL_UNVERIFIED",
-            "discovery_promoted": False,
+            "disposition": "NEW_WORK_ADMITTED",
+            "admission": {"identity_role": "DEDUP_HINT_ONLY"},
+            "persistence": {"identity": "CANONICAL", "working_state": "PROGRESSIVE"},
         }
 
 
@@ -50,11 +54,47 @@ class MangoWorkBindingTests(unittest.TestCase):
             second = binder.admit("tenant-1", "mission-1", **opts)
             self.assertEqual(first, second)
             self.assertEqual(first["mango_family_id"], "family-canonical")
+            self.assertEqual(first["mango_work_id"], "work-canonical")
+            self.assertEqual(first["mango_normative_baseline_id"], "baseline-canonical")
+            self.assertIsNone(first["mango_spec_id"])
+            self.assertIs(first["spec_admitted"], False)
+            self.assertEqual(first["admission_disposition"], "NEW_WORK_ADMITTED")
             self.assertEqual(first["mango_slice_id"], "slice-canonical")
             self.assertEqual(first["truth_level"], "CANONICAL_UNVERIFIED")
             self.assertEqual(len(backend.calls), 1)
             self.assertEqual(backend.calls[0]["actor_id"], "trusted-actor")
             self.assertIsNone(binder.status("tenant-2", "mission-1"))
+
+    def test_real_mango_candidate_is_not_silently_admitted(self):
+        with TemporaryDirectory() as d:
+            store = SalesWorkspace(Path(d)/"db")
+            SalesMissionEngine(store).create("t", "m", "offer", "Research", "B2B")
+            candidate = {
+                "project": {"entity_id": "project-canonical"},
+                "family": {"entity_id": "family-canonical"},
+                "work_identity": {"entity_id": "work-canonical"},
+                "disposition": "EXISTING_WORK_CANDIDATE",
+                "requires_explicit_work_ref": True,
+            }
+            binder = MangoMissionBinding(store)
+            with self.assertRaisesRegex(ValueError, "not newly/explicitly"):
+                binder.admit("t", "m", actor_id="a",
+                    current_user_request="Find customers", authorized_workspace=d,
+                    host_authorized=True, backend=MangoHostFake(d, candidate))
+            self.assertEqual(binder.status("t", "m")["state"], "ADMISSION_UNCERTAIN")
+
+    def test_mango_cannot_claim_spec_without_separate_spec_admission(self):
+        with TemporaryDirectory() as d:
+            store = SalesWorkspace(Path(d)/"db")
+            SalesMissionEngine(store).create("t", "m", "offer", "Research", "B2B")
+            actual = MangoHostFake(d).enter_work()
+            actual["spec_admitted"] = True
+            binder = MangoMissionBinding(store)
+            with self.assertRaisesRegex(ValueError, "persistence boundary"):
+                binder.admit("t", "m", actor_id="a",
+                    current_user_request="Find customers", authorized_workspace=d,
+                    host_authorized=True, backend=MangoHostFake(d, actual))
+            self.assertEqual(binder.status("t", "m")["state"], "ADMISSION_UNCERTAIN")
 
     def test_host_authorization_is_mandatory_and_no_work_created(self):
         with TemporaryDirectory() as d:

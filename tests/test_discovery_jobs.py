@@ -119,12 +119,16 @@ class StubMango:
         return {
             "project": {"entity_id": "project-canonical"},
             "family": {"entity_id": "family-canonical"},
-            "spec": {"entity_id": "spec-canonical"},
+            "work_identity": {"entity_id": "work-canonical",
+                              "family_id": "family-canonical",
+                              "project_id": "project-canonical"},
+            "normative_baseline": {"entity_id": "baseline-canonical"},
+            "spec": None, "spec_admitted": False,
             "work": {"plan": {"entity_id": "plan-canonical"},
                      "slice": {"entity_id": "slice-canonical"}},
-            "authority": "USER_INTENT_RELAYED_BY_CLIENT",
-            "truth_level": "CANONICAL_UNVERIFIED",
-            "discovery_promoted": False,
+            "disposition": "NEW_WORK_ADMITTED",
+            "admission": {"identity_role": "DEDUP_HINT_ONLY"},
+            "persistence": {"identity": "CANONICAL", "working_state": "PROGRESSIVE"},
         }
 
 

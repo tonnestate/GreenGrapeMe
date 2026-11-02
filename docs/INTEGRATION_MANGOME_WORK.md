@@ -12,10 +12,10 @@ The actual MangoMe `mangome.mcp_server.enter_work` guarded entrypoint is reused 
 1. Explicit trusted host authorization **and** an existing GreenGrapeMe business mission.
 2. The physically attached MangoMe workspace matches the trusted tenant workspace.
 3. The business objective/ICP/offer/actor and user intent fingerprint match an existing binding (prevents silent remapping).
-4. MangoMe returns canonical project/family/spec/plan/slice IDs under `USER_INTENT_RELAYED_BY_CLIENT` / `CANONICAL_UNVERIFIED`. Anything else fails.
-5. Only canonical IDs and their lineage are saved as **references** in GreenGrapeMe; final work acceptance/verification remains MangoMe's responsibility.
+4. The actual MangoMe `enter_work` response supplies `project`, `family`, `work_identity`, `normative_baseline`, `work.plan`, `work.slice`, `disposition` and `persistence`. **`spec` is None and `spec_admitted` is False**; a Specification is neither silently created nor asserted. Accepted dispositions are explicit `NEW_WORK_ADMITTED` and `EXISTING_WORK_BOUND`. An `EXISTING_WORK_CANDIDATE` or ambiguous concurrent result blocks further action and needs host-mediated reconciliation.
+5. The integration verifies identity persistence `CANONICAL`, working-state `PROGRESSIVE`, admission fingerprint role `DEDUP_HINT_ONLY`, and the WorkIdentity's actual family/project relation. The local `authority` / `truth_level` fields are **GreenGrapeMe guard annotations**, not MangoMe-returned flags or independent evidence of approval. Only canonical identifiers and lineage are stored as references; MangoMe owns final work acceptance and verification.
 
-The currently checked MangoMe v0.3.22 implementation of `enter_work` resides at https://github.com/tonnestate/MangoMe/blob/main/src/mangome/mcp_server.py and delegates to `MangoMeService.enter_work` documented in `src/mangome/service.py`.
+The checked MangoMe `enter_work` implementation is in https://github.com/tonnestate/MangoMe/blob/main/src/mangome/mcp_server.py; it delegates to `WorkGovernedMangoMeService.enter_work` in `src/mangome/work_control.py`. GreenGrapeMe tests mirror the actual returned payload shape, including the absence of a Specification at admission time.
 
 ## Safety boundaries
 
@@ -49,3 +49,7 @@ This is **not** a public API endpoint or user-supplied SQL credential contract. 
 ## Release status
 
 Implemented integration code and offline contract tests; canonical release 0.3.0 remains **open** until the real MangoMe/PlumMe/StarFruitMe host chain, trust binding, independent verification and deployment controls have been tested.
+
+## Read-only contract preflight (02.11.2026)
+
+Use `python -m greengrapeme.host_preflight --job-id <authorized-source-job> --workspace <authorized-mango-workspace>` from the **trusted, already configured FruitStack host**. The existing job ID must be included in the trusted host environment `GG_ALLOWED_EXISTING_STARFRUIT_JOBS`. The check introspects the actual PlumMe UNI contract, lists BlackberryMe MCP tools, verifies MangoMe's `enter_work` callable and current workspace, and reads one already-authorized StarFruitMe job's status. It **does not** admit new work, run a model, dispatch a collector, or authorize customer outreach. Passing preflight only establishes host readiness for a separately authorized E2E trial, not an E2E result. Full instructions: `docs/HOST_PREFLIGHT.md`.

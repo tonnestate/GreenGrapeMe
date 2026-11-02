@@ -53,10 +53,14 @@ class CanonicalWorkBinding:
     mission_id: str
     mango_project_id: str
     mango_family_id: str
-    mango_spec_id: str
+    mango_work_id: str
+    mango_normative_baseline_id: str
     mango_plan_id: str
     mango_slice_id: str
     workspace: str
+    mango_spec_id: str | None = None
+    spec_admitted: bool = False
+    admission_disposition: str = "NEW_WORK_ADMITTED"
     authority: str = "USER_INTENT_RELAYED_BY_CLIENT"
     truth_level: str = "CANONICAL_UNVERIFIED"
 
@@ -172,20 +176,46 @@ class MangoMissionBinding:
         )
         if not isinstance(raw, dict) or raw.get("ok") is False:
             raise RuntimeError("MangoMe work admission refused or returned failure")
-        if (raw.get("authority") != "USER_INTENT_RELAYED_BY_CLIENT"
-                or raw.get("truth_level") != "CANONICAL_UNVERIFIED"
-                or raw.get("discovery_promoted") is not False):
-            raise ValueError("MangoMe authority/truth boundary mismatch")
-
+        # MangoMe's actual enter_work is a WORK IDENTITY admission, not
+        # normative Specification admission or an independent verification.
+        # Its response has no top-level "authority" / "truth_level" flags.
+        # Those two labels below are LOCAL boundary annotations, not claims
+        # that the donor independently authorized anything.
+        if raw.get("disposition") not in ("NEW_WORK_ADMITTED", "EXISTING_WORK_BOUND"):
+            raise ValueError("MangoMe work is not newly/explicitly admitted")
+        persistence = raw.get("persistence")
+        admission_info = raw.get("admission")
+        if (not isinstance(persistence, dict)
+                or persistence.get("identity") != "CANONICAL"
+                or persistence.get("working_state") != "PROGRESSIVE"
+                or not isinstance(admission_info, dict)
+                or admission_info.get("identity_role") != "DEDUP_HINT_ONLY"
+                or raw.get("spec") is not None
+                or raw.get("spec_admitted") is not False):
+            raise ValueError("MangoMe canonical work/persistence boundary mismatch")
+        project_id = _identifier(raw.get("project"), "project")
+        family_id = _identifier(raw.get("family"), "family")
+        work_id = _identifier(raw.get("work_identity"), "work identity")
+        baseline_id = _identifier(raw.get("normative_baseline"), "normative baseline")
+        work_identity = raw["work_identity"]
+        if (work_identity.get("family_id") != family_id
+                or work_identity.get("project_id") != project_id):
+            raise ValueError("MangoMe work identity lineage mismatch")
         work = raw.get("work")
+        plan_id = _identifier(work.get("plan") if isinstance(work, dict) else None, "plan")
+        slice_id = _identifier(work.get("slice") if isinstance(work, dict) else None, "slice")
         binding = CanonicalWorkBinding(
             tenant=tenant, mission_id=mission_id,
-            mango_project_id=_identifier(raw.get("project"), "project"),
-            mango_family_id=_identifier(raw.get("family"), "family"),
-            mango_spec_id=_identifier(raw.get("spec"), "spec"),
-            mango_plan_id=_identifier(work.get("plan") if isinstance(work, dict) else None, "plan"),
-            mango_slice_id=_identifier(work.get("slice") if isinstance(work, dict) else None, "slice"),
+            mango_project_id=project_id,
+            mango_family_id=family_id,
+            mango_work_id=work_id,
+            mango_normative_baseline_id=baseline_id,
+            mango_plan_id=plan_id,
+            mango_slice_id=slice_id,
             workspace=verified_workspace,
+            mango_spec_id=None,
+            spec_admitted=False,
+            admission_disposition=raw["disposition"],
         ).__dict__
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")

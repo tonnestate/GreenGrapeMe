@@ -74,12 +74,16 @@ class Admission:
         suffix=str(len(self.calls))
         return {"project":{"entity_id":"project-"+suffix},
                 "family":{"entity_id":"family-"+suffix},
-                "spec":{"entity_id":"spec-"+suffix},
+                "work_identity":{"entity_id":"work-"+suffix,
+                    "project_id":"project-"+suffix,
+                    "family_id":"family-"+suffix},
+                "normative_baseline":{"entity_id":"baseline-"+suffix},
+                "spec":None,"spec_admitted":False,
                 "work":{"plan":{"entity_id":"plan-"+suffix},
                         "slice":{"entity_id":"slice-"+suffix}},
-                "authority":"USER_INTENT_RELAYED_BY_CLIENT",
-                "truth_level":"CANONICAL_UNVERIFIED",
-                "discovery_promoted":False}
+                "disposition":"NEW_WORK_ADMITTED",
+                "admission":{"identity_role":"DEDUP_HINT_ONLY"},
+                "persistence":{"identity":"CANONICAL","working_state":"PROGRESSIVE"}}
 
 
 class Neuron:
