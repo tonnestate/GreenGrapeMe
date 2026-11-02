@@ -65,3 +65,12 @@ No claim of production readiness until G1–G5 have actual end-to-end tests, req
 ## P0 follow-up: donor-derived execution slice
 
 Implemented in feature branch: StarFruitMe/KIGOR JSONL import contracts, persistent tenant-scoped sales work, source revision review, generated evidence briefs, dated buying signal scoring and rankings, suppression-aware inbound reply prechecks, bounded deterministic autopilot triage and offline integration tests. Attribution/pinned donor source: docs/ADOPTION_OPENOUTBOUND.md. Actual MCP runtime, BlackberryMe legal identity verification, FruitStack agent dispatch, real customer contact and signed sales remain later gates, not accepted results. Public repo must retain no private donor code or client data.
+
+
+## P0.4-Slice: anlegbare und beobachtbare Discovery-Aufträge
+
+Die UI verwaltet nun persistente Discovery-Jobs statt ausschließlich importierter, fertiger Datensätze. Quelleffekt-Aufrufe sind explizit und begrenzt, getrennt vom HTTP-Handler, mit Write-ahead-Fence; nach der Quelle werden Geschäftskandidaten übernommen und MangoMe-/PlumMe-Ausführung nur in einem gesondert hostautorisierten Kontext fortgeführt.
+
+**Offline nachweisbar:** Eingabe-/Quellenlimits, idempotente Job-IDs, eigene Tenant-Scopes, API-Origin-/Token-Pflicht, neue Source-Jobs mit doppeltem Host-/User-Gate, Replaysperre bei unklaren Resultaten, Quellenkonfliktblockade, Sales-Work-Creation und gemockte MangoMe-/PlumMe-Kette. `tests/test_discovery_jobs.py`.
+
+**Noch offen:** reale externe Source-Nutzungsberechtigung und tatsächliche Daten auf dem FruitStack-Host, MangoMe Live-Mongo-/Recovery, BlackBerryMe-ID-Linkage, nachweisbare Provider-Gesamtstrecke, freie SaaS-Anmeldung, Kampagnen/Setter/Closer, bezahlter Abschluss. Die neue UI darf nicht öffentlich bereitgestellt werden.

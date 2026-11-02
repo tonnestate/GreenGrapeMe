@@ -247,6 +247,7 @@ class DiscoveryJobQueue:
 
     async def advance(self, tenant: str, request_id: str, source: DiscoverySource,
                       *, allow_external_source: bool = False,
+                      allowed_existing_jobs: frozenset[str] = frozenset(),
                       admission: TrustedWorkAdmission | None = None,
                       neuron: NeuronRunner | None = None) -> dict:
         """Bounded one-job progression; unknown side effects are NEVER retried."""
@@ -280,6 +281,12 @@ class DiscoveryJobQueue:
                                  "SOURCE_READY", external_job_id=job_id,
                                  result={"source_plan": created})
             else:
+                # Staging source IDs are NOT tenant authorization. Only the
+                # trusted host can bind an existing StarFruitMe job to this tenant.
+                if spec.job_id not in allowed_existing_jobs:
+                    self._transition(tenant, request_id, state, "BLOCKED_SOURCE_POLICY",
+                                     error_kind="EXISTING_SOURCE_JOB_NOT_AUTHORIZED")
+                    return self.get(tenant, request_id)
                 self._transition(tenant, request_id, state, "SOURCE_READY",
                                  external_job_id=spec.job_id)
             entry = self.get(tenant, request_id)
@@ -373,6 +380,7 @@ class DiscoveryJobQueue:
 
     async def run_next(self, tenant: str, source: DiscoverySource, *,
                        allow_external_source: bool = False,
+                       allowed_existing_jobs: frozenset[str] = frozenset(),
                        admission: TrustedWorkAdmission | None = None,
                        neuron: NeuronRunner | None = None) -> dict | None:
         tenant = self.store._required(tenant, "tenant")
@@ -390,4 +398,5 @@ class DiscoveryJobQueue:
         return await self.advance(
             tenant, row["request_id"], source,
             allow_external_source=allow_external_source,
+            allowed_existing_jobs=allowed_existing_jobs,
             admission=admission, neuron=neuron)

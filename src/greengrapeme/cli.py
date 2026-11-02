@@ -89,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
         queue = DiscoveryJobQueue(store)
         source = InstalledStarFruitSource(donor=environ.get("GG_SOURCE_DONOR", "obscura"))
         allowed = environ.get("GG_ALLOW_EXTERNAL_DISCOVERY") == "1" and environ.get("STARFRUITME_RIGHTS_CONFIRMED") == "1"
+        allowed_existing = frozenset(
+            x.strip() for x in environ.get("GG_ALLOWED_EXISTING_STARFRUIT_JOBS", "").split(",")
+            if x.strip())
         trusted = all(environ.get(k) for k in (
             "GG_HOST_ACTOR", "GG_HOST_WORKSPACE", "GG_HOST_CURRENT_USER_REQUEST"))
         if trusted and environ.get("GG_HOST_AUTHORIZATION_GRANTED") == "1":
@@ -105,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         while True:
             result = asyncio.run(queue.run_next(
                 a.tenant, source, allow_external_source=allowed,
+                allowed_existing_jobs=allowed_existing,
                 admission=admission, neuron=neuron))
             if result is not None:
                 print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)

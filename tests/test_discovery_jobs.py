@@ -137,6 +137,7 @@ class DiscoveryJobTests(unittest.TestCase):
         self.temp.cleanup()
 
     def runjob(self, tenant="A", rid="job-00000001", **kwargs):
+        kwargs.setdefault("allowed_existing_jobs", frozenset({JOB}))
         return asyncio.run(self.jobs.advance(tenant,rid,self.source,**kwargs))
 
     def test_idempotent_creation_and_tenant_isolation(self):
@@ -158,6 +159,13 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual(self.store.overview("A")["opportunities"],1)
         self.assertEqual(self.runjob()["state"],"AWAITING_CANONICAL_WORK")
         self.assertEqual(self.source.calls,["status","read"])
+
+    def test_existing_job_without_host_binding_is_blocked_before_any_source_read(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        r=asyncio.run(self.jobs.advance("A","job-00000001",self.source))
+        self.assertEqual(r["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(r["error_kind"],"EXISTING_SOURCE_JOB_NOT_AUTHORIZED")
+        self.assertEqual(self.source.calls,[])
 
     def test_full_path_with_explicit_trusted_mango_and_neuron(self):
         self.jobs.create("A","job-00000001",old_spec())
@@ -222,7 +230,8 @@ class DiscoveryJobTests(unittest.TestCase):
     def test_worker_only_picks_queued_scoped_jobs(self):
         self.jobs.create("A","job-00000001",old_spec())
         self.jobs.create("B","job-00000002",old_spec())
-        r=asyncio.run(self.jobs.run_next("A",self.source))
+        r=asyncio.run(self.jobs.run_next(
+            "A",self.source,allowed_existing_jobs=frozenset({JOB})))
         self.assertEqual(r["state"],"AWAITING_CANONICAL_WORK")
         self.assertIsNone(asyncio.run(self.jobs.run_next("A",self.source)))
         self.assertEqual(self.jobs.get("B","job-00000002")["state"],"QUEUED")

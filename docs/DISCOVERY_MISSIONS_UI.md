@@ -50,3 +50,10 @@ Die neue Offline-Suite `tests/test_discovery_jobs.py` prüft mit eindeutig simul
 Verbleibende Produkt-Gates: BlackBerryMe-Identitätsnachweis als zwingender Zwischenauftrag; Quelljobs für gespeicherte Suchen, Zeitpläne und Freshness-Monitore; unabhängige MangoMe-Reconciliation nach unklaren Effekten; SaaS-Login/RBAC, echte Kundenrechte, Discovery-Geo-UI, rechtskonforme Kampagnen-/Setter-/Closer-Effects, Funnel-Builder und verifizierte Umsätze. Cloudflare-Code-Mode bleibt ein Benchmark-Kandidat und ersetzt nicht FruitStack.
 
 Die Releaseplanung unter `docs/GESAMTKONZEPT_UND_RELEASEPLAN.md` bleibt verbindlich; diese Implementierung ist ein weiterer Release-0.3/0.4-Slice, **keine abgeschlossene Produktversion 1.0**.
+
+
+## Zusätzliche Sicherheitsgrenze: Tenant-gebundene Quelljob-Freigabe
+
+Auch ein **vorhandener** StarFruitMe-Job darf nicht allein durch Kenntnis seiner 24-stelligen ID gelesen werden. Der vom Benutzer erzeugte Discovery-Request wird nur verarbeitet, wenn sein Job in der hostseitigen Allowlist `GG_ALLOWED_EXISTING_STARFRUIT_JOBS` steht. Die Liste ist eine durch Komma getrennte Menge tatsächlich autorisierter IDs für **diesen einen Worker-/Tenant-Prozess**, z.B. `GG_ALLOWED_EXISTING_STARFRUIT_JOBS=0123456789abcdef01234567`. Ohne diese hostseitige Freigabe folgt `BLOCKED_SOURCE_POLICY / EXISTING_SOURCE_JOB_NOT_AUTHORIZED` **vor jeder Quelloperation**. Der Browser kann diese Liste nicht ändern.
+
+Ein öffentliches Mehrmandanten-SaaS muss statt dieser lokalen Prozess-Allowlist einen serverseitigen, vom Source-Eigentümer überprüften Actor-/Tenant-/Job-Grant benutzen. Die freigegebene Job-ID allein ist kein verteidigungsfähiges SaaS-Berechtigungskonzept.

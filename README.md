@@ -65,3 +65,10 @@ See `docs/INTEGRATION_BLACKBERRY_MCP.md` and `docs/INTEGRATION_MANGOME_WORK.md`.
 The feature branch now includes a **working local web application** for GreenGrapeMe's own Discovery and Sales Operations data: browser search/filter/pagination, sourced company dossiers, dated buying signals, suppression status, BlackberryMe review, work tasks, and FruitStack sales mission overview. It reads the **same tenant-scoped sales state** populated by StarFruitMe and `sales-run`; it does not duplicate the company catalog.
 
 Start with `GG_VIEWER_TOKEN` set to a random secret of at least 24 characters: `PYTHONPATH=src python -m greengrapeme.cli --tenant local-customer --db sales.sqlite serve --port 8765` and open `http://127.0.0.1:8765/`. **Local loopback preview only**: GET APIs require the token, all mutations are rejected; do not deploy this token-based prototype as a public SaaS. This is a read-only Discovery workspace, not full autonomous source-job control, not a marketing permission grant, and not a revenue-producing product. See `docs/DISCOVERY_PRODUCT.md`.
+
+
+## UI-gesteuerte Discovery-Aufträge (P0.4-Slice)
+
+Aus der lokalen Discovery-Oberfläche heraus lassen sich nun **bestehende StarFruitMe-Jobs** auswerten und **nach ausdrücklicher Host-Rechtefreigabe** begrenzte neue Discovery-Aufträge anlegen. Die Aufträge werden persistent mit Quelle, Angebot, ICP, Zustand und Quelleffekt-Fence gespeichert; ein separater `discover-worker` verarbeitet sie. Nach dem Account-Import erzeugt GreenGrapeMe einen Business-SalesMission-Auftrag und wartet auf die **tatsächliche MangoMe-WorkAdmission**. Erst ein vertrauenswürdiger Host kann über das bestehende PlumMe-UNI die drei internen Sales-Neurons ausführen. Externer Versand bleibt deaktiviert.
+
+Der Webserver sendet keine Aufträge an Drittprovider. Lokal startet man `serve` (UI) und separat `discover-worker`; ohne Hostkonfiguration wird **kein neuer externer Scraper gestartet**. Siehe `docs/DISCOVERY_MISSIONS_UI.md` für genaue Start-/Sicherheitsgrenzen. Release 1.0 und realer Host-End-to-End-Nachweis bleiben offen.

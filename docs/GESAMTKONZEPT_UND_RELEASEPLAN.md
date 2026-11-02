@@ -382,3 +382,15 @@ Keine automatische Mail/LinkedIn/Telefon-Kontaktaufnahme, kein live verifizierte
 - **Offene Kernlücke:** Das Web-Frontend kann einen bestehenden Quell-/Agentenprozess nur betrachten, noch keinen autorisierten Discovery-Job starten, überwachen oder validiert mit MangoMe/PlumMe vollständig ausführen. Ein SaaS-Kundensystem braucht echte Org-/Nutzerrechte, Betriebs-/Datenzugriffsgrenzen, TLS, Secrets, Recovery, Kontakterlaubnis und ein separates abgestimmtes Sales-Effect-Protokoll.
 
 Erfolgsmaßstab für den nächsten Product-Gate: Ein echter, legal zulässiger Discovery-Job wird aus der Oberfläche gestartet, ausgeführt, den zugehörigen Firmendatensätzen und Rollenprüfungen zugeordnet, und der Endanwender sieht einen nachvollziehbaren Abschluss-/Fehlerstatus – **ohne** doppelte Datenwahrheit oder fingierte Sales-Umsetzung.
+
+
+## 14. Implementierungsnachtrag – UI-gesteuerte Discovery-Missionen (02.11.2026)
+
+- `src/greengrapeme/discovery_jobs.py`: tenantgetrennter, persistenter Jobstatus einschließlich Idempotenz, Bbox-/NACE-/Budgetvalidierung und vor externem Quellaufruf gespeichertem Create-/Run-Fence. Vorhandener StarFruitMe-Job lesend oder erlaubter neuer StarFruitMe-Job mit hart begrenztem `run_discovery_job`.
+- `src/greengrapeme/webapp.py`: lokaler `POST /api/discovery-jobs` mit Auth-Token, Same-Origin, JSON-/Payload-Validierung und hostgebundenem Tenant; Statusabfragen lesend. Keine externe Wirkung im HTTP-Request.
+- `src/greengrapeme/web`: Discovery-Auftragsformular für Angebot, ICP, NACE und Geo-Suchgebiet, Warteschlange und laufende Zustandsanzeige.
+- `src/greengrapeme/cli.py`: separater, fortlaufender oder einmaliger Product-Worker; in autorisiertem Hostkontext kann er MangoMe-WorkAdmission und PlumMe-UNI-Ausführung nutzen.
+- `tests/test_discovery_jobs.py`: 12 zusätzliche Offline-Vertragstests (positive und negative Rechte-, Recovery-, Source-, Host-/Missions-, HTTP- und Tenant-Pfade).
+- **Nicht erledigt:** echter Installations-/Host-Live-Smoke über die vier FruitStack-Komponenten, obligatorische BlackberryMe-Rechtsträgerzuordnung, geplante Wiederholung/Suche/Änderungsmonitoring, SaaS-Authentifizierung, Effekt- und Revenue-Strecke. Kein produktiver Kundenkontakt, kein durchgängiges Closing.
+
+Verbindliches Gate für 0.4.0 bleibt **realer hostautorisierter Discovery-Lauf mit überprüfbaren Quellen**, nicht eine erfolgreiche Testdouble-Ausführung. Dokument: `docs/DISCOVERY_MISSIONS_UI.md`.
