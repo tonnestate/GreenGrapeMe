@@ -100,10 +100,33 @@ class MangoWorkBindingTests(unittest.TestCase):
                     "authorized_workspace": d, "host_authorized": True}
             with self.assertRaises(RuntimeError):
                 binder.admit("t", "m", backend=MangoHostFake(d, {"ok": False}), **opts)
-            self.assertIsNone(binder.status("t", "m"))
-            with self.assertRaises(ValueError):
+            uncertain = binder.status("t", "m")
+            self.assertEqual(uncertain["state"], "ADMISSION_UNCERTAIN")
+            self.assertTrue(uncertain["requires_canonical_reconciliation"])
+            # A second call cannot duplicate a possibly admitted canonical work.
+            with self.assertRaisesRegex(RuntimeError, "uncertain"):
                 binder.admit("t", "m", backend=MangoHostFake(d, {"authority": "WRONG"}), **opts)
-            self.assertIsNone(binder.status("t", "m"))
+            self.assertEqual(binder.status("t", "m")["state"], "ADMISSION_UNCERTAIN")
+
+    def test_canonical_admission_exception_is_fenced_before_retry(self):
+        class UncertainHost(MangoHostFake):
+            def enter_work(self, **kwargs):
+                self.calls.append(kwargs)
+                raise TimeoutError("canonical response lost")
+
+        with TemporaryDirectory() as d:
+            store = SalesWorkspace(Path(d)/"db")
+            SalesMissionEngine(store).create("t", "m", "offer", "Research", "B2B")
+            binder = MangoMissionBinding(store)
+            host = UncertainHost(d)
+            opts = {"actor_id": "a", "current_user_request": "Find customers",
+                    "authorized_workspace": d, "host_authorized": True, "backend": host}
+            with self.assertRaises(TimeoutError):
+                binder.admit("t", "m", **opts)
+            self.assertEqual(binder.status("t", "m")["state"], "ADMISSION_UNCERTAIN")
+            with self.assertRaisesRegex(RuntimeError, "uncertain"):
+                binder.admit("t", "m", **opts)
+            self.assertEqual(len(host.calls), 1)
 
     def test_mission_not_found_does_not_create_canonical_work(self):
         with TemporaryDirectory() as d:
