@@ -228,6 +228,27 @@ class BatchesTests(unittest.TestCase):
         self.assertEqual(len({
             acc["id"] for group in missions for acc in group["accounts"]}),101)
 
+    def test_1000_accounts_create_40_complete_nonoverlapping_batches(self):
+        self.source = ManySource(1000)
+        rid = "batch-job-1000-records"
+        self.queue.create("tenant-A", rid, DiscoverySpec(
+            mode="existing", job_id=JOB, offer_id="offer",
+            objective="Find B2B companies", icp="German B2B companies",
+            max_accounts=1000))
+        result = asyncio.run(self.queue.advance(
+            "tenant-A", rid, self.source,
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"], "BATCH_AWAITING_BLACKBERRY")
+        self.assertEqual(result["result"]["total_accounts"], 1000)
+        self.assertEqual(result["result"]["batch_count"], 40)
+        batch_data = DiscoveryBatches(self.store).list("tenant-A", rid)
+        self.assertEqual(len(batch_data), 40)
+        self.assertTrue(all(len(x["accounts"]) == 25 for x in batch_data))
+        self.assertEqual(len({
+            item["id"] for batch in batch_data for item in batch["accounts"]}), 1000)
+        self.assertEqual(len({
+            x["mission_id"] for x in batch_data}), 40)
+
     def test_revocation_stops_batch_before_new_research(self):
         self.advance()
         result=asyncio.run(self.queue.advance(
