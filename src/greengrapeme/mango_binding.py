@@ -23,7 +23,8 @@ class MangoHostBackend(Protocol):
                    slice_title: str, slice_objective: str,
                    acceptance_criteria: list[str],
                    required_evidence: list[str],
-                   expected_scope: list[str]) -> dict: ...
+                   expected_scope: list[str],
+                   work_ref: str | None = None) -> dict: ...
 
 
 class InstalledMangoHostBackend:
@@ -104,7 +105,8 @@ class MangoMissionBinding:
     def admit(self, tenant: str, mission_id: str, *,
               actor_id: str, current_user_request: str,
               authorized_workspace: str, host_authorized: bool = False,
-              backend: MangoHostBackend) -> dict:
+              backend: MangoHostBackend,
+              work_ref: str | None = None) -> dict:
         """Bind one already-created business mission to real MangoMe work.
 
         A caller-provided boolean is NOT an authority credential: the trusted
@@ -122,6 +124,9 @@ class MangoMissionBinding:
             raise ValueError("current user request too long")
         if not isinstance(authorized_workspace, str) or not authorized_workspace.strip():
             raise ValueError("explicit trusted tenant workspace required")
+        if work_ref is not None and (not isinstance(work_ref, str) or
+                                     not work_ref.strip() or len(work_ref) > 160):
+            raise ValueError("invalid explicit MangoMe work_ref")
         verified_workspace = str(Path(authorized_workspace).resolve())
         actual_workspace = str(Path(backend.attached_workspace()).resolve())
         if actual_workspace != verified_workspace:
@@ -135,7 +140,7 @@ class MangoMissionBinding:
             "tenant": tenant, "mission": mission_id, "actor": actor_id,
             "request": current_user_request, "workspace": verified_workspace,
             "objective": mission["objective"], "offer": mission["offer_id"],
-            "icp": mission["icp_json"]
+            "icp": mission["icp_json"], "work_ref": work_ref
         }, sort_keys=True).encode()).hexdigest()
         existing = self._get_bound_row(tenant, mission_id)
         if existing:
@@ -161,7 +166,7 @@ class MangoMissionBinding:
             self.store._audit(db, tenant, mission_id, "MANGO_ADMISSION_INTENT",
                               {"input_sha256": fingerprint})
 
-        raw = backend.enter_work(
+        arguments = dict(
             actor_id=actor_id, request_text=current_user_request,
             intent=f"GreenGrapeMe SalesMission {mission_id}",
             slice_title=f"GreenGrapeMe mission {mission_id}",
@@ -174,6 +179,9 @@ class MangoMissionBinding:
             required_evidence=["Existing sourced account IDs", "PlumMe execution receipts"],
             expected_scope=["GreenGrapeMe sales analysis", "No external customer contact"],
         )
+        if work_ref is not None:
+            arguments["work_ref"] = work_ref
+        raw = backend.enter_work(**arguments)
         if not isinstance(raw, dict) or raw.get("ok") is False:
             raise RuntimeError("MangoMe work admission refused or returned failure")
         # MangoMe's actual enter_work is a WORK IDENTITY admission, not
@@ -196,6 +204,12 @@ class MangoMissionBinding:
         project_id = _identifier(raw.get("project"), "project")
         family_id = _identifier(raw.get("family"), "family")
         work_id = _identifier(raw.get("work_identity"), "work identity")
+        if work_ref is not None and work_id != work_ref:
+            raise ValueError("MangoMe did not bind the explicitly selected canonical work")
+        if work_ref is None and raw.get("disposition") != "NEW_WORK_ADMITTED":
+            raise ValueError("new MangoMe work requires a new explicit admission")
+        if work_ref is not None and raw.get("disposition") != "EXISTING_WORK_BOUND":
+            raise ValueError("MangoMe failed to continue the explicit work_ref")
         baseline_id = _identifier(raw.get("normative_baseline"), "normative baseline")
         work_identity = raw["work_identity"]
         if (work_identity.get("family_id") != family_id
