@@ -9,6 +9,7 @@ from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
 from .live_discovery import read_from_installed_starfruit
 from .pipeline import run_sales_pipeline
+from .blackberry_bridge import research_with_installed_blackberry, BlackberryReviewStore
 from .sources import kigor_records, starfruit_records
 
 
@@ -48,6 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     full.add_argument("--max-accounts", type=int, default=100)
     full.add_argument("--max-steps", type=int, default=3)
     full.add_argument("--max-cost-usd", type=float, default=0.0)
+    bb = sub.add_parser("blackberry-review", help="Review existing account with real BlackberryMe MCP")
+    bb.add_argument("--opportunity-id", required=True)
+    bb.add_argument("--objective", required=True)
+    bb.add_argument("--role-title", action="append", default=[])
+    bb.add_argument("--linkedin-company", default="")
+    bb.add_argument("--website-url", default="")
+    bs = sub.add_parser("blackberry-status", help="Read the locally stored donor research result")
+    bs.add_argument("--opportunity-id", required=True)
     create = sub.add_parser("mission-create", help="Create a durable sales-domain mission")
     create.add_argument("--mission-id", required=True)
     create.add_argument("--offer-id", required=True)
@@ -90,6 +99,13 @@ def main(argv: list[str] | None = None) -> int:
             mission_id=a.mission_id, objective=a.objective, icp=a.icp,
             neuron=PlumMeSalesNeuron(max_cost_usd=a.max_cost_usd),
             max_accounts=a.max_accounts, max_steps=a.max_steps))
+    elif a.command == "blackberry-review":
+        result = asyncio.run(research_with_installed_blackberry(
+            store=store, tenant=a.tenant, opportunity_id=a.opportunity_id,
+            objective=a.objective, role_titles=tuple(a.role_title),
+            linkedin_company=a.linkedin_company, website_url=a.website_url))
+    elif a.command == "blackberry-status":
+        result = BlackberryReviewStore(store).get(a.tenant, a.opportunity_id)
     elif a.command == "mission-create":
         result = SalesMissionEngine(store).create(
             a.tenant, a.mission_id, a.offer_id, a.objective, a.icp)

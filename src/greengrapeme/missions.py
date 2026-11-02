@@ -163,6 +163,24 @@ class SalesMissionEngine:
                                      {"reference": e["reference"], "claim": e["claim"], "kind": e["kind"]}
                                      for e in source["evidence"]
                                  ]})
+            # An optional read-only BlackberryMe enrichment is business context,
+            # never verified legal linkage or permission to contact.
+            review_table = db.execute("""SELECT 1 FROM sqlite_master
+                WHERE type='table' AND name='sales_blackberry_reviews'""").fetchone()
+            if review_table:
+                for account in accounts:
+                    reviewed = db.execute("""SELECT review_json FROM sales_blackberry_reviews
+                        WHERE tenant=? AND opportunity_id=?""",
+                        (tenant, account["opportunity_id"])).fetchone()
+                    if reviewed:
+                        b = json.loads(reviewed["review_json"])
+                        account["blackberry_research"] = {
+                            "donor_status": b["donor_status"],
+                            "account_linkage": "UNVERIFIED",
+                            "contact_authority": "NONE",
+                            "role_reviews": b["role_reviews"],
+                            "source_urls": b["source_urls"]
+                        }
             if not accounts:
                 db.execute("""UPDATE sales_missions SET status='BLOCKED_NO_SOURCE',updated_at=?
                               WHERE tenant=? AND mission_id=?""",
