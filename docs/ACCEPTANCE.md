@@ -98,3 +98,8 @@ The StarFruitMe MCP read adapter must consume `total_matching`/offset pages (<=1
 ## G0 commercial pilot measurement – implemented local instrument, not a passing business case
 
 Pilot commercial terms and prospect-relevant events are tenant-scoped and persistent. Unverified reported payments remain `REPORTED`, count as 0 source-confirmed revenue, and cannot turn `pricing_validation` into success. Provider receipt reconciliation is host-only and requires a durable matching independent provider receipt; no real provider is yet connected. Local UI and GET APIs only read data. Customer realized payments, platform revenues and provider costs are separate measures; incremental attributable uplift and audited profitability stay `NOT_PROVEN` without additional data. Requires real paid pilots, verified external receipts and cost completeness before a go-to-market decision.
+
+
+## G1: report-only inbound sales flow – implemented, not autonomous outreach
+
+Pilot inbound intake, conditional operator transition, follow-up scheduling, meeting, delivery and signature claims are source/tenant scoped, durable, idempotent and never result in actual customer communication. Each successful sales milestone creates its existing PilotLedger REPORTED event transactionally. Unverified accounts or CRM/referral intake NEVER confer messaging consent. Case progression does not independently verify contracts or produce revenue. Tests must prove no auto-send and no confirmed payment as a side effect. Live CRM/consent/calendar/prospect-provider integration remains a release blocker.

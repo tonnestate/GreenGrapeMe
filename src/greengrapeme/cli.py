@@ -6,6 +6,7 @@ import asyncio
 import json
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
+from .pilot_sales_flow import PilotSalesFlow
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
 from .live_discovery import read_from_installed_starfruit
@@ -60,6 +61,25 @@ def main(argv: list[str] | None = None) -> int:
     pilot_event.add_argument("--occurred-at")
     pilot_report = sub.add_parser("pilot-report")
     pilot_report.add_argument("--pilot-id", required=True)
+    cases = sub.add_parser("pilot-cases", help="List reported inbound sales cases")
+    cases.add_argument("--pilot-id", required=True)
+    inbound = sub.add_parser("pilot-inbound", help="Record sourced inbound inquiry; no contact authority")
+    inbound.add_argument("--pilot-id", required=True)
+    inbound.add_argument("--case-id", required=True)
+    inbound.add_argument("--company", required=True)
+    inbound.add_argument("--channel", required=True, choices=(
+        "WEB_FORM","CRM_INBOUND","CUSTOMER_REFERRAL","EXISTING_CUSTOMER"))
+    inbound.add_argument("--evidence-ref", required=True)
+    inbound.add_argument("--reporter-ref", required=True)
+    step = sub.add_parser("pilot-step", help="Operator sales step, no outgoing effects")
+    step.add_argument("--pilot-id", required=True)
+    step.add_argument("--case-id", required=True)
+    step.add_argument("--step-id", required=True)
+    step.add_argument("--expected-state", required=True)
+    step.add_argument("--to-state", required=True)
+    step.add_argument("--evidence-ref", required=True)
+    step.add_argument("--reporter-ref", required=True)
+    step.add_argument("--followup-at", default="")
     reply = sub.add_parser("reply")
     reply.add_argument("--opportunity", required=True)
     reply.add_argument("--message-id", required=True)
@@ -171,6 +191,19 @@ def main(argv: list[str] | None = None) -> int:
         result = PilotLedger(store).summary(a.tenant, a.pilot_id)
     elif a.command == "pilots":
         result = PilotLedger(store).list(a.tenant)
+    elif a.command == "pilot-cases":
+        result = PilotSalesFlow(store).list(a.tenant,a.pilot_id)
+    elif a.command == "pilot-inbound":
+        result = PilotSalesFlow(store).open_inbound(
+            a.tenant,a.pilot_id,a.case_id,company_name=a.company,
+            channel=a.channel,evidence_ref=a.evidence_ref,
+            reporter_ref=a.reporter_ref)
+    elif a.command == "pilot-step":
+        result = PilotSalesFlow(store).step(
+            a.tenant,a.pilot_id,a.case_id,step_id=a.step_id,
+            expected_state=a.expected_state,to_state=a.to_state,
+            reporter_ref=a.reporter_ref,evidence_ref=a.evidence_ref,
+            followup_at=a.followup_at)
     elif a.command == "reply":
         result = {"category": store.ingest_reply(a.tenant, a.opportunity, a.message_id,
                                                   a.body, subject=a.subject)}

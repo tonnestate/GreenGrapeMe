@@ -73,6 +73,19 @@ async function pilots(){
   out.appendChild(tr);
  }
  if(!data.items.length){const tr=document.createElement("tr"),td=text(tr,"td","Noch keine bezahlten Pilotprojekte erfasst");td.colSpan=7;out.appendChild(tr);}
+ const cases=$("pilot-cases-list");cases.replaceChildren();
+ for(const pilot of data.items){
+  const response=await request("/api/pilot-cases",{pilot:pilot.pilot_id});
+  for(const c of response.items){
+   const tr=document.createElement("tr");
+   for(const value of [
+    pilot.label,c.company_name,c.reported_channel,c.state,
+    c.next_followup_at||"–",c.contact_authority
+   ])cell(tr,value);
+   cases.appendChild(tr);
+  }
+ }
+ if(!cases.childElementCount){const tr=document.createElement("tr"),td=text(tr,"td","Noch keine eingehenden Pilotfälle");td.colSpan=6;cases.appendChild(tr);}
 }
 $("login-form").addEventListener("submit",async e=>{e.preventDefault();secret=$("token").value;$("login-error").textContent="";try{await overview();await companies();$("token").value="";$("login").hidden=true;$("workspace").hidden=false;}catch(e){secret="";$("login-error").textContent=e.message;}});
 $("logout").addEventListener("click",()=>{secret="";$("workspace").hidden=true;$("login").hidden=false;$("details").hidden=true;});

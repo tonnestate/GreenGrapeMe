@@ -109,3 +109,8 @@ Drei bislang von Offline-Tests nicht erfasste Fehler sind behoben: Unvollständi
 ## Evidence-based paid pilot measurements (02.11.2026)
 
 Added `PilotLedger` in `src/greengrapeme/pilot_metrics.py`: tenant-isolated pilot commercial terms (not revenue), immutable reported pipeline/payment events, a read-only pilot scorecard, a local operator CLI, and an optional host-only independent receipt reconciliation protocol. **No provider connector is installed**, so reported amounts always remain unverified until real host reconciliation. A reported/platform payment is never treated as client incremental value or as audited profit. Local `/api/pilots` and `/api/pilot` plus an existing-style UI tab are read-only. Implementation and tests: `docs/MONETIZATION_PILOT_PROOF.md`.
+
+
+## Inbound-to-deal pilot sales workflow
+
+`src/greengrapeme/pilot_sales_flow.py` adds a tenant-isolated **operator-attested** inbound-to-contract funnel reusing `SalesWorkspace` accounts and `PilotLedger` non-financial events. Steps are transactionally written with reported (not verified) qualification/meeting/proposal/signature entries; optional due-date follow-ups **never send messages**. CLI `pilot-inbound`, `pilot-step`, `pilot-cases`; local browser only reads `/api/pilot-cases`. See `docs/PILOT_SALES_FLOW.md`.
