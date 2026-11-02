@@ -44,11 +44,14 @@ class StubSource:
         self.calls.append("run")
         if self.run_error:
             raise TimeoutError("source ran but receipt was lost")
-        return {"summary": {"job_id": job_id, "searches": max_searches}}
+        return {"summary": {"job_id": job_id,
+                            "job_state": "COMPLETED_NO_KNOWN_GAPS",
+                            "searches": max_searches}}
 
     async def status(self, job_id):
         self.calls.append("status")
-        return {"job_id": job_id, "source": "STARFRUITME_DISCOVERY_STAGING"}
+        return {"job_id": job_id, "job_state": "COMPLETED_NO_KNOWN_GAPS",
+                "source": "STARFRUITME_DISCOVERY_STAGING"}
 
     async def read(self, job_id, offer_id, limit):
         self.calls.append("read")
@@ -348,6 +351,50 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual(source.calls,["create","run"])
         asyncio.run(self.jobs.advance("A","job-00000001",source,allow_external_source=True))
         self.assertEqual(source.calls,["create","run"])
+
+
+    def test_existing_source_in_progress_does_not_create_missions(self):
+        class PartialSource(StubSource):
+            async def status(self, job_id):
+                self.calls.append("status")
+                return {"job_id": job_id, "job_state": "IN_PROGRESS"}
+        source=PartialSource()
+        self.jobs.create("A","job-00000001",old_spec())
+        result=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_COVERAGE")
+        self.assertEqual(result["result"]["source_job_state"],"IN_PROGRESS")
+        self.assertEqual(result["result"]["imported"],0)
+        self.assertEqual(source.calls,["status"])
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_new_source_with_search_gaps_is_not_reported_as_complete(self):
+        class GappedSource(StubSource):
+            async def run(self, job_id, *, max_searches):
+                self.calls.append("run")
+                return {"summary":{"job_id":job_id,"job_state":"COMPLETED_WITH_GAPS"}}
+        source=GappedSource()
+        self.jobs.create("A","job-00000001",new_spec())
+        result=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_COVERAGE")
+        self.assertEqual(result["result"]["source_job_state"],"COMPLETED_WITH_GAPS")
+        self.assertEqual(source.calls,["create","run"])
+        self.assertEqual(result["result"]["imported"],0)
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_unknown_source_status_does_not_make_complete_claim(self):
+        class UnknownSource(StubSource):
+            async def status(self, job_id):
+                self.calls.append("status")
+                return {"job_id":job_id}
+        source=UnknownSource()
+        self.jobs.create("A","job-00000001",old_spec())
+        result=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_COVERAGE")
+        self.assertEqual(result["result"]["source_job_state"],"UNKNOWN")
+        self.assertEqual(source.calls,["status"])
 
     def test_source_overflow_blocks_without_importing_partial_accounts(self):
         class OverflowSource(StubSource):

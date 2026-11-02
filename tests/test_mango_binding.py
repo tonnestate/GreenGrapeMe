@@ -18,7 +18,15 @@ class MangoHostFake:
 
     def enter_work(self, **kwargs):
         self.calls.append(kwargs)
-        return self.response if self.response is not None else {
+        if self.response is None and kwargs.get("work_ref") is not None:
+            value = self._default()
+            value["disposition"] = "EXISTING_WORK_BOUND"
+            return value
+        return self.response if self.response is not None else self._default()
+
+    @staticmethod
+    def _default():
+        return {
             "project": {"entity_id": "project-canonical"},
             "family": {"entity_id": "family-canonical"},
             "work_identity": {"entity_id": "work-canonical",
@@ -95,6 +103,36 @@ class MangoWorkBindingTests(unittest.TestCase):
                     current_user_request="Find customers", authorized_workspace=d,
                     host_authorized=True, backend=MangoHostFake(d, actual))
             self.assertEqual(binder.status("t", "m")["state"], "ADMISSION_UNCERTAIN")
+
+    def test_explicit_mango_work_ref_reused_for_next_sales_batch(self):
+        with TemporaryDirectory() as d:
+            store=SalesWorkspace(Path(d)/"db")
+            engine=SalesMissionEngine(store)
+            engine.create("t","batch-one","offer","Find","B2B")
+            engine.create("t","batch-two","offer","Find","B2B")
+            binder=MangoMissionBinding(store)
+            host=MangoHostFake(d)
+            args={"actor_id":"a","current_user_request":"Find customers",
+                  "authorized_workspace":d,"host_authorized":True,"backend":host}
+            first=binder.admit("t","batch-one",**args)
+            self.assertEqual(first["mango_work_id"],"work-canonical")
+            second=binder.admit("t","batch-two",work_ref=first["mango_work_id"],**args)
+            self.assertEqual(second["mango_work_id"],first["mango_work_id"])
+            self.assertEqual(second["admission_disposition"],"EXISTING_WORK_BOUND")
+            self.assertEqual(host.calls[1]["work_ref"],"work-canonical")
+
+    def test_work_ref_mismatch_is_not_silent_rebinding(self):
+        with TemporaryDirectory() as d:
+            store=SalesWorkspace(Path(d)/"db")
+            SalesMissionEngine(store).create("t","m","offer","Find","B2B")
+            binder=MangoMissionBinding(store)
+            host=MangoHostFake(d)
+            with self.assertRaisesRegex(ValueError,"explicitly selected canonical work"):
+                binder.admit("t","m",actor_id="a",
+                    current_user_request="Find customers",
+                    authorized_workspace=d,host_authorized=True,
+                    backend=host,work_ref="unrelated-work-id")
+            self.assertEqual(binder.status("t","m")["state"],"ADMISSION_UNCERTAIN")
 
     def test_host_authorization_is_mandatory_and_no_work_created(self):
         with TemporaryDirectory() as d:

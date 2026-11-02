@@ -94,6 +94,40 @@ class CohortIsolationTests(unittest.TestCase):
         self.assertEqual(result["status"],"BLOCKED_SOURCE_REVISION")
         self.assertEqual(neuron.contexts,[])
 
+    def test_opt_out_during_neuron_invalidates_result_before_commit(self):
+        self.engine.create("tenant", "job-A", "offer", "Find", "SMBs",
+                           account_ids=("alpha",))
+        store=self.store
+        class MidFlightOptOut(InspectNeuron):
+            async def execute(self, role, objective, context):
+                with store._db() as db:
+                    db.execute("INSERT INTO suppressions VALUES (?,?,?,?)",
+                               ("tenant","alpha","OPT_OUT",store._now()))
+                return await super().execute(role,objective,context)
+        neuron=MidFlightOptOut()
+        result=asyncio.run(self.engine.run("tenant","job-A",neuron))
+        self.assertEqual(result["status"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(result["steps"][0]["state"],"SOURCE_INVALIDATED")
+        self.assertEqual(self.engine.proposals("tenant","job-A"),[])
+        self.assertEqual(len(neuron.contexts),1)
+        self.assertEqual(asyncio.run(
+            self.engine.run("tenant","job-A",neuron))["status"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(len(neuron.contexts),1)
+
+    def test_source_changed_while_neuron_runs_never_persists_proposal(self):
+        self.engine.create("tenant", "job-A", "offer", "Find", "SMBs",
+                           account_ids=("alpha",))
+        store=self.store
+        class MidFlightRevision(InspectNeuron):
+            async def execute(self, role, objective, context):
+                with store._db() as db:
+                    db.execute("""UPDATE opportunities SET source_json='{}'
+                       WHERE tenant=? AND opportunity_id=?""",("tenant","alpha"))
+                return await super().execute(role,objective,context)
+        result=asyncio.run(self.engine.run("tenant","job-A",MidFlightRevision()))
+        self.assertEqual(result["status"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(self.engine.proposals("tenant","job-A"),[])
+
     def test_ambiguous_duplicate_and_wrong_offer_cohorts_rejected(self):
         with self.assertRaisesRegex(ValueError, "unique"):
             self.engine.create("tenant","bad","offer","Find","SMB",

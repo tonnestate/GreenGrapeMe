@@ -305,21 +305,51 @@ class SalesMissionEngine:
                                  (tenant, mission_id)).fetchone()
                 if not row or row["status"] != "RUNNING" or STAGES[row["stage_index"]] != role:
                     raise RuntimeError("mission state changed during neuron execution")
-                next_i = row["stage_index"] + 1
-                next_status = "REVIEW_READY" if next_i == len(STAGES) else "QUEUED"
-                db.execute("""UPDATE sales_mission_steps SET state='PROPOSED_UNVERIFIED',
-                              output_json=?,receipt_id=?,provider_status=?,cost_usd=?,
-                              updated_at=? WHERE tenant=? AND mission_id=? AND stage=?
-                              AND state='RUNNING'""",
-                           (_json(validated), proposed.receipt_id, proposed.provider_status,
-                            proposed.cost_usd, self.store._now(), tenant, mission_id, role))
-                db.execute("""UPDATE sales_missions SET status=?,stage_index=?,updated_at=?
-                              WHERE tenant=? AND mission_id=?""",
-                           (next_status, next_i, self.store._now(), tenant, mission_id))
-                self.store._audit(db, tenant, mission_id, "SALES_STAGE_PROPOSED",
-                                  {"role": role, "receipt_id": proposed.receipt_id,
-                                   "status": "NOT_VERIFIED", "recommendations":
-                                   len(validated["recommendations"])})
+                # Validate immutable source and suppression AGAIN after the
+                # neuron returns, in the same transaction as proposal commit.
+                # No stale recommendation may be accepted after an opt-out.
+                current_accounts = db.execute("""SELECT m.source_sha256,
+                          o.source_json,s.reason AS suppressed
+                    FROM sales_mission_accounts m
+                    LEFT JOIN opportunities o ON o.tenant=m.tenant
+                        AND o.opportunity_id=m.opportunity_id
+                    LEFT JOIN suppressions s ON s.tenant=m.tenant
+                        AND s.opportunity_id=m.opportunity_id
+                    WHERE m.tenant=? AND m.mission_id=?""",
+                    (tenant, mission_id)).fetchall()
+                stale = not current_accounts or any(
+                    item["source_json"] is None or item["suppressed"] is not None
+                    or hashlib.sha256(item["source_json"].encode("utf-8")).hexdigest()
+                        != item["source_sha256"]
+                    for item in current_accounts)
+                if stale:
+                    db.execute("""UPDATE sales_mission_steps SET state='SOURCE_INVALIDATED',
+                                 error_class='SOURCE_REVISED_DURING_NEURON',updated_at=?
+                                 WHERE tenant=? AND mission_id=? AND stage=? AND state='RUNNING'""",
+                               (self.store._now(), tenant, mission_id, role))
+                    db.execute("""UPDATE sales_missions SET
+                                 status='BLOCKED_SOURCE_REVISION',updated_at=?
+                                 WHERE tenant=? AND mission_id=? AND status='RUNNING'""",
+                               (self.store._now(), tenant, mission_id))
+                    self.store._audit(db, tenant, mission_id,
+                                      "SALES_STAGE_SOURCE_INVALIDATED",
+                                      {"role": role, "reason": "source_or_suppression_changed"})
+                else:
+                    next_i = row["stage_index"] + 1
+                    next_status = "REVIEW_READY" if next_i == len(STAGES) else "QUEUED"
+                    db.execute("""UPDATE sales_mission_steps SET state='PROPOSED_UNVERIFIED',
+                                  output_json=?,receipt_id=?,provider_status=?,cost_usd=?,
+                                  updated_at=? WHERE tenant=? AND mission_id=? AND stage=?
+                                  AND state='RUNNING'""",
+                               (_json(validated), proposed.receipt_id, proposed.provider_status,
+                                proposed.cost_usd, self.store._now(), tenant, mission_id, role))
+                    db.execute("""UPDATE sales_missions SET status=?,stage_index=?,updated_at=?
+                                  WHERE tenant=? AND mission_id=?""",
+                               (next_status, next_i, self.store._now(), tenant, mission_id))
+                    self.store._audit(db, tenant, mission_id, "SALES_STAGE_PROPOSED",
+                                      {"role": role, "receipt_id": proposed.receipt_id,
+                                       "status": "NOT_VERIFIED", "recommendations":
+                                       len(validated["recommendations"])})
         return self.status(tenant, mission_id)
 
     def proposals(self, tenant: str, mission_id: str) -> list[dict]:

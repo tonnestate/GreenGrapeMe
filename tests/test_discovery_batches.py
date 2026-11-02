@@ -26,7 +26,7 @@ class ManySource:
 
     async def status(self, job_id):
         self.calls.append("status")
-        return {"job_id": job_id}
+        return {"job_id": job_id, "job_state": "COMPLETED_NO_KNOWN_GAPS"}
 
     async def read(self, job_id, offer_id, limit):
         self.calls.append("read")
@@ -70,18 +70,24 @@ class Admission:
         return self.workspace
 
     def enter_work(self, **kwargs):
-        self.calls.append(kwargs["slice_title"])
+        self.calls.append(dict(kwargs))
         suffix=str(len(self.calls))
-        return {"project":{"entity_id":"project-"+suffix},
-                "family":{"entity_id":"family-"+suffix},
-                "work_identity":{"entity_id":"work-"+suffix,
-                    "project_id":"project-"+suffix,
-                    "family_id":"family-"+suffix},
+        prior=kwargs.get("work_ref")
+        if len(self.calls)>1 and prior is None:
+            return {"disposition":"EXISTING_WORK_CANDIDATE",
+                    "requires_explicit_work_ref":True}
+        if prior is not None and prior!="work-1":
+            raise AssertionError("batch was bound to unrelated Mango work")
+        return {"project":{"entity_id":"project-1"},
+                "family":{"entity_id":"family-1"},
+                "work_identity":{"entity_id":"work-1",
+                    "project_id":"project-1",
+                    "family_id":"family-1"},
                 "normative_baseline":{"entity_id":"baseline-"+suffix},
                 "spec":None,"spec_admitted":False,
                 "work":{"plan":{"entity_id":"plan-"+suffix},
                         "slice":{"entity_id":"slice-"+suffix}},
-                "disposition":"NEW_WORK_ADMITTED",
+                "disposition":"EXISTING_WORK_BOUND" if prior else "NEW_WORK_ADMITTED",
                 "admission":{"identity_role":"DEDUP_HINT_ONLY"},
                 "persistence":{"identity":"CANONICAL","working_state":"PROGRESSIVE"}}
 
@@ -151,6 +157,8 @@ class BatchesTests(unittest.TestCase):
         self.assertEqual(len(self.researcher.calls),26)
         self.assertEqual(len(set(self.researcher.calls)),26)
         self.assertEqual(len(self.host.calls),2)
+        self.assertNotIn("work_ref",self.host.calls[0])
+        self.assertEqual(self.host.calls[1]["work_ref"],"work-1")
         self.assertEqual(len(self.neuron.contexts),6)
         self.assertEqual(set(len(context) for _,context in self.neuron.contexts),{25,1})
         self.assertEqual(result["result"]["contact_authority"],"NONE")
