@@ -339,7 +339,7 @@ class DittofeedPomeloEffects:
                 or not hasattr(gateway, "store")):
             raise PermissionError("real PomeloMe gateway required")
         from pomelome.effects import EffectIntent
-        from pomelome.models import AuthorityEnvelope
+        from pomelome.models import AuthorityEnvelope, EffectClass
         from .dittofeed_provider import DittofeedTrackEffectAdapter
         if (not isinstance(authority, AuthorityEnvelope) or authority.is_expired()
                 or authority.constraints != {
@@ -350,9 +350,22 @@ class DittofeedPomeloEffects:
                     "purpose": _PURPOSE,
                 }):
             raise PermissionError("original event-bound PomeloMe authority required")
-        if not isinstance(getattr(gateway, "adapters", {}).get(_TOOL),
-                          DittofeedTrackEffectAdapter):
-            raise PermissionError("actual Dittofeed probe adapter required")
+        # PomeloMe's recovery path intentionally bypasses the initial
+        # authorize_effect branch. Recheck the CURRENT host policy explicitly
+        # before revealing any provider-side event evidence.
+        policy = getattr(gateway, "policy", None)
+        if policy is None or not callable(getattr(policy, "require_effect", None)):
+            raise PermissionError("current PomeloMe recovery policy required")
+        try:
+            policy.require_effect(
+                authority, _TOOL, EffectClass.IRREVERSIBLE, _CAPABILITIES)
+        except Exception:
+            raise PermissionError("PomeloMe recovery authorization denied") from None
+        adapter = getattr(gateway, "adapters", {}).get(_TOOL)
+        if (not isinstance(adapter, DittofeedTrackEffectAdapter) or
+                adapter.tenant != tenant or
+                adapter.workspace_id != attempt["workspace_id"]):
+            raise PermissionError("original tenant-bound Dittofeed probe adapter required")
         effect = gateway.store.get_effect(attempt["effect_id"])
         if (not self._intent_matches(attempt, effect)
                 or effect.get("state") not in ("DISPATCHED", "UNKNOWN", "PROBING")
