@@ -231,3 +231,48 @@ API preflight does not grant a write permission.
 Existing statuses are intentionally limited to local `PREPARED` and
 read-time invalidation; they do **not** pretend a real Dittofeed
 acknowledgement or durable PomeloMe execution has occurred.
+
+## PomeloMe irreversible effect handoff (2026-11-03)
+
+`DittofeedPomeloEffects` now provides a **host-only** effect bridge from the
+existing immutable `DittofeedOutbox` to the actual installed PomeloMe
+`EffectGateway` interface, modeled on the already-tested GreenGrapeMe reply
+gateway. No REST client, active campaign or automatic scheduler is introduced.
+
+The trusted host must supply:
+- A real installed PomeloMe `AuthorityEnvelope`, not expired, with **exact**
+  immutable constraints for tenant, pilot, event, Dittofeed workspace, message
+  ID, frozen payload SHA-256 and purpose `AUTHORIZED_LIFECYCLE_EVENT_SYNC`.
+- An independent lifecycle/legal-basis permission service issuing a durable
+  receipt for the same exact bound event and a future expiration. The host must
+  verify consent, destination isolation, legitimate purpose, and all applicable
+  marketing suppression state, including checks at the actual provider
+  boundary. No model-generated permission assertion can substitute for it.
+- An installed, registered PomeloMe adapter for
+  `greengrapeme.dittofeed.track_authorized` capable of validating the
+  immutable digest against the approved payload and the real destination.
+  The GreenGrapeMe GitHub project **does not ship** such an adapter or any
+  customer credentials.
+
+Once those prerequisites exist, the host can call
+`DittofeedPomeloEffects.dispatch(..., permission=..., gateway=...,
+authority=...)`; this is not exposed as a browser or CLI command.
+
+A local SQLite transaction fences the outbound intent **before** crossing
+the provider boundary. The effect is irreversible and its ID is stable.
+The code calls PomeloMe's existing gateway at most once, with a stable
+idempotency key, then demands a structurally matching **durable** PomeloMe
+`RECONCILED` effect and its provider observation before recording
+`PROVIDER_ACCEPTED` or `PROVIDER_FAILED`. An exception, crash or
+nonmatching observation leaves `DISPATCH_UNCERTAIN` or
+`DISPATCH_IN_FLIGHT`. Subsequent `dispatch` calls are always refused;
+`reconcile` only queries the existing PomeloMe effect store. A provider API
+acceptance record never proves customer delivery, active journey success,
+attribution, renewal or customer payments. Any ambiguous recovery must remain
+blocked until real provider evidence is available.
+
+The bridge **does not make GreenGrapeMe live**: no production Dittofeed,
+host adapter, consent verifier, verified platform access or E2E customer
+journey has run. Offline tests cover replay prevention, tenant separation,
+opt-out/source mutation, malformed authority/consent, timeout/restart
+reconciliation, forged durable receipts and explicit provider failure.
