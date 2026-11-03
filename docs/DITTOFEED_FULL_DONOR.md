@@ -333,3 +333,19 @@ not been configured or tested. Offline HTTP simulations only validate the
 request/receipt and fail-closed behavior. Before production, conduct a live
 single-tenant E2E verification and confirm permitted customer messaging and
 system resource costs.
+
+## Last-hop source-revision race fix (2026-11-03)
+
+The `DittofeedTrackEffectAdapter` repeats the local frozen-payload,
+tenant/workspace, event-status and opt-out checks **after** the independent
+destination permission callback and **before** constructing its outgoing
+HTTP request. This prevents a source or local opt-out mutation occurring
+*while the final policy runs* from being silently ignored. Regression
+tests deliberately mutate SQLite inside the callback and assert **zero
+HTTP requests**.
+
+There is still no transactional fence across the SQLite database, a remote
+policy service and Dittofeed itself. The trusted host must independently
+enforce revocation at the point of actual provider execution and handle
+races across different systems; this additional local check does not
+establish end-to-end consent correctness.

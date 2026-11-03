@@ -148,6 +148,18 @@ class DittofeedTrackEffectAdapter:
             "may_trigger_customer_messages": True,
         }) is not True:
             raise PermissionError("independent Dittofeed destination policy rejected")
+        # Policy checks may take time. Repeat the local source, tenant,
+        # suppression and frozen-payload check AFTER the external permission
+        # callback to catch a policy-induced revision/opt-out before POST.
+        # The host's destination adapter also remains responsible for checking
+        # external suppression/revocation at the actual provider boundary.
+        current = self.outbox.get(a["tenant"], a["pilot_id"], a["event_id"])
+        if (current["state"] != "PREPARED" or
+                current["workspace_id"] != self.workspace_id or
+                current["message_id"] != a["message_id"] or
+                current["payload_sha256"] != a["payload_sha256"] or
+                current["payload"] != payload):
+            raise PermissionError("Dittofeed source or suppression changed after permission review")
         # This adapter only accepts ONE track; no identify, group, broadcasts,
         # arbitrary account attributes, message templates or recipient email.
         body = json.dumps({"batch": [payload]},
