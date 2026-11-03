@@ -276,3 +276,60 @@ host adapter, consent verifier, verified platform access or E2E customer
 journey has run. Offline tests cover replay prevention, tenant separation,
 opt-out/source mutation, malformed authority/consent, timeout/restart
 reconciliation, forged durable receipts and explicit provider failure.
+
+## Native Dittofeed Community HTTP provider adapter (2026-11-03)
+
+The host-side `DittofeedTrackEffectAdapter` implements PomeloMe's existing
+`EffectAdapter.dispatch/probe` protocol. It does not create a second campaign
+sender. An authenticated FruitStack host must explicitly register it under
+`greengrapeme.dittofeed.track_authorized` inside the **real**
+`EffectGateway`; GreenGrapeMe's public CLI/browser do not provide a
+`dispatch` route.
+
+The connector matches Dittofeed upstream `publicAppsController.ts`:
+`POST /api/public/apps/batch`, with exactly one immutable `track` event and
+`Authorization: Basic base64(secretId:writeKeyValue)`. Dittofeed replies
+**204 No Content** when it accepts the batch API call. This API does not
+supply a per-event provider ID or an independently queryable delivery receipt.
+Accordingly the adapter emits a clearly labeled
+`dittofeed-http-204:<local-proof-hash>` observation reference, **never**
+claims that Dittofeed returned that ID or that any downstream email was
+sent/delivered. This reference records an HTTP acceptance observation
+within PomeloMe's durable effect receipt, not a vendor delivery receipt.
+
+The host must inject an independently authenticated tenant/workspace binding,
+the matching Write Key secret ID and value, and a `DestinationPermission`
+implementation that checks the **current** contact legal basis, all opt-outs,
+workspace isolation, live journey triggers and the exact frozen event at the
+destination. The adapter revalidates the stored account evidence, tenant,
+workspace, `messageId`, permission reference and SHA-256 immediately before
+posting. No identifying contact data, arbitrary properties, direct API
+arguments or unconfirmed opportunities may be supplied by the effect intent.
+The write key never appears in the effect intent, local database, audit
+records or output.
+
+Network transport is restricted to a numeric **loopback HTTP** origin with an
+explicit port, no default proxy and no redirects, to avoid Write Key leakage
+to arbitrary hosts. A trusted local service/tunnel must provide the actual
+Dittofeed Community endpoint. The host must separately control its local
+network and workspace Write Key. A remote destination URL is deliberately
+not accepted in this adapter.
+
+Response semantics:
+- **HTTP 204**: observed API acceptance only; PomeloMe stores the durable
+  effect receipt. Not delivery, conversion or revenue.
+- **Explicit HTTP 400/401/403/404/422**: rejected by the API; do not
+  attribute success.
+- **Timeout, connection failure, redirect, unexpected 2xx, 408/429/5xx**:
+  result is uncertain. The adapter raises rather than fabricating a negative
+  receipt. The outer PomeloMe fence refuses any automatic second POST.
+- **probe** is intentionally read-only and returns `None`, because Dittofeed
+  Community's public ingest API exposes no verified per-`messageId`
+  acceptance lookup. Calling `/batch` again is **not** reconciliation.
+
+The complete host contract now exists in source, but the *real host*
+permission provider, actual credentials and running Dittofeed instance have
+not been configured or tested. Offline HTTP simulations only validate the
+request/receipt and fail-closed behavior. Before production, conduct a live
+single-tenant E2E verification and confirm permitted customer messaging and
+system resource costs.
