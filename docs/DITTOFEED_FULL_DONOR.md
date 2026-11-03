@@ -389,3 +389,21 @@ envelope remains unconfirmed, even if its receipt reports success.
 The actual PomeloMe policy must still independently authorize those
 capabilities before execution. Regression tests cover downgraded
 durable effect records, not just live provider request admission.
+
+## HTTP 204 receipt binding (2026-11-03)
+
+A reconciled PomeloMe effect is **not** automatically trusted as Dittofeed
+API acceptance just because it reports `success=true` and a nonempty
+`external_ref`. The durable observation must carry the **exact**
+`dittofeed-http-204:` fingerprint derived from that one effect's immutable
+`effect_id` and payload SHA-256, using the same shared function as the
+real HTTP adapter. A forged, unrelated or arbitrary reference remains
+unconfirmed, even in a `RECONCILED` durable effect. Offline regression
+tests cover that mismatch and recovery after an ambiguous response.
+
+This fingerprint is generated **locally** when an HTTP 204 response is
+observed. Dittofeed does not issue it. It is evidence of our gateway's
+reported API acknowledgement, not provider delivery, subscriber contact,
+customer renewal or attribution. A malicious or untrusted provider adapter
+could still fabricate the fingerprint: the host's adapter registration and
+gateway storage must therefore remain trusted and access-controlled.
