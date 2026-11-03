@@ -139,3 +139,52 @@ no data egress, cross-tenant isolation, independent evidence gates,
 suppression and source mismatch, atomic capacity blocking,
 confidentiality of provider/customer information, client payments that
 cannot imply churn/ROI, and CLI-only preview.
+
+## Read-only Community Admin API integration (2026-11-03)
+
+A second integration slice is available in `DittofeedReadOnlyAdmin`, using
+Dittofeed's **real Community Admin API GET** endpoints. The upstream controllers
+require `workspaceId` on `GET /api/admin/segments/` and
+`GET /api/admin/journeys/`, and the Admin API requires a
+`Bearer` Admin API key (a **different secret from the public Write Key**).
+
+The local-only operator command is:
+
+```bash
+export GG_DITTOFEED_TENANT='customer-a'
+export GG_DITTOFEED_WORKSPACE_ID='<actual-authorized-workspace-id>'
+export GG_DITTOFEED_BASE_URL='http://127.0.0.1:3000'
+export GG_DITTOFEED_ADMIN_TOKEN='<actual-admin-api-key>'
+PYTHONPATH=src python -m greengrapeme.cli --db sales.sqlite \
+  --tenant customer-a dittofeed-status
+```
+
+This requires an **already running** local/self-hosted Dittofeed instance
+and tenant authorization established independently by the trusted operator.
+Environment variables are illustrative placeholders, **not** actual secrets.
+Never paste credentials in committed files, output or command arguments.
+This adapter only accepts numeric loopback origins, explicit local ports,
+no redirects and no ambient proxies; an SSH tunnel or authorized sidecar may
+provide the loopback origin. Requests have bounded time/response size.
+Unauthorized/missing configuration fails closed **before any network request**.
+
+The response exposes only `segments_count`, `journeys_count` and a bounded
+journey status count, plus the configured workspace ID and flags
+`data_sync_authorized=false`, `outbound_authorized=false`,
+`production_ready=false`. Full segment definitions, customer identities
+and bearer credentials are never returned. Unexpected workspace IDs or
+response contracts cause failures. Neither resource existence nor a RUNNING
+journey establishes authority to trigger it. This is a **readiness probe**,
+not a healthcheck proving provider delivery, workspace isolation or
+commercial deployment. Tests use an injected fake HTTP transport and do not
+claim any live Dittofeed instance was reached.
+
+Upstream documented references:
+- [Admin API authorization](https://github.com/dittofeed/dittofeed/blob/91277939a9afcee797ab2562025f6b02d823b00c/packages/docs/guide/accessing-admin-api.mdx)
+- [Journeys controller](https://github.com/dittofeed/dittofeed/blob/91277939a9afcee797ab2562025f6b02d823b00c/packages/api/src/controllers/journeysController.ts)
+- [Segments controller](https://github.com/dittofeed/dittofeed/blob/91277939a9afcee797ab2562025f6b02d823b00c/packages/api/src/controllers/segmentsController.ts)
+
+**Still absent:** a running verified Dittofeed instance, credential/key
+provisioning, upstream version/health verification, customer-data import,
+a legally permitted and PomeloMe-authorized event-emit effect, delivery
+receipt reconciliation, paid-customer trials and proven unit economics.
