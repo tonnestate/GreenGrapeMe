@@ -238,6 +238,62 @@ class PilotSalesFlow:
                                "external_effects":0,"verified":False})
         return self.get(tenant,pilot_id,case_id)
 
+    def due_followups(self, tenant: str, pilot_id: str, *, limit: int = 100,
+                      as_of: datetime | None = None) -> dict:
+        """Read-only operator queue. Due is never equivalent to permission to contact."""
+        pilot = PilotLedger(self.store).get(tenant, pilot_id)
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("invalid follow-up limit")
+        if as_of is None:
+            as_of = datetime.now(timezone.utc)
+        if not isinstance(as_of, datetime) or as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("as_of must be a timezone-aware datetime")
+        cutoff = as_of.astimezone(timezone.utc).isoformat()
+        with self.store._db() as db:
+            criteria = """FROM sales_pilot_cases c
+                LEFT JOIN opportunities o ON o.tenant=c.tenant
+                    AND o.opportunity_id=c.opportunity_id
+                LEFT JOIN suppressions s ON s.tenant=c.tenant
+                    AND s.opportunity_id=c.opportunity_id
+                WHERE c.tenant=? AND c.pilot_id=?
+                    AND c.state='FOLLOWUP_SCHEDULED'
+                    AND c.next_followup_at IS NOT NULL
+                    AND c.next_followup_at<=?"""
+            args = (tenant, pilot_id, cutoff)
+            total = db.execute("SELECT COUNT(*) " + criteria, args).fetchone()[0]
+            rows = db.execute("""SELECT c.case_id, c.opportunity_id,
+                    c.company_name, c.reported_channel, c.state, c.next_followup_at,
+                    c.source_sha256, o.source_json, o.offer_id,
+                    s.opportunity_id AS suppressed_id """
+                    + criteria + """ ORDER BY c.next_followup_at, c.case_id LIMIT ?""",
+                    (*args, limit)).fetchall()
+        items = []
+        for row in rows:
+            suppressed = row["suppressed_id"] is not None
+            source_current = (row["source_json"] is not None
+                and row["offer_id"] == pilot["offer_id"]
+                and hashlib.sha256(row["source_json"].encode()).hexdigest()
+                    == row["source_sha256"])
+            review_state = ("BLOCKED_SUPPRESSION" if suppressed else
+                            "BLOCKED_SOURCE_REVISION" if not source_current else
+                            "HUMAN_REVIEW_DUE")
+            items.append({
+                "pilot_id": pilot_id, "case_id": row["case_id"],
+                "opportunity_id": row["opportunity_id"],
+                "company_name": row["company_name"],
+                "reported_channel": row["reported_channel"],
+                "state": row["state"],
+                "next_followup_at": row["next_followup_at"],
+                "suppressed": suppressed, "source_current": source_current,
+                "review_state": review_state, "contact_authority": "NONE",
+                "external_actions_executed": 0,
+            })
+        return {
+            "items": items, "total": total, "count_shown": len(items),
+            "as_of": cutoff, "operator_review_only": True,
+            "outbound_authorized": False,
+        }
+
     def list(self, tenant: str, pilot_id: str, *, limit: int = 100) -> dict:
         PilotLedger(self.store).get(tenant,pilot_id)
         if type(limit) is not int or not 1<=limit<=1000:
