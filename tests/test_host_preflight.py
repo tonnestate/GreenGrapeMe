@@ -16,7 +16,7 @@ JOB = "a" * 24
 class Source:
     def __init__(self, response=None):
         self.calls = []
-        self.response = response if response is not None else {"job_id": JOB}
+        self.response = response if response is not None else {"job_id": JOB, "job_state": "COMPLETED_NO_KNOWN_GAPS"}
 
     async def status(self, job_id):
         self.calls.append(job_id)
@@ -44,6 +44,35 @@ class HostPreflightTests(unittest.TestCase):
             invalid, frozenset({invalid}), source))
         self.assertEqual(result["state"], "BLOCKED")
         self.assertEqual(source.calls, [JOB])
+
+    def test_incomplete_source_coverage_never_passes_host_preflight(self):
+        for state in (None, "IN_PROGRESS", "COMPLETED_WITH_GAPS",
+                      "FAILED", "UNKNOWN"):
+            with self.subTest(state=state):
+                status = {"job_id": JOB}
+                if state is not None:
+                    status["job_state"] = state
+                source = Source(status)
+                result = asyncio.run(preflight.check_starfruit_source(
+                    JOB, frozenset({JOB}), source))
+                self.assertEqual(result["state"], "BLOCKED")
+                self.assertEqual(source.calls, [JOB])
+
+    def test_incomplete_source_blocks_aggregate_ready_flag(self):
+        source = Source({"job_id": JOB, "job_state": "COMPLETED_WITH_GAPS"})
+        with patch.object(preflight, "check_mango_contract",
+                          return_value={"state": "PASS", "detail": "shape"}), \
+             patch.object(preflight, "check_plum_contract",
+                          return_value={"state": "PASS", "detail": "UNI"}), \
+             patch.object(preflight, "check_blackberry_contract",
+                          new_callable=AsyncMock,
+                          return_value={"state": "PASS", "detail": "tools"}):
+            result = asyncio.run(preflight.preflight(
+                job_id=JOB, authorized_jobs=frozenset({JOB}),
+                authorized_workspace="trusted", source=source))
+        self.assertFalse(result["ready_for_controlled_host_trial"])
+        self.assertEqual(result["checks"]["starfruitme"]["state"], "BLOCKED")
+        self.assertEqual(result["contact_effects"], 0)
 
     def test_attached_mango_workspace_and_signature_required(self):
         fake_pkg = ModuleType("mangome")
