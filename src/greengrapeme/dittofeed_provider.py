@@ -121,6 +121,22 @@ class DittofeedTrackEffectAdapter:
                 not isinstance(a["permission_ref"], str) or
                 not a["permission_ref"].startswith(("urn:", "https://"))):
             raise PermissionError("Dittofeed effect fingerprint or permission invalid")
+        # A direct adapter invocation must not bypass GreenGrapeMe's
+        # durable pre-dispatch fence, even if an EffectIntent is well-formed.
+        # PomeloMe itself still owns authority and capability enforcement.
+        with self.outbox.store._db() as db:
+            claim = db.execute("""
+                SELECT effect_id,state,workspace_id,message_id,payload_sha256,
+                       permission_ref FROM dittofeed_pomelo_effects
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (a["tenant"], a["pilot_id"], a["event_id"])).fetchone()
+        if (claim is None or claim["state"] != "DISPATCH_IN_FLIGHT" or
+                claim["effect_id"] != expected_id or
+                claim["workspace_id"] != self.workspace_id or
+                claim["message_id"] != a["message_id"] or
+                claim["payload_sha256"] != a["payload_sha256"] or
+                claim["permission_ref"] != a["permission_ref"]):
+            raise PermissionError("Dittofeed durable PomeloMe effect claim missing or mismatched")
         # Pomelo authority has already been checked by EffectGateway.
         event = self.outbox.get(a["tenant"], a["pilot_id"], a["event_id"])
         if event["state"] != "PREPARED":
@@ -161,6 +177,19 @@ class DittofeedTrackEffectAdapter:
                 current["payload_sha256"] != a["payload_sha256"] or
                 current["payload"] != payload):
             raise PermissionError("Dittofeed source or suppression changed after permission review")
+        # Re-read the fence following final policy; revocation, altered
+        # binding or completion during a slow callback must abort the POST.
+        with self.outbox.store._db() as db:
+            current_claim = db.execute("""
+                SELECT state,effect_id,workspace_id,message_id,payload_sha256,
+                       permission_ref FROM dittofeed_pomelo_effects
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (a["tenant"], a["pilot_id"], a["event_id"])).fetchone()
+        if (current_claim is None or
+                any(current_claim[k] != claim[k] for k in (
+                    "state", "effect_id", "workspace_id", "message_id",
+                    "payload_sha256", "permission_ref"))):
+            raise PermissionError("Dittofeed effect claim changed after permission review")
         # This adapter only accepts ONE track; no identify, group, broadcasts,
         # arbitrary account attributes, message templates or recipient email.
         body = json.dumps({"batch": [payload]},
