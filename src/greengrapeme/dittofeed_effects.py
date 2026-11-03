@@ -164,7 +164,8 @@ class DittofeedPomeloEffects:
             accepted_http_ref(attempt["effect_id"], attempt["payload_sha256"]),
             observed_admin_event_ref(attempt["effect_id"], attempt["payload_sha256"]),
         }
-        if successful is True and external_ref in valid_acceptance_refs:
+        if (successful is True and isinstance(external_ref, str)
+                and external_ref in valid_acceptance_refs):
             final = "PROVIDER_ACCEPTED"
         elif successful is False:
             final = "PROVIDER_FAILED"
