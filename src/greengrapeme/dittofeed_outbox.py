@@ -129,12 +129,19 @@ class DittofeedOutbox:
                 SELECT 1 FROM suppressions WHERE tenant=? AND opportunity_id=?
             """, (tenant, row["opportunity_id"])).fetchone() is not None
             source = db.execute("""
-                SELECT source_json FROM opportunities
+                SELECT source_json,offer_id FROM opportunities
                 WHERE tenant=? AND opportunity_id=?
             """, (tenant, row["opportunity_id"])).fetchone()
+            event = db.execute("""
+                SELECT state,opportunity_id FROM sales_pilot_events
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (tenant, pilot_id, event_id)).fetchone()
         source_current = bool(source and
+            source["offer_id"] == PilotLedger(self.store).get(tenant,pilot_id)["offer_id"] and
             hashlib.sha256(source["source_json"].encode()).hexdigest()
-                == row["source_sha256"])
+                == row["source_sha256"] and
+            event and event["state"] == "SOURCE_CONFIRMED" and
+            event["opportunity_id"] == row["opportunity_id"])
         return {
             "tenant": tenant, "pilot_id": pilot_id, "event_id": event_id,
             "workspace_id": row["workspace_id"],
