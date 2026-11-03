@@ -359,6 +359,62 @@ class RealPomeloIntegration(unittest.TestCase):
         self.assertEqual(self.gateway.store.count_receipts(), 0)
         self.assertEqual(len(self.transport.calls), 1)
 
+    def test_admin_recovery_requires_current_full_pomelo_authority(self):
+        self.transport.error = TimeoutError("Dittofeed POST response lost")
+        uncertain = self.execute()
+        self.assertEqual(uncertain["effect_state"], "DISPATCH_UNCERTAIN")
+        minimal = frozenset(_CAPABILITIES)
+        for capabilities in (
+            frozenset(),
+            minimal,
+            frozenset({*minimal, f"tool:{_TOOL}"}),
+        ):
+            with self.subTest(capabilities=sorted(capabilities)):
+                unauthorized = AuthorityEnvelope(
+                    authority_id="unprivileged-recovery",
+                    principal="unprivileged-operator",
+                    capabilities=capabilities,
+                    expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                    constraints=self.constraints)
+                with self.assertRaisesRegex(
+                        PermissionError, "recovery authorization denied"):
+                    self.effects.recover_by_admin_event(
+                        "tenant-01", "pilot-0001", "event-001",
+                        gateway=self.gateway, authority=unauthorized)
+        self.assertEqual(self.gateway.store.get_effect(
+            uncertain["effect_id"])["state"], "DISPATCHED")
+        self.assertEqual(self.gateway.store.get_effect(
+            uncertain["effect_id"])["dispatch_count"], 1)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_admin_recovery_rejects_wrong_tenant_or_workspace_adapter(self):
+        self.transport.error = TimeoutError("Dittofeed POST response lost")
+        uncertain = self.execute()
+        for tenant, workspace in (
+            ("different-tenant", "workspace-1234"),
+            ("tenant-01", "workspace-other"),
+        ):
+            with self.subTest(tenant=tenant, workspace=workspace):
+                wrong = DittofeedTrackEffectAdapter(
+                    self.store, tenant=tenant, authorized_tenant=tenant,
+                    workspace_id=workspace,
+                    base_url="http://127.0.0.1:3210",
+                    write_key_secret_id="123e4567-e89b-42d3-a456-426614174000",
+                    write_key_value="placeholder-integration-secret-001",
+                    final_permission=FinalHopApproval(),
+                    transport=self.transport)
+                self.gateway.adapters[_TOOL] = wrong
+                with self.assertRaisesRegex(
+                        PermissionError, "tenant-bound"):
+                    self.effects.recover_by_admin_event(
+                        "tenant-01", "pilot-0001", "event-001",
+                        gateway=self.gateway, authority=self.authority)
+        self.assertEqual(self.gateway.store.get_effect(
+            uncertain["effect_id"])["state"], "DISPATCHED")
+        self.assertEqual(self.gateway.store.get_effect(
+            uncertain["effect_id"])["dispatch_count"], 1)
+        self.assertEqual(len(self.transport.calls), 1)
+
     def test_real_gateway_ambiguous_http_never_replays(self):
         self.transport.error = TimeoutError("response lost after POST")
         result = self.execute()

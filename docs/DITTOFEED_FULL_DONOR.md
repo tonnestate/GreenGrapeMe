@@ -564,3 +564,25 @@ but *before* network delivery cannot be prevented solely by this local
 fence. The trusted host must enforce consent/revocation and journey
 eligibility at the provider boundary, including external data sources.
 A consumed send fence is deliberately not reset by automatic repair.
+
+## P1 read-only recovery authorization repair (2026-11-03)
+
+The actual PomeloMe `EffectGateway.execute` intentionally routes an
+existing `DISPATCHED`/unknown effect to its **recovery** branch without
+re-running `policy.require_effect`. GreenGrapeMe's earlier
+`recover_by_admin_event` only verified that a supplied
+`AuthorityEnvelope` was not expired and had matching event constraints.
+An envelope with no `dittofeed:track`, `purpose:lifecycle-event-sync`,
+`tool:greengrapeme.dittofeed.track_authorized` or
+`effect:irreversible` capabilities could therefore invoke the
+privileged Dittofeed Admin API lookup.
+
+The recovery method now explicitly re-evaluates the **current** registered
+PomeloMe gateway policy and all required capabilities before it accesses
+the durable effect or the Admin API. It additionally demands that the
+registered real `DittofeedTrackEffectAdapter` is bound to the exact
+tenant and workspace of the original irreversible effect; merely being
+an instance of the right adapter class is insufficient. Any missing or
+denied policy, weak authority, swapped tenant or workspace fails closed
+without a GET or POST. Real PomeloMe integration tests cover missing
+capabilities and wrong adapter bindings.
