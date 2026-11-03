@@ -209,6 +209,78 @@ class DittofeedTrackEffectAdapter:
                     "state", "effect_id", "workspace_id", "message_id",
                     "payload_sha256", "permission_ref"))):
             raise PermissionError("Dittofeed effect claim changed after permission review")
+        # A checked-but-not-consumed effect claim is insufficient. Parallel
+        # gateway/adapter calls could otherwise POST the same event twice.
+        # Begin the single-use provider attempt under a SQLite write lock,
+        # atomically recheck every mutable local source/suppression record,
+        # and COMMIT the claim before crossing the network boundary.
+        # On crash, timeout, HTTP 4xx or unknown response it stays consumed;
+        # no adapter call may re-send this event.
+        from .dittofeed_lifecycle import _EVENT_NAMES
+        with self.outbox.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            locked_claim = db.execute("""
+                SELECT effect_id,state,workspace_id,message_id,payload_sha256,
+                       permission_ref FROM dittofeed_pomelo_effects
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (a["tenant"], a["pilot_id"], a["event_id"])).fetchone()
+            if (locked_claim is None or
+                    any(locked_claim[key] != claim[key] for key in (
+                        "state", "effect_id", "workspace_id", "message_id",
+                        "payload_sha256", "permission_ref"))):
+                raise PermissionError("Dittofeed effect changed before final network fence")
+            frozen = db.execute("""
+                SELECT * FROM dittofeed_sync_outbox
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (a["tenant"], a["pilot_id"], a["event_id"])).fetchone()
+            source = db.execute("""
+                SELECT source_json,offer_id FROM opportunities
+                WHERE tenant=? AND opportunity_id=?
+            """, (a["tenant"], frozen["opportunity_id"])).fetchone() if frozen else None
+            pilot = db.execute("""
+                SELECT offer_id FROM sales_pilots
+                WHERE tenant=? AND pilot_id=?
+            """, (a["tenant"], a["pilot_id"])).fetchone()
+            event_row = db.execute("""
+                SELECT state,opportunity_id,event_kind FROM sales_pilot_events
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (a["tenant"], a["pilot_id"], a["event_id"])).fetchone()
+            blocked = db.execute("""
+                SELECT 1 FROM suppressions
+                WHERE tenant=? AND opportunity_id=?
+            """, (a["tenant"], frozen["opportunity_id"])).fetchone() if frozen else None
+            if (frozen is None or source is None or pilot is None or
+                    event_row is None or blocked is not None or
+                    event_row["state"] != "SOURCE_CONFIRMED" or
+                    event_row["opportunity_id"] != frozen["opportunity_id"] or
+                    _EVENT_NAMES.get(event_row["event_kind"]) != payload["event"] or
+                    source["offer_id"] != pilot["offer_id"] or
+                    not isinstance(source["source_json"], str) or
+                    hashlib.sha256(source["source_json"].encode()).hexdigest()
+                        != frozen["source_sha256"] or
+                    frozen["workspace_id"] != self.workspace_id or
+                    frozen["message_id"] != a["message_id"] or
+                    frozen["payload_sha256"] != a["payload_sha256"] or
+                    frozen["payload_json"] != encoded.decode()):
+                raise PermissionError("Dittofeed mutable source changed before provider send")
+            if db.execute("""
+                SELECT 1 FROM dittofeed_provider_attempts
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (a["tenant"], a["pilot_id"], a["event_id"])).fetchone():
+                raise PermissionError("Dittofeed irreversible provider attempt already consumed")
+            db.execute("""
+                INSERT INTO dittofeed_provider_attempts
+                  (tenant,pilot_id,event_id,effect_id,workspace_id,message_id,
+                   payload_sha256,started_at)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (a["tenant"], a["pilot_id"], a["event_id"], expected_id,
+                  self.workspace_id, a["message_id"], a["payload_sha256"],
+                  self.outbox.store._now()))
+            self.outbox.store._audit(
+                db, a["tenant"], a["event_id"], "DITTOFEED_PROVIDER_ATTEMPT_FENCED",
+                {"effect_id": expected_id, "workspace_id": self.workspace_id,
+                 "payload_sha256": a["payload_sha256"],
+                 "one_http_attempt_only": True})
         # This adapter only accepts ONE track; no identify, group, broadcasts,
         # arbitrary account attributes, message templates or recipient email.
         body = json.dumps({"batch": [payload]},

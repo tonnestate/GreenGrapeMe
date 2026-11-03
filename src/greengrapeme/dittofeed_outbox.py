@@ -133,21 +133,39 @@ class DittofeedOutbox:
                 WHERE tenant=? AND opportunity_id=?
             """, (tenant, row["opportunity_id"])).fetchone()
             event = db.execute("""
-                SELECT state,opportunity_id FROM sales_pilot_events
+                SELECT state,opportunity_id,event_kind FROM sales_pilot_events
                 WHERE tenant=? AND pilot_id=? AND event_id=?
             """, (tenant, pilot_id, event_id)).fetchone()
-        source_current = bool(source and
-            source["offer_id"] == PilotLedger(self.store).get(tenant,pilot_id)["offer_id"] and
+        # Persisted rows can be revised, missing or corrupt. Treat all these
+        # states as blocked rather than crashing or approving a stale event.
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, ValueError):
+            payload = None
+        payload_current = (
+            isinstance(payload, dict) and
+            isinstance(row["payload_json"], str) and
+            hashlib.sha256(row["payload_json"].encode()).hexdigest()
+                == row["payload_sha256"] and
+            payload.get("messageId") == row["message_id"] and
+            payload.get("type") == "track")
+        source_current = bool(
+            payload_current and source and event and
+            isinstance(source["source_json"], str) and
+            bool(source["source_json"]) and
+            source["offer_id"] == PilotLedger(self.store).get(
+                tenant, pilot_id)["offer_id"] and
             hashlib.sha256(source["source_json"].encode()).hexdigest()
                 == row["source_sha256"] and
-            event and event["state"] == "SOURCE_CONFIRMED" and
-            event["opportunity_id"] == row["opportunity_id"])
+            event["state"] == "SOURCE_CONFIRMED" and
+            event["opportunity_id"] == row["opportunity_id"] and
+            _EVENT_NAMES.get(event["event_kind"]) == payload["event"])
         return {
             "tenant": tenant, "pilot_id": pilot_id, "event_id": event_id,
             "workspace_id": row["workspace_id"],
             "message_id": row["message_id"],
             "payload_sha256": row["payload_sha256"],
-            "payload": json.loads(row["payload_json"]),
+            "payload": payload,
             "state": "BLOCKED_SUPPRESSION" if blocked else
                      "BLOCKED_SOURCE_REVISION" if not source_current else
                      "PREPARED",

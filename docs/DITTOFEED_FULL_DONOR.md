@@ -530,3 +530,37 @@ trusted host-side, not in the outbox, audit, browser or Pomelo intent.
 CI covers actual PomeloMe with localhost Admin API wire traffic for a
 matching event, missing event and mismatched user event. None of these
 tests claim that a real Dittofeed deployment was reached.
+
+## P0 duplicate-send and source-integrity audit fix (2026-11-03)
+
+A detailed review identified a **separate concurrency risk in the actual
+provider adapter**. The initial `dittofeed_pomelo_effects` intent claim
+prevents repeated calls to the GreenGrapeMe `dispatch` method, but does
+not by itself prevent two concurrent calls **directly to the registered
+Dittofeed adapter** (or a misconfigured host) from passing the same
+`DISPATCH_IN_FLIGHT` read-check and transmitting the same event twice.
+
+The HTTP adapter now takes its own **single-use, durable SQLite send
+claim** in `dittofeed_provider_attempts`, uniquely keyed by
+`(tenant,pilot_id,event_id)` and `(tenant,effect_id)`. This is claimed
+with `BEGIN IMMEDIATE` **before** crossing the HTTP network boundary.
+Under that same write transaction, source evidence, confirmed event type,
+offer binding, suppression, frozen payload/message/workspace fingerprint
+and the original Pomelo effect claim are revalidated. A concurrent
+adapter call fails admission. A restart cannot clear this fence. Even
+an ambiguous timeout or explicit HTTP 4xx does **not** grant permission
+to re-post, since it is unsafe to infer a truly unobserved side effect.
+
+`DittofeedOutbox.get` also blocks silently revised event kinds and
+malformed or non-text persisted source/payload rows. They no longer
+remain `PREPARED` or crash while evaluating data integrity.
+The tests cover concurrent adapter invocations (one HTTP attempt),
+repeat calls after 204, timeout followed by restart, and source-event /
+persistence corruption.
+
+**Remaining limitation:** SQLite and the Dittofeed server are not in
+one transaction. An opt-out arriving *after* the final local transaction
+but *before* network delivery cannot be prevented solely by this local
+fence. The trusted host must enforce consent/revocation and journey
+eligibility at the provider boundary, including external data sources.
+A consumed send fence is deliberately not reset by automatic repair.
