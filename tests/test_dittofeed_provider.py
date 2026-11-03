@@ -142,7 +142,7 @@ class ProviderTests(unittest.TestCase):
             "tenant":"tenant-01","authorized_tenant":"tenant-01",
             "workspace_id":"workspace-1234",
             "base_url":"http://127.0.0.1:3000",
-            "write_key_secret_id":"secret-1234",
+            "write_key_secret_id":"123e4567-e89b-42d3-a456-426614174000",
             "write_key_value":"my-private-write-key-value",
             "final_permission":policy if policy is not None else Policy(),
             "transport":transport if transport is not None else Transport(),
@@ -202,7 +202,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(timeout,5)
         self.assertEqual(request.get_header("Content-type"),"application/json")
         self.assertEqual(request.get_header("Authorization"),
-            "Basic "+b64encode(b"secret-1234:my-private-write-key-value").decode())
+            "Basic "+b64encode(b"123e4567-e89b-42d3-a456-426614174000:my-private-write-key-value").decode())
         body=json.loads(request.data)
         self.assertEqual(body,{"batch":[self.item["payload"]]})
         self.assertEqual(len(body["batch"]),1)
@@ -336,6 +336,10 @@ class ProviderTests(unittest.TestCase):
         for url in invalid:
             with self.subTest(url=url),self.assertRaises(ValueError):
                 self.adapter(base_url=url)
+        for secret_id in ("", "not-a-uuid", "123e4567e89b42d3a456426614174000",
+                          "123e4567-e89b-42d3-a456-426614174000:injected"):
+            with self.subTest(secret_id=secret_id), self.assertRaises(ValueError):
+                self.adapter(write_key_secret_id=secret_id)
         for key in ("","unsafe\nvalue","shrt"):
             with self.subTest(key=key),self.assertRaises(ValueError):
                 self.adapter(write_key_value=key)

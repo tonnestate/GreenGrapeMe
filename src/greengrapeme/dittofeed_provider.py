@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPHandler, HTTPRedirectHandler
 from typing import Any, Protocol
+from uuid import UUID
 
 from .dittofeed_effects import _TOOL, _PURPOSE, _CAPABILITIES, accepted_http_ref
 from .dittofeed_outbox import DittofeedOutbox
@@ -74,10 +75,16 @@ class DittofeedTrackEffectAdapter:
         from .dittofeed_outbox import _WS
         if not isinstance(workspace_id, str) or not _WS.fullmatch(workspace_id):
             raise ValueError("invalid Dittofeed workspace")
-        if (not isinstance(write_key_secret_id, str) or
-                not 8 <= len(write_key_secret_id) <= 256 or
-                any(ord(c) < 33 or ord(c) > 126 or c == ":" for c in write_key_secret_id)):
-            raise ValueError("invalid Dittofeed Write Key secret ID")
+        # Upstream validateWriteKey() checks uuid.validate(secretKeyId)
+        # before looking up a secret. Reject malformed IDs at configuration.
+        if not isinstance(write_key_secret_id, str):
+            raise ValueError("Dittofeed Write Key secret ID must be a UUID")
+        try:
+            parsed_secret_id = UUID(write_key_secret_id)
+        except ValueError:
+            raise ValueError("Dittofeed Write Key secret ID must be a UUID") from None
+        if str(parsed_secret_id) != write_key_secret_id.lower():
+            raise ValueError("Dittofeed Write Key secret ID must be canonical UUID")
         if (not isinstance(write_key_value, str) or
                 not 16 <= len(write_key_value) <= 1024 or
                 any(ord(c) < 33 or ord(c) > 126 for c in write_key_value)):

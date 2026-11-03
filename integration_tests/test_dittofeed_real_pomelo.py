@@ -108,7 +108,7 @@ class RealPomeloIntegration(unittest.TestCase):
         adapter = DittofeedTrackEffectAdapter(
             self.store, tenant="tenant-01", authorized_tenant="tenant-01",
             workspace_id="workspace-1234", base_url="http://127.0.0.1:3210",
-            write_key_secret_id="integration-key-001",
+            write_key_secret_id="123e4567-e89b-42d3-a456-426614174000",
             write_key_value="placeholder-integration-secret-001",
             final_permission=FinalHopApproval(), transport=self.transport)
         self.gateway = EffectGateway(
@@ -186,7 +186,7 @@ class RealPomeloIntegration(unittest.TestCase):
             self.store, tenant="tenant-01", authorized_tenant="tenant-01",
             workspace_id="workspace-1234",
             base_url=f"http://127.0.0.1:{server.server_port}",
-            write_key_secret_id="integration-key-001",
+            write_key_secret_id="123e4567-e89b-42d3-a456-426614174000",
             write_key_value="placeholder-integration-secret-001",
             final_permission=FinalHopApproval())
         self.gateway = EffectGateway(
@@ -206,7 +206,7 @@ class RealPomeloIntegration(unittest.TestCase):
             self.assertEqual(
                 req["headers"]["Authorization"],
                 "Basic " + b64encode(
-                    b"integration-key-001:placeholder-integration-secret-001"
+                    b"123e4567-e89b-42d3-a456-426614174000:placeholder-integration-secret-001"
                 ).decode())
             self.assertEqual(self.gateway.store.count_receipts(), 1)
             self.assertEqual(self.gateway.store.get_effect(
