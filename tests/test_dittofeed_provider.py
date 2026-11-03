@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 from types import ModuleType
 from urllib.error import HTTPError, URLError
 from unittest.mock import patch
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 import hashlib
 import json
 import sys
@@ -149,6 +151,56 @@ class ProviderTests(unittest.TestCase):
         }
         args.update(overrides)
         return DittofeedTrackEffectAdapter(self.store,**args)
+
+    def _reset_test_wire_attempt(self):
+        # Each error-code subcase represents a new isolated wire attempt;
+        # production never deletes these one-time provider fences.
+        with self.store._db() as db:
+            db.execute("DELETE FROM dittofeed_provider_attempts WHERE tenant=?",
+                       ("tenant-01",))
+
+    def test_second_direct_provider_invocation_cannot_resend(self):
+        wire=Transport()
+        self.adapter(transport=wire).dispatch(self.intent)
+        self.assertEqual(len(wire.calls), 1)
+        restored=self.adapter(transport=wire)
+        with self.assertRaisesRegex(PermissionError, "already consumed"):
+            restored.dispatch(self.intent)
+        self.assertEqual(len(wire.calls), 1)
+        with self.store._db() as db:
+            row=db.execute("SELECT count(*) FROM dittofeed_provider_attempts").fetchone()
+        self.assertEqual(row[0], 1)
+
+    def test_timeout_consumes_network_attempt_across_restarts(self):
+        wire=Transport(raises=TimeoutError("outcome unknown"))
+        with self.assertRaisesRegex(RuntimeError,"uncertain"):
+            self.adapter(transport=wire).dispatch(self.intent)
+        with self.assertRaisesRegex(PermissionError,"already consumed"):
+            self.adapter(transport=wire).dispatch(self.intent)
+        self.assertEqual(len(wire.calls), 1)
+
+    def test_parallel_direct_provider_invocations_are_at_most_once(self):
+        wire=Transport()
+        barrier=Barrier(2)
+        class ConcurrentPolicy:
+            def allow(self, request):
+                barrier.wait(timeout=4)
+                return True
+        adapter=self.adapter(transport=wire,policy=ConcurrentPolicy())
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first=executor.submit(adapter.dispatch,self.intent)
+            second=executor.submit(adapter.dispatch,self.intent)
+            results=[]
+            for future in (first,second):
+                try:
+                    results.append(future.result(timeout=8))
+                except PermissionError as exc:
+                    results.append(exc)
+        self.assertEqual(len([r for r in results
+                              if getattr(r,"success",False) is True]),1)
+        self.assertEqual(len([r for r in results
+                              if isinstance(r,PermissionError)]),1)
+        self.assertEqual(len(wire.calls),1)
 
     def test_unfenced_or_mismatched_claim_cannot_call_provider(self):
         adapter_transport=Transport()
@@ -305,6 +357,7 @@ class ProviderTests(unittest.TestCase):
     def test_explicit_4xx_rejected_but_unknown_transport_never_fabricates_failure(self):
         for code in (400,401,403,404,422):
             with self.subTest(code=code):
+                self._reset_test_wire_attempt()
                 transport=Transport(raises=HTTPError(
                     "http://127.0.0.1:3000/api/public/apps/batch",
                     code,"Rejected",{},None))
@@ -320,10 +373,12 @@ class ProviderTests(unittest.TestCase):
             TimeoutError(),
         ):
             with self.subTest(error=type(error).__name__):
+                self._reset_test_wire_attempt()
                 with self.assertRaisesRegex(RuntimeError,"uncertain"):
                     self.adapter(transport=Transport(raises=error)).dispatch(self.intent)
         for status in (200,201,301,500):
             with self.subTest(status=status):
+                self._reset_test_wire_attempt()
                 with self.assertRaisesRegex(RuntimeError,"ambiguous"):
                     self.adapter(transport=Transport(status=status)).dispatch(self.intent)
 
