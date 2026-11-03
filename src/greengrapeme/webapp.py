@@ -132,6 +132,9 @@ def create_app(catalog: DiscoveryCatalog, *, tenant: str, token: str):
                 data = PilotLedger(catalog.store).summary(tenant, single("id"))
             elif path == "/api/pilot-cases":
                 data = PilotSalesFlow(catalog.store).list(tenant, single("pilot"))
+            elif path == "/api/pilot-followups":
+                data = PilotSalesFlow(catalog.store).due_followups(
+                    tenant, single("pilot"), limit=int(single("limit", "100")))
             elif path == "/api/pilot-replies":
                 data = {"items":ReplyEffects(catalog.store).list(
                     tenant, single("pilot"), single("case"))}
