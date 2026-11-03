@@ -227,6 +227,22 @@ class DittofeedEffectTests(unittest.TestCase):
             "effect_state"],"DISPATCH_IN_FLIGHT")
         self.assertEqual(len(gateway.calls),1)
 
+    def test_corrupt_unhashable_reference_cannot_crash_or_confirm(self):
+        gateway = Gateway("success")
+        original = gateway.execute
+        def corrupt(intent, authority):
+            result = original(intent, authority)
+            gateway.store.records[intent.effect_id]["observation"][
+                "external_ref"] = {"fake": "provider-id"}
+            return result
+        gateway.execute = corrupt
+        result = self.dispatch(gateway=gateway)
+        self.assertEqual(result["effect_state"], "DISPATCH_IN_FLIGHT")
+        self.assertFalse(result["provider_accepted"])
+        self.assertEqual(self.effects.reconcile(*self.args, gateway=gateway)[
+            "effect_state"], "DISPATCH_IN_FLIGHT")
+        self.assertEqual(len(gateway.calls), 1)
+
     def test_downgraded_durable_capabilities_cannot_confirm_receipt(self):
         gateway=Gateway("success")
         original=gateway.execute

@@ -19,11 +19,18 @@ _TOOL = "greengrapeme.dittofeed.track_authorized"
 _PURPOSE = "AUTHORIZED_LIFECYCLE_EVENT_SYNC"
 _CAPABILITIES = frozenset({"dittofeed:track", "purpose:lifecycle-event-sync"})
 _HTTP_REF_PREFIX = "dittofeed-http-204:"
+_ADMIN_REF_PREFIX = "dittofeed-admin-event:"
 
 
 def accepted_http_ref(effect_id: str, payload_sha256: str) -> str:
     """Local fingerprint for an observed Dittofeed HTTP 204, NOT a provider ID."""
     return _HTTP_REF_PREFIX + hashlib.sha256(
+        (effect_id + ":" + payload_sha256).encode()).hexdigest()[:40]
+
+
+def observed_admin_event_ref(effect_id: str, payload_sha256: str) -> str:
+    """Local fingerprint for verified event visibility in Dittofeed Admin API."""
+    return _ADMIN_REF_PREFIX + hashlib.sha256(
         (effect_id + ":" + payload_sha256).encode()).hexdigest()[:40]
 
 
@@ -102,8 +109,8 @@ class DittofeedPomeloEffects:
                 "provider_acknowledged": attempt["state"] == "PROVIDER_ACCEPTED"}
 
     @staticmethod
-    def _effect_matches(attempt: dict, effect: Any) -> bool:
-        if not isinstance(effect, dict) or effect.get("state") != "RECONCILED":
+    def _intent_matches(attempt: dict, effect: Any) -> bool:
+        if not isinstance(effect, dict):
             return False
         intent = effect.get("intent")
         if not isinstance(intent, dict) or not isinstance(intent.get("args"), dict):
@@ -136,8 +143,13 @@ class DittofeedPomeloEffects:
             "permission_ref": attempt["permission_ref"],
             "purpose": _PURPOSE,
         }
-        return all(args.get(k) == v for k, v in expected.items()) and isinstance(
-            effect.get("observation"), dict)
+        return all(args.get(k) == v for k, v in expected.items())
+
+    @staticmethod
+    def _effect_matches(attempt: dict, effect: Any) -> bool:
+        return (DittofeedPomeloEffects._intent_matches(attempt, effect)
+                and effect.get("state") == "RECONCILED"
+                and isinstance(effect.get("observation"), dict))
 
     def _finish_from_durable(self, tenant: str, pilot_id: str,
                              event_id: str, gateway: Any) -> dict:
@@ -148,9 +160,12 @@ class DittofeedPomeloEffects:
         observation = effect["observation"]
         successful = observation.get("success")
         external_ref = observation.get("external_ref")
-        if (successful is True and external_ref ==
-                accepted_http_ref(attempt["effect_id"],
-                                  attempt["payload_sha256"])):
+        valid_acceptance_refs = {
+            accepted_http_ref(attempt["effect_id"], attempt["payload_sha256"]),
+            observed_admin_event_ref(attempt["effect_id"], attempt["payload_sha256"]),
+        }
+        if (successful is True and isinstance(external_ref, str)
+                and external_ref in valid_acceptance_refs):
             final = "PROVIDER_ACCEPTED"
         elif successful is False:
             final = "PROVIDER_FAILED"
@@ -288,6 +303,51 @@ class DittofeedPomeloEffects:
                     AND state='DISPATCH_IN_FLIGHT'""",
                     (self.store._now(), tenant, pilot_id, event_id))
             return self.get(tenant, pilot_id, event_id)
+        return self._finish_from_durable(tenant, pilot_id, event_id, gateway)
+
+    def recover_by_admin_event(self, tenant: str, pilot_id: str,
+                               event_id: str, *, gateway: Any,
+                               authority: Any) -> dict:
+        """Explicit, single read-only PomeloMe recovery, with ZERO re-dispatch.
+
+        Only existing DISPATCHED/UNKNOWN/PROBING PomeloMe effects qualify.
+        The real gateway in these states invokes ONLY adapter.probe(), never
+        adapter.dispatch(). Missing Admin API visibility is inconclusive and
+        PomeloMe transitions to WAITING_APPROVAL (no automatic retry).
+        """
+        attempt = self._row(tenant, pilot_id, _id(event_id, "event_id"))
+        if attempt is None:
+            raise LookupError("no previously claimed Dittofeed effect")
+        if attempt["state"] not in ("DISPATCH_IN_FLIGHT", "DISPATCH_UNCERTAIN"):
+            raise RuntimeError("Dittofeed effect is not uncertain")
+        if (gateway is None or not hasattr(gateway, "execute")
+                or not hasattr(gateway, "store")):
+            raise PermissionError("real PomeloMe gateway required")
+        from pomelome.effects import EffectIntent
+        from pomelome.models import AuthorityEnvelope
+        from .dittofeed_provider import DittofeedTrackEffectAdapter
+        if (not isinstance(authority, AuthorityEnvelope) or authority.is_expired()
+                or authority.constraints != {
+                    "tenant": tenant, "pilot_id": pilot_id, "event_id": event_id,
+                    "workspace_id": attempt["workspace_id"],
+                    "message_id": attempt["message_id"],
+                    "payload_sha256": attempt["payload_sha256"],
+                    "purpose": _PURPOSE,
+                }):
+            raise PermissionError("original event-bound PomeloMe authority required")
+        if not isinstance(getattr(gateway, "adapters", {}).get(_TOOL),
+                          DittofeedTrackEffectAdapter):
+            raise PermissionError("actual Dittofeed probe adapter required")
+        effect = gateway.store.get_effect(attempt["effect_id"])
+        if (not self._intent_matches(attempt, effect)
+                or effect.get("state") not in ("DISPATCHED", "UNKNOWN", "PROBING")
+                or type(effect.get("dispatch_count")) is not int
+                or effect["dispatch_count"] != 1):
+            raise PermissionError("uncertain durable PomeloMe intent missing or untrusted")
+        # Pinned PomeloMe's EffectGateway routes these exact states only to
+        # _recover -> adapter.probe, and never to external adapter.dispatch.
+        intent = EffectIntent.model_validate(effect["intent"])
+        gateway.execute(intent, authority)
         return self._finish_from_durable(tenant, pilot_id, event_id, gateway)
 
     def reconcile(self, tenant: str, pilot_id: str, event_id: str, *,

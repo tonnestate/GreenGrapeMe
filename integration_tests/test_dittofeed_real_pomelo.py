@@ -250,6 +250,115 @@ class RealPomeloIntegration(unittest.TestCase):
             server.server_close()
             thread.join(timeout=3)
 
+    def _recover_with_admin_wire(self, *, event_mode):
+        """Drive real PomeloMe recovery through an actual GET-only TCP API."""
+        self.transport.error = TimeoutError("Dittofeed POST response lost")
+        uncertain = self.execute()
+        self.assertEqual(uncertain["effect_state"], "DISPATCH_UNCERTAIN")
+        self.assertEqual(len(self.transport.calls), 1)
+        expected = self.frozen["payload"]
+        requests = []
+        class EventsHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests.append({
+                    "method": self.command,
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization"),
+                })
+                event = {
+                    "messageId": expected["messageId"],
+                    "userId": expected["userId"],
+                    "event": expected["event"],
+                    "eventType": "track",
+                }
+                if event_mode == "mismatch":
+                    event["userId"] = "forged-user-other-tenant"
+                events = [] if event_mode == "missing" else [event]
+                body = json.dumps({"events": events, "count": len(events)}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                self.send_error(405)
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), EventsHandler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        adapter = DittofeedTrackEffectAdapter(
+            self.store, tenant="tenant-01", authorized_tenant="tenant-01",
+            workspace_id="workspace-1234",
+            base_url=f"http://127.0.0.1:{server.server_port}",
+            write_key_secret_id="123e4567-e89b-42d3-a456-426614174000",
+            write_key_value="placeholder-integration-secret-001",
+            final_permission=FinalHopApproval(),
+            transport=self.transport,
+            admin_token="integration-admin-token-0000000001",
+        )
+        self.gateway.adapters[_TOOL] = adapter
+        try:
+            result = self.effects.recover_by_admin_event(
+                "tenant-01", "pilot-0001", "event-001",
+                gateway=self.gateway, authority=self.authority)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+        return uncertain, result, requests
+
+    def test_real_admin_messageid_lookup_recovers_ambiguous_post(self):
+        uncertain, result, requests = self._recover_with_admin_wire(
+            event_mode="matching")
+        self.assertEqual(result["effect_state"], "PROVIDER_ACCEPTED")
+        self.assertTrue(result["provider_ref"].startswith("dittofeed-admin-event:"))
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0]["method"], "GET")
+        self.assertEqual(requests[0]["authorization"],
+                         "Bearer integration-admin-token-0000000001")
+        from urllib.parse import urlsplit, parse_qs
+        query = parse_qs(urlsplit(requests[0]["path"]).query)
+        self.assertEqual(urlsplit(requests[0]["path"]).path,
+                         "/api/admin/events/")
+        self.assertEqual(query["workspaceId"], ["workspace-1234"])
+        self.assertEqual(query["messageId"], [self.frozen["message_id"]])
+        self.assertEqual(query["limit"], ["2"])
+        self.assertEqual(self.gateway.store.count_receipts(), 1)
+        self.assertEqual(self.gateway.store.get_effect(
+            result["effect_id"])["dispatch_count"], 1)
+        self.assertEqual(len(self.transport.calls), 1)
+        with self.assertRaises(RuntimeError):
+            self.execute()
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_real_admin_absent_event_never_claims_failure_or_retries(self):
+        uncertain, result, requests = self._recover_with_admin_wire(
+            event_mode="missing")
+        self.assertEqual(result["effect_state"], "DISPATCH_UNCERTAIN")
+        self.assertFalse(result["provider_accepted"])
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(self.transport.calls), 1)
+        self.assertEqual(self.gateway.store.get_effect(
+            uncertain["effect_id"])["state"], "WAITING_APPROVAL")
+        self.assertEqual(self.gateway.store.count_receipts(), 0)
+        with self.assertRaises(PermissionError):
+            self.effects.recover_by_admin_event(
+                "tenant-01", "pilot-0001", "event-001",
+                gateway=self.gateway, authority=self.authority)
+
+    def test_real_admin_cross_user_event_does_not_confirm(self):
+        uncertain, result, requests = self._recover_with_admin_wire(
+            event_mode="mismatch")
+        self.assertEqual(result["effect_state"], "DISPATCH_UNCERTAIN")
+        self.assertEqual(self.gateway.store.get_effect(
+            uncertain["effect_id"])["state"], "WAITING_APPROVAL")
+        self.assertEqual(self.gateway.store.count_receipts(), 0)
+        self.assertEqual(len(self.transport.calls), 1)
+
     def test_real_gateway_ambiguous_http_never_replays(self):
         self.transport.error = TimeoutError("response lost after POST")
         result = self.execute()

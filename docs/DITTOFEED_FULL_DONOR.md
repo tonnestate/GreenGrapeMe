@@ -323,9 +323,12 @@ Response semantics:
 - **Timeout, connection failure, redirect, unexpected 2xx, 408/429/5xx**:
   result is uncertain. The adapter raises rather than fabricating a negative
   receipt. The outer PomeloMe fence refuses any automatic second POST.
-- **probe** is intentionally read-only and returns `None`, because Dittofeed
-  Community's public ingest API exposes no verified per-`messageId`
-  acceptance lookup. Calling `/batch` again is **not** reconciliation.
+- **probe** may optionally use the *separate authenticated Admin API*
+  `GET /api/admin/events/?workspaceId=...&messageId=...` to confirm an
+  exactly matching ingested event. Without a configured Admin API credential,
+  or while events are not visible, it returns `None` (unknown). The public
+  ingest API itself does not offer a read-only receipt lookup. Calling
+  `/batch` again is **never** reconciliation.
 
 The complete host contract now exists in source, but the *real host*
 permission provider, actual credentials and running Dittofeed instance have
@@ -478,3 +481,52 @@ are rejected as unverified rather than triggering `TypeError` or
 stored effect class is likewise rejected. No follow-up POST occurs;
 the original effect remains claim-fenced for operator investigation.
 Regression tests explicitly corrupt saved receipt objects.
+
+## Read-only recovery of uncertain Dittofeed events (2026-11-03)
+
+The Dittofeed upstream **Admin API does provide** a message-ID-filtered
+events collection, contrary to the earlier assumption that there was no
+read-only way to inspect a submitted event:
+
+- `GET /api/admin/events/?workspaceId=<workspace>&messageId=<uuid>&limit=2&offset=0`
+- `Authorization: Bearer <admin-key>`
+- Response: `{"events":[{"messageId":..., "userId":..., "eventType":"track",
+  "event":...}], "count":1}` (other fields may also be present)
+
+The real upstream implementation is in
+`packages/api/src/controllers/eventsController.ts`,
+`packages/isomorphic-lib/src/types.ts` and
+`packages/backend-lib/src/userEvents.ts`.
+The ClickHouse query filters by workspace and message ID; ingestion can
+be asynchronous.
+
+`DittofeedAdminEventLookup` performs a tightly scoped, **read-only**
+loopback GET, requiring an explicitly bound tenant/workspace and Admin API
+key (distinct from the Write Key). It compares the exact expected
+messageId, hashed userId, track type and event name, and requires exactly
+one result. An empty, contradictory, oversized, unauthorized, redirected,
+malformed or unreachable API response remains **UNKNOWN**, never a
+negative receipt. No other user/event fields are returned or stored.
+
+The optional `admin_token` on `DittofeedTrackEffectAdapter` enables this
+lookup for PomeloMe's **probe** callback. The trusted host explicitly calls
+`DittofeedPomeloEffects.recover_by_admin_event(..., gateway=..., authority=...)`
+only on a previously fenced, truly dispatched and uncertain irreversible
+effect. It validates the original stored intent and delegates to the real
+PomeloMe `EffectGateway`, which executes its read-only recovery branch
+for `DISPATCHED/UNKNOWN/PROBING`, never a second `dispatch`.
+A verified Admin API event creates a durable observation with a local
+`dittofeed-admin-event:` fingerprint; this confirms **event ingestion
+visibility only**, not contact permission, email delivery or commercial
+results.
+
+If the event is not yet visible, PomeloMe leaves the effect at
+`WAITING_APPROVAL`, with no automatic replay or polling. A later
+post-approval reconciliation still requires explicit operator control
+and a separately reviewed recovery protocol; this integration does not
+silently re-enter unknown effects. The Admin API credential must remain
+trusted host-side, not in the outbox, audit, browser or Pomelo intent.
+
+CI covers actual PomeloMe with localhost Admin API wire traffic for a
+matching event, missing event and mismatched user event. None of these
+tests claim that a real Dittofeed deployment was reached.
