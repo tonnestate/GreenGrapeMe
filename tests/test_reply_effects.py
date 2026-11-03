@@ -10,7 +10,9 @@ import unittest
 from greengrapeme.operations import SalesWorkspace
 from greengrapeme.pilot_metrics import PilotLedger
 from greengrapeme.pilot_sales_flow import PilotSalesFlow
-from greengrapeme.reply_effects import ReplyEffects, _TOOL, _PURPOSE, _CHANNEL
+from greengrapeme.reply_effects import (
+    ReplyEffects, _TOOL, _PURPOSE, _CHANNEL, _CAPABILITIES, _AUTH_CAPABILITIES,
+)
 
 
 class FakeEffectIntent:
@@ -21,7 +23,7 @@ class FakeEffectIntent:
 class FakeAuthority:
     def __init__(self, constraints, caps=None, expired=False):
         self.constraints=constraints
-        self.capabilities=frozenset(caps or ())
+        self.capabilities=frozenset(_AUTH_CAPABILITIES if caps is None else caps)
         self.expired=expired
     def is_expired(self):
         return self.expired
@@ -68,6 +70,7 @@ class FakeGateway:
             "intent":{
                 "effect_id":intent.effect_id,"tool":intent.tool,
                 "idempotency_key":intent.idempotency_key,
+                "required_capabilities":sorted(intent.required_capabilities),
                 "args":dict(intent.args)},
             "state":"DISPATCHED","observation":None}
         if self.mode=="timeout":
@@ -166,6 +169,39 @@ class ReplyEffectsTests(unittest.TestCase):
             self.send(gateway=gateway,perm=Permission(
                 lambda d:d.update(expires_at="2020-01-01T00:00:00+00:00")))
         self.assertEqual(gateway.calls,[])
+
+    def test_missing_reply_effect_capabilities_denied_before_gateway(self):
+        self.prepare()
+        gateway=FakeGateway()
+        for caps in (
+            frozenset(),
+            _CAPABILITIES,
+            frozenset({*_CAPABILITIES,f"tool:{_TOOL}"}),
+            frozenset({*_CAPABILITIES,"effect:irreversible"}),
+        ):
+            with self.subTest(caps=caps), self.assertRaisesRegex(
+                    PermissionError,"capabilities missing"):
+                self.send(gateway=gateway,auth=FakeAuthority(
+                    self.auth_constraints,caps=caps))
+        self.assertEqual(gateway.calls,[])
+        self.assertEqual(self.effects.get(*self.key)["state"],"PREPARED")
+
+    def test_corrupt_durable_reply_capabilities_never_confirm_success(self):
+        self.prepare()
+        gateway=FakeGateway("success")
+        original=gateway.execute
+        def downgrade(intent, authority):
+            result=original(intent,authority)
+            gateway.store.effects[intent.effect_id]["intent"][
+                "required_capabilities"]=["communication:reply"]
+            return result
+        gateway.execute=downgrade
+        result=self.send(gateway=gateway)
+        self.assertEqual(result["state"],"DISPATCH_UNCERTAIN")
+        self.assertIsNone(result["provider_ref"])
+        self.assertEqual(self.effects.reconcile(*self.key,gateway=gateway)[
+            "state"],"DISPATCH_UNCERTAIN")
+        self.assertEqual(len(gateway.calls),1)
 
     def test_authorized_effect_is_irreversible_with_capabilities_and_no_retry(self):
         self.prepare()
