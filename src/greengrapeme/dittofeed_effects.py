@@ -76,6 +76,21 @@ class DittofeedPomeloEffects:
                     PRIMARY KEY(tenant,pilot_id,event_id),
                     UNIQUE(tenant,effect_id)
                 );
+                -- Independent provider-boundary claim. A valid PomeloMe
+                -- effect may never cause a second network submission, even
+                -- if an adapter is accidentally invoked twice or concurrently.
+                CREATE TABLE IF NOT EXISTS dittofeed_provider_attempts (
+                    tenant TEXT NOT NULL,
+                    pilot_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    effect_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    PRIMARY KEY(tenant,pilot_id,event_id),
+                    UNIQUE(tenant,effect_id)
+                );
             """)
 
     @staticmethod
