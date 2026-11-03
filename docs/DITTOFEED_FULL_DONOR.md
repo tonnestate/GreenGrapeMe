@@ -349,3 +349,12 @@ policy service and Dittofeed itself. The trusted host must independently
 enforce revocation at the point of actual provider execution and handle
 races across different systems; this additional local check does not
 establish end-to-end consent correctness.
+
+## Capability-downgrade protection (2026-11-03)
+
+The provider adapter now independently verifies the exact
+`EffectIntent.required_capabilities` set:
+`dittofeed:track` and `purpose:lifecycle-event-sync`.
+An empty, partial or substituted capability set is rejected before any
+HTTP request, even if an incorrectly configured caller attempts to lower
+the scope on the gateway side. Tests cover these downgrade attempts.

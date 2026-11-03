@@ -13,7 +13,7 @@ import unittest
 
 from greengrapeme.dittofeed_provider import DittofeedTrackEffectAdapter
 from greengrapeme.dittofeed_effects import (
-    _PURPOSE, _TOOL, DittofeedPomeloEffects,
+    _PURPOSE, _TOOL, _CAPABILITIES, DittofeedPomeloEffects,
 )
 from greengrapeme.dittofeed_outbox import DittofeedOutbox
 from greengrapeme.operations import SalesWorkspace
@@ -100,6 +100,7 @@ class ProviderTests(unittest.TestCase):
         self.intent=FakeIntent(
             run_id="run-001",effect_id=effect_id,tool=_TOOL,
             effect_class=FakeClass.IRREVERSIBLE,
+            required_capabilities=_CAPABILITIES,
             idempotency_key=effect_id,
             args={
                 "tenant":"tenant-01","pilot_id":"pilot-0001",
@@ -180,6 +181,20 @@ class ProviderTests(unittest.TestCase):
             self.adapter(transport=transport,policy=policy).dispatch(self.intent)
         self.assertEqual(len(transport.calls),0)
         self.assertEqual(len(policy.calls),1)
+
+    def test_capability_downgrade_never_reaches_http(self):
+        transport=Transport()
+        adapter=self.adapter(transport=transport)
+        for capabilities in (
+            frozenset(), frozenset({"dittofeed:track"}),
+            frozenset({"purpose:lifecycle-event-sync"}),
+            frozenset({"dittofeed:track","purpose:other"}),
+        ):
+            with self.subTest(capabilities=capabilities):
+                self.intent.required_capabilities=capabilities
+                with self.assertRaisesRegex(PermissionError,"capabilities"):
+                    adapter.dispatch(self.intent)
+        self.assertEqual(transport.calls,[])
 
     def test_suppression_and_source_drift_before_actual_http(self):
         transport=Transport()
