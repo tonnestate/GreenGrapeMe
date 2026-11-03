@@ -37,3 +37,11 @@ The job ID above is a placeholder and is not a claimed real authorized discovery
 - UI, self-service onboarding, authorized live outbound campaigns, prospect replies, funnel/Setter/Closer and revenue are future releases.
 
 Related contracts: `docs/GESAMTKONZEPT_UND_RELEASEPLAN.md`, `docs/FRUITSTACK_SALES_MISSIONS.md`, `docs/INTEGRATION_STARFRUIT_MCP.md`.
+
+## Source-complete and atomic admission gate (03.11.2026)
+
+The direct `sales-run` / `discover-starfruit` reader now calls StarFruitMe's real read-only `get_discovery_status(job_id)` on the same MCP connection **before the first `find_companies`** and **after the complete read**. Both replies must identify the same job and explicitly say `COMPLETED_NO_KNOWN_GAPS`. Missing, running or `COMPLETED_WITH_GAPS` status fails closed as `SourceSnapshotError`; none of the records are returned to the importer. Pagination consistency and first-page drift checks still apply. **There is no donor-side transactional snapshot/version token**, so two successful status checks do not prove an immutable snapshot in the face of concurrent source mutation.
+
+The direct single-mission composition admits **at most 25 accounts**. A larger result is `BLOCKED_ACCOUNT_CAPACITY` **before SalesWorkspace.ingest, sales work, mission creation or PlumMe usage** (no orphaned imports). To process more than 25 source candidates, use the existing `DiscoveryJobQueue` / `discover-worker` with immutable 25-account batches; do not treat the legacy `sales-run --max-accounts 100` example as batch execution.
+
+Both changes have offline regression cases. **Neither this source gate nor CI proves live MangoMe admission, authenticated host authorization or completed customer-facing sales.**
