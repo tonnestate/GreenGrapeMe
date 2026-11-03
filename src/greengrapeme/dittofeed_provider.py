@@ -18,7 +18,11 @@ from urllib.request import Request, build_opener, ProxyHandler, HTTPHandler, HTT
 from typing import Any, Protocol
 from uuid import UUID
 
-from .dittofeed_effects import _TOOL, _PURPOSE, _CAPABILITIES, accepted_http_ref
+from .dittofeed_effects import (
+    _TOOL, _PURPOSE, _CAPABILITIES, accepted_http_ref,
+    observed_admin_event_ref,
+)
+from .dittofeed_event_probe import DittofeedAdminEventLookup
 from .dittofeed_outbox import DittofeedOutbox
 from .operations import SalesWorkspace
 
@@ -68,7 +72,8 @@ class DittofeedTrackEffectAdapter:
                  tenant: str, authorized_tenant: str, workspace_id: str,
                  base_url: str, write_key_secret_id: str,
                  write_key_value: str, final_permission: DestinationPermission,
-                 timeout_seconds: float = 5.0, transport=None):
+                 timeout_seconds: float = 5.0, transport=None,
+                 admin_token: str | None = None, admin_transport=None):
         self.tenant = store._required(tenant, "tenant")
         if self.tenant != authorized_tenant:
             raise PermissionError("Dittofeed tenant/workspace binding mismatch")
@@ -103,6 +108,13 @@ class DittofeedTrackEffectAdapter:
         self._policy = final_permission
         self._transport = transport or build_opener(
             ProxyHandler({}), _NoRedirect(), HTTPHandler())
+        self._admin_lookup = (
+            DittofeedAdminEventLookup(
+                tenant=self.tenant, authorized_tenant=authorized_tenant,
+                workspace_id=self.workspace_id, base_url=self.base_url,
+                admin_token=admin_token, timeout_seconds=self.timeout_seconds,
+                transport=admin_transport)
+            if admin_token is not None else None)
 
     def dispatch(self, intent: Any):
         """Only called inside PomeloMe gateway after irreversible effect fence."""
@@ -229,9 +241,75 @@ class DittofeedTrackEffectAdapter:
             message="HTTP 204 observed; journey/delivery/revenue unverified")
 
     def probe(self, intent: Any):
-        """Dittofeed Community offers no verified per-message receipt lookup.
+        """Read-only Admin API reconciliation by messageId. NEVER send twice.
 
-        NEVER use the ordinary event-ingest API to probe an uncertain effect,
-        as that would potentially execute another journey.
+        A missing event may be eventual consistency or an unavailable API,
+        so the only positive outcome is an exact match of messageId, userId,
+        event name and track eventType under the authorized workspace.
         """
-        return None
+        if self._admin_lookup is None:
+            return None
+        from pomelome.effects import EffectIntent, EffectObservation
+        from pomelome.models import EffectClass
+        from .dittofeed_effects import DittofeedPomeloEffects
+        if (not isinstance(intent, EffectIntent)
+                or intent.tool != _TOOL
+                or intent.effect_class != EffectClass.IRREVERSIBLE
+                or intent.required_capabilities != _CAPABILITIES
+                or not isinstance(intent.args, dict)):
+            return None
+        args = intent.args
+        expected_keys = {
+            "tenant", "pilot_id", "event_id", "effect_id", "workspace_id",
+            "message_id", "payload_sha256", "purpose", "permission_ref",
+        }
+        if (set(args) != expected_keys
+                or args["tenant"] != self.tenant
+                or args["workspace_id"] != self.workspace_id
+                or args["purpose"] != _PURPOSE):
+            return None
+        effect_id = DittofeedPomeloEffects._effect_id(
+            args["tenant"], args["pilot_id"], args["event_id"])
+        if (intent.effect_id != effect_id
+                or intent.idempotency_key != effect_id
+                or args["effect_id"] != effect_id):
+            return None
+        with self.outbox.store._db() as db:
+            claim = db.execute("""
+                SELECT effect_id,state,workspace_id,message_id,payload_sha256,
+                       permission_ref FROM dittofeed_pomelo_effects
+                WHERE tenant=? AND pilot_id=? AND event_id=?
+            """, (args["tenant"], args["pilot_id"], args["event_id"])).fetchone()
+        if (claim is None
+                or claim["state"] not in ("DISPATCH_IN_FLIGHT", "DISPATCH_UNCERTAIN")
+                or any(claim[key] != args[key] for key in (
+                    "effect_id", "workspace_id", "message_id",
+                    "payload_sha256", "permission_ref"))):
+            return None
+        try:
+            outbox_event = self.outbox.get(
+                args["tenant"], args["pilot_id"], args["event_id"])
+        except (LookupError, ValueError, TypeError):
+            return None
+        payload = outbox_event["payload"]
+        if (outbox_event["workspace_id"] != self.workspace_id
+                or outbox_event["message_id"] != args["message_id"]
+                or outbox_event["payload_sha256"] != args["payload_sha256"]
+                or not isinstance(payload, dict)
+                or payload.get("type") != "track"
+                or payload.get("messageId") != args["message_id"]
+                or not isinstance(payload.get("userId"), str)
+                or not isinstance(payload.get("event"), str)):
+            return None
+        if self._admin_lookup.observed(
+            message_id=args["message_id"],
+            user_id=payload["userId"],
+            event_name=payload["event"],
+        ) is not True:
+            return None
+        return EffectObservation(
+            success=True,
+            external_ref=observed_admin_event_ref(
+                effect_id, args["payload_sha256"]),
+            message="Dittofeed Admin API event visible; customer delivery unverified",
+        )
