@@ -8,6 +8,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .dittofeed_lifecycle import DittofeedLifecycleProjection
+from .dittofeed_outbox import DittofeedOutbox
 from .dittofeed_admin import DittofeedReadOnlyAdmin
 from .reply_effects import ReplyEffects
 from .missions import SalesMissionEngine
@@ -70,6 +71,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Plan confirmed lifecycle events for Dittofeed; no API or messaging")
     donor.add_argument("--pilot-id", required=True)
     donor.add_argument("--limit", type=int, default=100)
+    ditto_stage = sub.add_parser("dittofeed-prepare",
+        help="Durable, non-dispatching confirmed event intent for Dittofeed")
+    ditto_stage.add_argument("--pilot-id", required=True)
+    ditto_stage.add_argument("--event-id", required=True)
+    ditto_outbox = sub.add_parser("dittofeed-outbox",
+        help="Read prepared event intents and current source/suppression state")
+    ditto_outbox.add_argument("--pilot-id", required=True)
+    ditto_outbox.add_argument("--limit", type=int, default=100)
     ditto_status = sub.add_parser("dittofeed-status",
         help="Read-only local Dittofeed Admin API inventory; never dispatch")
 
@@ -220,6 +229,14 @@ def main(argv: list[str] | None = None) -> int:
         result = PilotSalesFlow(store).list(a.tenant,a.pilot_id)
     elif a.command == "dittofeed-preview":
         result = DittofeedLifecycleProjection(store).preview(
+            a.tenant, a.pilot_id, limit=a.limit)
+    elif a.command == "dittofeed-prepare":
+        result = DittofeedOutbox(store).prepare(
+            a.tenant, a.pilot_id, a.event_id,
+            workspace_id=environ.get("GG_DITTOFEED_WORKSPACE_ID", ""),
+            authorized_tenant=environ.get("GG_DITTOFEED_TENANT", ""))
+    elif a.command == "dittofeed-outbox":
+        result = DittofeedOutbox(store).list(
             a.tenant, a.pilot_id, limit=a.limit)
     elif a.command == "dittofeed-status":
         result = DittofeedReadOnlyAdmin(

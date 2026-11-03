@@ -188,3 +188,46 @@ Upstream documented references:
 provisioning, upstream version/health verification, customer-data import,
 a legally permitted and PomeloMe-authorized event-emit effect, delivery
 receipt reconciliation, paid-customer trials and proven unit economics.
+
+## Durable no-send lifecycle outbox (2026-11-03)
+
+`DittofeedOutbox` now persists one immutable `track` intent per
+(tenant, pilot_id, independently confirmed event_id). This is **not**
+a new dispatcher and no Dittofeed REST endpoint is invoked.
+The local SQLite transaction checks the source event's independent
+confirmation, tenant/pilot/offer/account linkage and opt-out before inserting.
+The exact payload, its SHA-256 and stable `messageId` are frozen. Repeated
+identical staging is idempotent even after a GreenGrapeMe process restart.
+Trying to rebind that event to a different Dittofeed workspace or changed
+source is refused.
+
+The outbox read additionally shows `BLOCKED_SUPPRESSION` or
+`BLOCKED_SOURCE_REVISION` when an existing prepared event has lost its
+underlying evidence/eligibility. `PREPARED` never authorizes API
+ingestion or a customer message. There is intentionally no `send`
+or `retry` command.
+
+```bash
+export GG_DITTOFEED_TENANT='customer-a'
+export GG_DITTOFEED_WORKSPACE_ID='<actual-authorized-workspace-id>'
+PYTHONPATH=src python -m greengrapeme.cli --db sales.sqlite \
+  --tenant customer-a dittofeed-prepare \
+  --pilot-id pilot-0001 --event-id event-0001
+PYTHONPATH=src python -m greengrapeme.cli --db sales.sqlite \
+  --tenant customer-a dittofeed-outbox --pilot-id pilot-0001
+```
+
+This requires independently verified `SOURCE_CONFIRMED` events already
+present in PilotLedger. The payload is prepared locally; there is no
+communication to Dittofeed, no server or worker installation and no
+contact grant. The future host integration must use the existing PomeloMe
+EffectGateway and an adapter with authority bound to the exact workspace,
+event, message ID, recipient/purpose and payload digest. All marketing
+permissions need last-moment validation at the actual destination. A
+gateway crash leaves uncertain state; it must be reconciled from durable
+provider evidence, **never blindly resent**. The existing read-only Admin
+API preflight does not grant a write permission.
+
+Existing statuses are intentionally limited to local `PREPARED` and
+read-time invalidation; they do **not** pretend a real Dittofeed
+acknowledgement or durable PomeloMe execution has occurred.
