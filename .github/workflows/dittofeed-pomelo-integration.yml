@@ -1,0 +1,35 @@
+name: Dittofeed + real PomeloMe integration
+
+on:
+  pull_request:
+    paths:
+      - "src/greengrapeme/dittofeed_*.py"
+      - "integration_tests/**"
+      - ".github/workflows/dittofeed-pomelo-integration.yml"
+      - "pyproject.toml"
+  push:
+    branches: [main]
+    paths:
+      - "src/greengrapeme/dittofeed_*.py"
+      - "integration_tests/**"
+      - ".github/workflows/dittofeed-pomelo-integration.yml"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  real-pomelo-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install GreenGrapeMe and pinned public PomeloMe donor
+        run: |
+          python -m pip install --disable-pip-version-check -e .
+          python -m pip install --disable-pip-version-check "git+https://github.com/tonnestate/PomeloMe.git@7593f70167fbefb7c0215d514fe0f55d35f02b1c"
+      - name: Exercise actual PomeloMe EffectGateway with intercepted Dittofeed HTTP
+        run: python -m unittest discover -s integration_tests -v

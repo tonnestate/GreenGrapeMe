@@ -407,3 +407,27 @@ reported API acknowledgement, not provider delivery, subscriber contact,
 customer renewal or attribution. A malicious or untrusted provider adapter
 could still fabricate the fingerprint: the host's adapter registration and
 gateway storage must therefore remain trusted and access-controlled.
+
+## Cross-repository real PomeloMe integration CI (2026-11-03)
+
+A separate GitHub Actions workflow installs **the actual public PomeloMe
+package**, pinned to source commit
+`7593f70167fbefb7c0215d514fe0f55d35f02b1c`, and executes
+`integration_tests/test_dittofeed_real_pomelo.py`.
+
+Unlike the offline donor-shaped mocks, this exercises the real
+`EffectGateway`, `AuthorityEnvelope`, `DefaultPolicyKernel`,
+`SqliteEffectStore` and their durable receipts together with
+GreenGrapeMe's real outbox, irreversible fence and Dittofeed provider
+adapter. The HTTP transport is deliberately intercepted: one test verifies
+the full HTTP-204 acceptance path, exact bound observation and one durable
+Pomelo effect; another simulates an ambiguous provider timeout and verifies
+no second POST after restart. Neither test contacts a real Dittofeed server
+or grants production communication consent.
+
+The workflow needs GitHub to read the public PomeloMe repository when CI
+runs. The pinned version prevents accidentally treating API drift in
+PomeloMe as a GreenGrapeMe code change. Upgrading the donor pin should
+require a reviewed cross-repo integration run. Production readiness still
+requires a running Dittofeed workspace, real approved data and lawful
+destination policies, infrastructure costs and a live E2E acceptance.
