@@ -195,6 +195,35 @@ class ProviderTests(unittest.TestCase):
             self.adapter(transport=transport).dispatch(self.intent)
         self.assertEqual(len(transport.calls),0)
 
+    def test_policy_callback_optout_before_http_is_caught(self):
+        transport=Transport()
+        store=self.store
+        class RevokingPolicy:
+            def allow(self, request):
+                with store._db() as db:
+                    db.execute("INSERT INTO suppressions VALUES(?,?,?,?)",
+                        ("tenant-01","account-01","OPT_OUT",store._now()))
+                return True
+        adapter=self.adapter(transport=transport,policy=RevokingPolicy())
+        with self.assertRaisesRegex(PermissionError,"after permission review"):
+            adapter.dispatch(self.intent)
+        self.assertEqual(transport.calls,[])
+
+    def test_policy_callback_source_change_before_http_is_caught(self):
+        transport=Transport()
+        store=self.store
+        class RevisingPolicy:
+            def allow(self, request):
+                with store._db() as db:
+                    db.execute("""UPDATE opportunities SET source_json='{}'
+                                  WHERE tenant='tenant-01'
+                                    AND opportunity_id='account-01'""")
+                return True
+        adapter=self.adapter(transport=transport,policy=RevisingPolicy())
+        with self.assertRaisesRegex(PermissionError,"after permission review"):
+            adapter.dispatch(self.intent)
+        self.assertEqual(transport.calls,[])
+
     def test_strict_intent_binding(self):
         adapter=self.adapter()
         original=dict(self.intent.args)
