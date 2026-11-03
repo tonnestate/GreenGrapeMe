@@ -8,6 +8,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .dittofeed_lifecycle import DittofeedLifecycleProjection
+from .dittofeed_admin import DittofeedReadOnlyAdmin
 from .reply_effects import ReplyEffects
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
@@ -69,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Plan confirmed lifecycle events for Dittofeed; no API or messaging")
     donor.add_argument("--pilot-id", required=True)
     donor.add_argument("--limit", type=int, default=100)
+    ditto_status = sub.add_parser("dittofeed-status",
+        help="Read-only local Dittofeed Admin API inventory; never dispatch")
+
     due = sub.add_parser("pilot-followups", help="Read due operator follow-ups; NO sending")
     due.add_argument("--pilot-id", required=True)
     due.add_argument("--limit", type=int, default=100)
@@ -217,6 +221,14 @@ def main(argv: list[str] | None = None) -> int:
     elif a.command == "dittofeed-preview":
         result = DittofeedLifecycleProjection(store).preview(
             a.tenant, a.pilot_id, limit=a.limit)
+    elif a.command == "dittofeed-status":
+        result = DittofeedReadOnlyAdmin(
+            tenant=a.tenant,
+            authorized_tenant=environ.get("GG_DITTOFEED_TENANT", ""),
+            workspace_id=environ.get("GG_DITTOFEED_WORKSPACE_ID", ""),
+            base_url=environ.get("GG_DITTOFEED_BASE_URL", ""),
+            admin_token=environ.get("GG_DITTOFEED_ADMIN_TOKEN", ""),
+        ).inspect()
     elif a.command == "pilot-followups":
         result = PilotSalesFlow(store).due_followups(a.tenant,a.pilot_id,limit=a.limit)
     elif a.command == "pilot-inbound":
