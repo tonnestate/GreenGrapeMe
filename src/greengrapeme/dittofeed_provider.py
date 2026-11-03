@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPHandler, HTTPRedirectHandler
 from typing import Any, Protocol
 
-from .dittofeed_effects import _TOOL, _PURPOSE
+from .dittofeed_effects import _TOOL, _PURPOSE, _CAPABILITIES
 from .dittofeed_outbox import DittofeedOutbox
 from .operations import SalesWorkspace
 
@@ -103,8 +103,9 @@ class DittofeedTrackEffectAdapter:
         from pomelome.models import EffectClass
         if (not isinstance(intent, EffectIntent) or intent.tool != _TOOL or
                 intent.effect_class != EffectClass.IRREVERSIBLE or
+                getattr(intent, "required_capabilities", None) != _CAPABILITIES or
                 not isinstance(intent.args, dict)):
-            raise PermissionError("Dittofeed effect intent/type invalid")
+            raise PermissionError("Dittofeed effect intent/type/capabilities invalid")
         a = intent.args
         required = {
             "tenant", "pilot_id", "event_id", "effect_id", "workspace_id",
