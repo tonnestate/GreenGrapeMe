@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener, ProxyHandler, HTTPHandler, HTTPRedirectHandler
 from typing import Any, Protocol
 
-from .dittofeed_effects import _TOOL, _PURPOSE, _CAPABILITIES
+from .dittofeed_effects import _TOOL, _PURPOSE, _CAPABILITIES, accepted_http_ref
 from .dittofeed_outbox import DittofeedOutbox
 from .operations import SalesWorkspace
 
@@ -216,8 +216,7 @@ class DittofeedTrackEffectAdapter:
             raise RuntimeError("Dittofeed write outcome uncertain") from None
         # This ref describes the locally observed 204 response; NOT an ID
         # provided by Dittofeed and NOT message delivery or customer outcome.
-        observed_ref = "dittofeed-http-204:" + hashlib.sha256(
-            (expected_id + ":" + a["payload_sha256"]).encode()).hexdigest()[:40]
+        observed_ref = accepted_http_ref(expected_id, a["payload_sha256"])
         return EffectObservation(
             success=True, external_ref=observed_ref,
             message="HTTP 204 observed; journey/delivery/revenue unverified")

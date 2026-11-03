@@ -8,7 +8,7 @@ import sys
 import unittest
 
 from greengrapeme.dittofeed_effects import (
-    DittofeedPomeloEffects, _TOOL, _PURPOSE, _CAPABILITIES,
+    DittofeedPomeloEffects, _TOOL, _PURPOSE, _CAPABILITIES, accepted_http_ref,
 )
 from greengrapeme.dittofeed_outbox import DittofeedOutbox
 from greengrapeme.operations import SalesWorkspace
@@ -84,7 +84,9 @@ class Gateway:
         success=self.mode!="failure"
         record.update(state="RECONCILED",
             observation={"success":success,
-                         "external_ref":"dittofeed-event-001" if success else None})
+                         "external_ref":accepted_http_ref(
+                    intent.effect_id, intent.args["payload_sha256"]
+                ) if success else None})
         return SimpleNamespace(state="RECONCILED",
             observation=SimpleNamespace(**record["observation"]))
 
@@ -168,7 +170,8 @@ class DittofeedEffectTests(unittest.TestCase):
         gateway=Gateway()
         output=self.dispatch(gateway=gateway)
         self.assertEqual(output["effect_state"],"PROVIDER_ACCEPTED")
-        self.assertEqual(output["provider_ref"],"dittofeed-event-001")
+        self.assertEqual(output["provider_ref"],
+            accepted_http_ref(output["effect_id"], self.constraints["payload_sha256"]))
         self.assertEqual(len(gateway.calls),1)
         intent=gateway.calls[0]
         self.assertEqual(intent.tool,_TOOL)
@@ -193,7 +196,8 @@ class DittofeedEffectTests(unittest.TestCase):
                          "DISPATCH_UNCERTAIN")
         effect=gateway.store.records[result["effect_id"]]
         effect.update(state="RECONCILED",observation={
-            "success":True,"external_ref":"dittofeed-event-001"})
+            "success":True,"external_ref":accepted_http_ref(
+                result["effect_id"],self.constraints["payload_sha256"])})
         later=self.effects.reconcile(*self.args,gateway=gateway)
         self.assertEqual(later["effect_state"],"PROVIDER_ACCEPTED")
         self.assertEqual(len(gateway.calls),1)
@@ -203,6 +207,22 @@ class DittofeedEffectTests(unittest.TestCase):
         result=self.dispatch(gateway=gateway)
         self.assertEqual(result["effect_state"],"DISPATCH_IN_FLIGHT")
         self.assertFalse(result["provider_accepted"])
+        self.assertEqual(self.effects.reconcile(*self.args,gateway=gateway)[
+            "effect_state"],"DISPATCH_IN_FLIGHT")
+        self.assertEqual(len(gateway.calls),1)
+
+    def test_forged_provider_receipt_never_confirms_success(self):
+        gateway=Gateway("success")
+        original=gateway.execute
+        def fake_provider_receipt(intent, authority):
+            result=original(intent, authority)
+            gateway.store.records[intent.effect_id]["observation"]["external_ref"]=(
+                "dittofeed-event-claimed-by-an-untrusted-caller")
+            return result
+        gateway.execute=fake_provider_receipt
+        record=self.dispatch(gateway=gateway)
+        self.assertEqual(record["effect_state"],"DISPATCH_IN_FLIGHT")
+        self.assertFalse(record["provider_accepted"])
         self.assertEqual(self.effects.reconcile(*self.args,gateway=gateway)[
             "effect_state"],"DISPATCH_IN_FLIGHT")
         self.assertEqual(len(gateway.calls),1)

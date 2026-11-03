@@ -18,6 +18,14 @@ from .pilot_metrics import _id
 _TOOL = "greengrapeme.dittofeed.track_authorized"
 _PURPOSE = "AUTHORIZED_LIFECYCLE_EVENT_SYNC"
 _CAPABILITIES = frozenset({"dittofeed:track", "purpose:lifecycle-event-sync"})
+_HTTP_REF_PREFIX = "dittofeed-http-204:"
+
+
+def accepted_http_ref(effect_id: str, payload_sha256: str) -> str:
+    """Local fingerprint for an observed Dittofeed HTTP 204, NOT a provider ID."""
+    return _HTTP_REF_PREFIX + hashlib.sha256(
+        (effect_id + ":" + payload_sha256).encode()).hexdigest()[:40]
+
 
 
 class LifecycleSyncPermission(Protocol):
@@ -132,8 +140,9 @@ class DittofeedPomeloEffects:
         observation = effect["observation"]
         successful = observation.get("success")
         external_ref = observation.get("external_ref")
-        if successful is True and isinstance(external_ref, str) and (
-                1 <= len(external_ref) <= 255):
+        if (successful is True and external_ref ==
+                accepted_http_ref(attempt["effect_id"],
+                                  attempt["payload_sha256"])):
             final = "PROVIDER_ACCEPTED"
         elif successful is False:
             final = "PROVIDER_FAILED"
