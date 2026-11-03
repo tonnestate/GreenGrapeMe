@@ -22,7 +22,13 @@ class Receipt:
             "amount_cents": event["amount_cents"],
             "currency": "EUR",
             "evidence_ref": event["evidence_ref"],
-            "provider_kind": "BANK" if event["event_kind"] == "CUSTOMER_PAYMENT_RECEIVED" else "CRM",
+            "provider_kind": {
+                "LEAD_ACCEPTED": "CRM",
+                "MEETING_HELD": "ATTENDANCE",
+                "PROPOSAL_DELIVERED": "DELIVERY",
+                "DEAL_SIGNED": "CONTRACT",
+                "CUSTOMER_PAYMENT_RECEIVED": "BANK",
+            }[event["event_kind"]],
             "provider_receipt_id": "receipt-" + event["event_id"],
         }
 
