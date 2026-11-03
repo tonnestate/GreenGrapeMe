@@ -50,15 +50,18 @@ async def run_sales_pipeline(*,
     # DiscoveryProvider is injected for contract testing, real host default is
     # StarFruitMe's EXISTING MCP v2 server and *existing* authorized job.
     records = await source_reader(job_id=job_id, offer_id=offer_id, limit=max_accounts)
+    # Do not import a source set which cannot be admitted as ONE immutable
+    # 25-account sales mission. The DiscoveryJobQueue provides actual batch
+    # partitioning for larger cohorts; this legacy single-mission path does not.
+    if len(records) > min(25, max_accounts):
+        return {"state": "BLOCKED_ACCOUNT_CAPACITY", "discovered": len(records),
+                "max_cohort": 25, "admitted_limit": max_accounts,
+                "mission_id": mission_id, "effects": 0}
     intake = store.ingest(tenant, records)
     if intake["conflict"]:
         return {"state": "BLOCKED_SOURCE_REVISION",
                 "discovered": len(records), "intake": intake,
                 "mission_id": mission_id, "effects": 0}
-
-    if len(records) > 25:
-        return {"state": "BLOCKED_ACCOUNT_CAPACITY", "discovered": len(records),
-                "max_cohort": 25, "mission_id": mission_id, "effects": 0}
 
     engine = SalesMissionEngine(store)
     with store._db() as db:
