@@ -37,3 +37,18 @@ Es existiert zusätzlich ein **nur lesender** token-geschützter Localhost-Endpu
 Tests validieren vollständige berichtete Funnel-Kette mit vier Ledger-Ereignissen, Event-/Schritt-Idempotenz, CAS-Status, Mandantentrennung, unveränderliche Quellen-Fingerprints, Widerruf/Suppression, echte Follow-up-Fälligkeit, Worker-Restart und **0 externe Kundenkontakte**. Nur mit Belegen von CRM/Attendance/Delivery/Contract kann eine unabhängig installierte Provider-Quelle die jeweilige Funnel-Aussage bestätigen. Ein tatsächlicher Kommunikations- oder Buchhaltungsconnector ist hier nicht eingebaut.
 
 **Weiter offen:** authentifizierter produktiver SaaS-Operator/RBAC, rechtliche Einwilligungsprüfung pro Empfänger/Kanal/Zweck, integrierte erlaubte Kommunikations-Effects mit Dispatcher-Reconciliation, echte Kalender-Termine, CRM-Synchronisation, verlässlicher Vertrags-/Zahlungsprovider und drei tatsächlich zahlende Pilotkunden. Diese Implementierung ist ein betriebsfähiger **manuell bestätigter lokaler Sales-Funnel**, noch kein autonomer Kundenabschluss.
+
+## Fällige Wiedervorlagen (lokaler Setter-Posteingang)
+
+`PilotSalesFlow.due_followups` ermittelt `FOLLOWUP_SCHEDULED`-Fälle mit erreichtem UTC-Fälligkeitsdatum in chronologischer Reihenfolge. Die Abfrage ist strikt auf authentifizierten Tenant und Pilot begrenzt. Angezeigt werden auch fällige, aber **blockierte** Fälle, damit weder ein Opt-out noch eine nachträgliche Quellenänderung verdeckt werden: `BLOCKED_SUPPRESSION`, `BLOCKED_SOURCE_REVISION` oder `HUMAN_REVIEW_DUE`. `HUMAN_REVIEW_DUE` bedeutet ausschließlich: Ein Operator muss die Wiedervorlage prüfen. Es ist **keine** Kontaktfreigabe.
+
+CLI (nur lesend):
+
+```bash
+PYTHONPATH=src python -m greengrapeme.cli --db sales.db --tenant <host-tenant-id> \
+  pilot-followups --pilot-id pilot-0001 --limit 100
+```
+
+Localhost-API (vorhandener 24+-Zeichen-Token erforderlich): `GET /api/pilot-followups?pilot=pilot-0001&limit=100`. Die Antwort liefert `items`, `total`, `count_shown`, `as_of`, `operator_review_only=true`, `outbound_authorized=false`. Der Browser/HTTP-Aufruf sendet keine Nachrichten, erzeugt keine Follow-up-Aktionen und erteilt keine neuen Rechte. Für reales Kundenkontakt-Handling bleiben unabhängige Permission-/Suppression-/PomeloMe-Prüfungen am tatsächlichen Effektpunkt erforderlich.
+
+Offline-Regressionen: UTC-Fälligkeit und Sortierung, begrenzte Ergebnisgröße, Tenant-Isolation, Sperren/Quellenrevision, Abschluss ohne Versand, CLI und tokenpflichtige API. Ein produktiver Kalender oder tatsächliche Kontaktbearbeitung ist damit **nicht** nachgewiesen.
