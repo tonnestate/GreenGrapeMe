@@ -64,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     pilot_report.add_argument("--pilot-id", required=True)
     cases = sub.add_parser("pilot-cases", help="List reported inbound sales cases")
     cases.add_argument("--pilot-id", required=True)
+    due = sub.add_parser("pilot-followups", help="Read due operator follow-ups; NO sending")
+    due.add_argument("--pilot-id", required=True)
+    due.add_argument("--limit", type=int, default=100)
     inbound = sub.add_parser("pilot-inbound", help="Record sourced inbound inquiry; no contact authority")
     inbound.add_argument("--pilot-id", required=True)
     inbound.add_argument("--case-id", required=True)
@@ -206,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
         result = PilotLedger(store).list(a.tenant)
     elif a.command == "pilot-cases":
         result = PilotSalesFlow(store).list(a.tenant,a.pilot_id)
+    elif a.command == "pilot-followups":
+        result = PilotSalesFlow(store).due_followups(a.tenant,a.pilot_id,limit=a.limit)
     elif a.command == "pilot-inbound":
         result = PilotSalesFlow(store).open_inbound(
             a.tenant,a.pilot_id,a.case_id,company_name=a.company,
