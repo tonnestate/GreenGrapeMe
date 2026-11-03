@@ -121,3 +121,10 @@ Added `PilotLedger` in `src/greengrapeme/pilot_metrics.py`: tenant-isolated pilo
 ## PomeloMe-gebundene Reply-Effects – kein eigener Dispatcher
 
 GreenGrapeMe kann zu einem vorhandenen, mit Quellen dokumentierten Inbound-Fall eine unveränderliche Referenz auf eine Reply-Nachricht vorbereiten. Der Host kann ausschließlich nach unabhängiger Kontakt-/Zweckfreigabe und tatsächlicher PomeloMe-`AuthorityEnvelope` einen `IRREVERSIBLE`-`EffectIntent` an den vorhandenen `EffectGateway` übergeben. Offline-Tests sichern Consent-/Scope-/Suppression-Fences und die Nicht-Wiederholung unklarer Provider-Antworten. Der konkrete zuständige PomeloMe-Kommunikationsadapter und die echte Consent-Quelle **fehlen weiterhin**; es findet daher noch kein produktiver Versand statt. Details: `docs/INBOUND_REPLY_EFFECTS.md`.
+
+
+## Dittofeed Community as full lifecycle donor (development 2026-11-03)
+
+GreenGrapeMe may reuse the **entire MIT-licensed Dittofeed Community platform** for customer segmentation, visual journeys, lifecycle templates, broadcasts and engagement analytics, rather than reimplementing a second lifecycle engine. The first integrated, read-only `dittofeed-preview` converts only independently source-confirmed sales events from the existing PilotLedger into deterministic, tenant-separated, pseudonymous Dittofeed track/batch envelopes. It emits **no messages or API calls** and never infers consent, churn causes or ROI.
+
+The underlying Dittofeed runtime is **not installed or deployed here**. Its advanced multi-tenant auth/white-label/embedding features remain proprietary Enterprise options, and self-hosting has nonzero resource requirements. Commercial adoption requires verified isolation, provider and consent gates, PomeloMe host effect control, live compatibility and unit economics. Source pin, full-product adoption decision, technical contract and remaining gates: `docs/DITTOFEED_FULL_DONOR.md`.
