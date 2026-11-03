@@ -450,3 +450,20 @@ This tests a real HTTP exchange over the loopback TCP stack, but the server
 is an **isolated Dittofeed protocol test double**, not a running Dittofeed
 Community engine; it does not create segments/journeys or perform customer
 messaging. Production live E2E is still outstanding.
+
+## Write Key UUID contract correction (2026-11-03)
+
+The Dittofeed Community source `packages/backend-lib/src/auth.ts`
+validates the decoded HTTP Basic authorization in
+`validateWriteKey()` using `uuid.validate(secretKeyId)` **before**
+looking up the secret and its workspace. GreenGrapeMe's previous host
+adapter accepted arbitrary alphanumeric Write Key IDs, meaning its own
+tests could pass with a credential that Dittofeed would categorically
+reject. The adapter now requires a canonical UUID for
+`write_key_secret_id` and the offline/integration fixtures use an
+explicit example UUID. The Write Key **value** remains a separate secret
+and must come from the actual authorized workspace; no fixture value is
+a production credential.
+
+Upstream contract:
+https://github.com/dittofeed/dittofeed/blob/91277939a9afcee797ab2562025f6b02d823b00c/packages/backend-lib/src/auth.ts
