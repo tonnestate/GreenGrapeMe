@@ -115,11 +115,12 @@ class DittofeedOutboxTests(unittest.TestCase):
         self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
         self.assertFalse(result["data_sync_authorized"])
 
-    def test_null_source_data_fails_closed_without_exception(self):
+    def test_nontext_source_data_fails_closed_without_exception(self):
         self.verified()
         self.prepare()
         with self.store._db() as db:
-            db.execute("""UPDATE opportunities SET source_json=NULL
+            # SQLite TEXT NOT NULL still admits a BLOB of incorrect type.
+            db.execute("""UPDATE opportunities SET source_json=X'00'
                           WHERE tenant='tenant-a' AND opportunity_id='account-001'""")
         result=self.outbox.get("tenant-a","pilot-001","event-001")
         self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
