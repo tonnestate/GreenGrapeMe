@@ -106,7 +106,8 @@ class DittofeedPomeloEffects:
                 str(effect.get("effect_class")) != "IRREVERSIBLE" or
                 intent.get("effect_id") != attempt["effect_id"] or
                 intent.get("tool") != _TOOL or
-                intent.get("idempotency_key") != attempt["effect_id"]):
+                intent.get("idempotency_key") != attempt["effect_id"] or
+                set(intent.get("required_capabilities", [])) != _CAPABILITIES):
             return False
         expected = {
             "tenant": attempt["tenant"],

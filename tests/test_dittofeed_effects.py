@@ -8,7 +8,7 @@ import sys
 import unittest
 
 from greengrapeme.dittofeed_effects import (
-    DittofeedPomeloEffects, _TOOL, _PURPOSE,
+    DittofeedPomeloEffects, _TOOL, _PURPOSE, _CAPABILITIES,
 )
 from greengrapeme.dittofeed_outbox import DittofeedOutbox
 from greengrapeme.operations import SalesWorkspace
@@ -70,6 +70,7 @@ class Gateway:
             "effect_class": intent.effect_class,
             "intent": {"effect_id": intent.effect_id, "tool":intent.tool,
                        "idempotency_key":intent.idempotency_key,
+                       "required_capabilities":sorted(intent.required_capabilities),
                        "args":dict(intent.args)},
             "state":"DISPATCHED", "observation":None,
         }
@@ -199,6 +200,22 @@ class DittofeedEffectTests(unittest.TestCase):
 
     def test_returned_success_without_matching_durable_intent_is_unknown(self):
         gateway=Gateway("forged")
+        result=self.dispatch(gateway=gateway)
+        self.assertEqual(result["effect_state"],"DISPATCH_IN_FLIGHT")
+        self.assertFalse(result["provider_accepted"])
+        self.assertEqual(self.effects.reconcile(*self.args,gateway=gateway)[
+            "effect_state"],"DISPATCH_IN_FLIGHT")
+        self.assertEqual(len(gateway.calls),1)
+
+    def test_downgraded_durable_capabilities_cannot_confirm_receipt(self):
+        gateway=Gateway("success")
+        original=gateway.execute
+        def downgrade(intent,authority):
+            response=original(intent,authority)
+            gateway.store.records[intent.effect_id]["intent"][
+                "required_capabilities"]=["dittofeed:track"]
+            return response
+        gateway.execute=downgrade
         result=self.dispatch(gateway=gateway)
         self.assertEqual(result["effect_state"],"DISPATCH_IN_FLIGHT")
         self.assertFalse(result["provider_accepted"])

@@ -378,3 +378,14 @@ server. The host still must guarantee the real gateway's policy/capability
 checks and maintain authoritative final-hop consent, suppression and journey
 configuration. Offline tests prove zero provider requests for unfenced,
 uncertain or mid-policy modified claims.
+
+## Durable receipt capability integrity (2026-11-03)
+
+When reconciling a Dittofeed event, GreenGrapeMe additionally requires that
+the **stored PomeloMe EffectIntent** contains exactly the required
+`dittofeed:track` and `purpose:lifecycle-event-sync` capabilities. An
+otherwise `RECONCILED` observation with an absent/altered capability
+envelope remains unconfirmed, even if its receipt reports success.
+The actual PomeloMe policy must still independently authorize those
+capabilities before execution. Regression tests cover downgraded
+durable effect records, not just live provider request admission.
