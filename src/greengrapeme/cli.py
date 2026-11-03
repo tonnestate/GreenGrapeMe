@@ -7,6 +7,7 @@ import json
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
+from .dittofeed_lifecycle import DittofeedLifecycleProjection
 from .reply_effects import ReplyEffects
 from .missions import SalesMissionEngine
 from .plum_runtime import PlumMeSalesNeuron
@@ -64,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     pilot_report.add_argument("--pilot-id", required=True)
     cases = sub.add_parser("pilot-cases", help="List reported inbound sales cases")
     cases.add_argument("--pilot-id", required=True)
+    donor = sub.add_parser("dittofeed-preview",
+        help="Plan confirmed lifecycle events for Dittofeed; no API or messaging")
+    donor.add_argument("--pilot-id", required=True)
+    donor.add_argument("--limit", type=int, default=100)
     due = sub.add_parser("pilot-followups", help="Read due operator follow-ups; NO sending")
     due.add_argument("--pilot-id", required=True)
     due.add_argument("--limit", type=int, default=100)
@@ -209,6 +214,9 @@ def main(argv: list[str] | None = None) -> int:
         result = PilotLedger(store).list(a.tenant)
     elif a.command == "pilot-cases":
         result = PilotSalesFlow(store).list(a.tenant,a.pilot_id)
+    elif a.command == "dittofeed-preview":
+        result = DittofeedLifecycleProjection(store).preview(
+            a.tenant, a.pilot_id, limit=a.limit)
     elif a.command == "pilot-followups":
         result = PilotSalesFlow(store).due_followups(a.tenant,a.pilot_id,limit=a.limit)
     elif a.command == "pilot-inbound":
