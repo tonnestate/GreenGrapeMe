@@ -467,3 +467,14 @@ a production credential.
 
 Upstream contract:
 https://github.com/dittofeed/dittofeed/blob/91277939a9afcee797ab2562025f6b02d823b00c/packages/backend-lib/src/auth.ts
+
+## Corrupt receipt fail-closed handling (2026-11-03)
+
+The durable PomeloMe reconciliation path no longer assumes that
+`EffectIntent.required_capabilities` is always a valid iterable of
+strings. Missing, scalar, map, nested and duplicate capability values
+are rejected as unverified rather than triggering `TypeError` or
+`ValueError` while reading persisted evidence. An inconsistent
+stored effect class is likewise rejected. No follow-up POST occurs;
+the original effect remains claim-fenced for operator investigation.
+Regression tests explicitly corrupt saved receipt objects.

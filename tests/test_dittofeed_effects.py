@@ -243,6 +243,30 @@ class DittofeedEffectTests(unittest.TestCase):
             "effect_state"],"DISPATCH_IN_FLIGHT")
         self.assertEqual(len(gateway.calls),1)
 
+    def test_malformed_durable_capabilities_fail_closed_without_crash(self):
+        for invalid in (None, 42, {"unexpected": "capability"},
+                        [["dittofeed:track"]],
+                        ["dittofeed:track", "purpose:lifecycle-event-sync",
+                         "purpose:lifecycle-event-sync"]):
+            with self.subTest(invalid=invalid):
+                gateway=Gateway("success")
+                original=gateway.execute
+                def corrupt(intent, authority):
+                    result=original(intent,authority)
+                    gateway.store.records[intent.effect_id]["intent"][
+                        "required_capabilities"]=invalid
+                    return result
+                gateway.execute=corrupt
+                result=self.dispatch(gateway=gateway)
+                self.assertEqual(result["effect_state"],"DISPATCH_IN_FLIGHT")
+                self.assertFalse(result["provider_accepted"])
+                self.assertEqual(self.effects.reconcile(*self.args,gateway=gateway)[
+                    "effect_state"],"DISPATCH_IN_FLIGHT")
+                with self.store._db() as db:
+                    db.execute("""DELETE FROM dittofeed_pomelo_effects
+                                  WHERE tenant='tenant-a' AND pilot_id='pilot-001'
+                                    AND event_id='event-001'""")
+
     def test_provider_failure_not_revenue_or_delivery(self):
         result=self.dispatch(gateway=Gateway("failure"))
         self.assertEqual(result["effect_state"],"PROVIDER_FAILED")
