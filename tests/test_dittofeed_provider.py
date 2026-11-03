@@ -32,7 +32,10 @@ class FakeIntent:
 
 class FakeObservation:
     def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
+        self.success=kwargs.get("success")
+        self.external_ref=kwargs.get("external_ref")
+        self.message=kwargs.get("message")
+        self.data=kwargs.get("data")
 
 
 class FakeHTTPResponse:
