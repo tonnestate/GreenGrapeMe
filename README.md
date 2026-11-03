@@ -1,3 +1,5 @@
+![GreenGrapeMe – Neon-Banner](docs/GreenGrapeMe-Banner.png)
+
 # GreenGrapeMe
 
 **An autonomous sales organization for FruitStack — focused on verified business outcomes, not message volume.**
