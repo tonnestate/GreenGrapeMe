@@ -10,7 +10,7 @@ import ipaddress
 import re
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, build_opener, HTTPHandler, HTTPSHandler, HTTPRedirectHandler
+from urllib.request import Request, build_opener, HTTPHandler, HTTPRedirectHandler, ProxyHandler
 
 from .operations import SalesWorkspace
 
@@ -62,7 +62,7 @@ class DittofeedReadOnlyAdmin:
         self.workspace_id = workspace_id
         self._token = admin_token
         self.timeout_seconds = float(timeout_seconds)
-        self._transport = transport or build_opener(_NoRedirect(), HTTPHandler())
+        self._transport = transport or build_opener(ProxyHandler({}), _NoRedirect(), HTTPHandler())
 
     def _read(self, resource: str, key: str) -> list[dict]:
         url = (self.base_url + "/api/admin/" + resource + "/?"
@@ -77,7 +77,7 @@ class DittofeedReadOnlyAdmin:
                 if response.status != 200:
                     raise RuntimeError("Dittofeed admin API returned non-200 status")
                 payload = response.read(_MAX_BODY + 1)
-        except (HTTPError, URLError, OSError, TimeoutError) as exc:
+        except (HTTPError, URLError, OSError, TimeoutError):
             # Do not leak credentials, response contents or URL query details.
             raise RuntimeError("Dittofeed admin API unavailable or unauthorized") from None
         if len(payload) > _MAX_BODY:
@@ -105,7 +105,7 @@ class DittofeedReadOnlyAdmin:
             for item in items:
                 value = item.get("status")
                 name = value if isinstance(value, str) and value in (
-                    "Running", "Paused", "Not Started", "Running", "Draft",
+                    "Running", "Paused", "Not Started", "Draft",
                     "RUNNING", "PAUSED", "NOT_STARTED") else "OTHER_OR_UNKNOWN"
                 result[name] = result.get(name, 0) + 1
             return result
