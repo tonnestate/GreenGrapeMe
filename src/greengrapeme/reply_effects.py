@@ -21,6 +21,10 @@ from .pilot_metrics import _id
 _TOOL = "greengrapeme.send_authorized_reply"
 _CHANNEL = "EMAIL_REPLY"
 _PURPOSE = "ANSWER_EXISTING_INBOUND"
+_CAPABILITIES = frozenset({"communication:reply", "purpose:inbound-response"})
+_AUTH_CAPABILITIES = _CAPABILITIES | frozenset({
+    f"tool:{_TOOL}", "effect:irreversible",
+})
 _STATES_READY = frozenset({
     "INBOUND_REVIEW", "QUALIFIED_REPORTED", "FOLLOWUP_SCHEDULED",
     "FOLLOWUP_RECORDED", "MEETING_HELD_REPORTED", "PROPOSAL_DELIVERED_REPORTED"
@@ -142,8 +146,8 @@ class ReplyEffects:
             original=db.execute("""SELECT source_json FROM opportunities
                 WHERE tenant=? AND opportunity_id=?""",
                 (row["tenant"],row["opportunity_id"])).fetchone()
-        if (not original or hashlib.sha256(
-                original["source_json"].encode()).hexdigest()
+        if (not original or not isinstance(original["source_json"],str) or
+                hashlib.sha256(original["source_json"].encode()).hexdigest()
                 != row["case_source_sha256"]):
             raise PermissionError("source revision blocks reply")
         return case
@@ -170,6 +174,11 @@ class ReplyEffects:
         from pomelome.models import AuthorityEnvelope, EffectClass
         if not isinstance(authority,AuthorityEnvelope) or authority.is_expired():
             raise PermissionError("real nonexpired PomeloMe authority required")
+        # Do not delegate the ONLY capability check to a possibly
+        # misconfigured host gateway; the bridge must fail closed too.
+        if not _AUTH_CAPABILITIES.issubset(
+                getattr(authority, "capabilities", frozenset())):
+            raise PermissionError("reply PomeloMe effect capabilities missing")
         if not hasattr(gateway,"execute") or not hasattr(gateway,"store"):
             raise PermissionError("actual host-provided effect gateway required")
         if _TOOL not in getattr(gateway,"adapters",{}):
@@ -218,7 +227,8 @@ class ReplyEffects:
             if (not current or current["state"]!="PREPARED" or
                 not case_now or case_now["state"] not in _STATES_READY or
                 case_now["source_sha256"]!=row["case_source_sha256"] or blocked or
-                not source or hashlib.sha256(source["source_json"].encode()).hexdigest()
+                not source or not isinstance(source["source_json"],str) or
+                hashlib.sha256(source["source_json"].encode()).hexdigest()
                 != row["case_source_sha256"]):
                 raise PermissionError("source or consent basis changed before dispatch fence")
             db.execute("""UPDATE sales_pilot_reply_effects
@@ -235,9 +245,8 @@ class ReplyEffects:
             effect_id=row["effect_id"],tool=_TOOL,
             effect_class=EffectClass.IRREVERSIBLE,
             args={**request,"permission_receipt_ref":consent_ref},
-            required_capabilities=frozenset({
-                "communication:reply","purpose:inbound-response"
-            }),idempotency_key=row["effect_id"])
+            required_capabilities=_CAPABILITIES,
+            idempotency_key=row["effect_id"])
         try:
             result=gateway.execute(intent,authority)
         except Exception:
@@ -262,6 +271,12 @@ class ReplyEffects:
         if not isinstance(intent,dict) or not isinstance(intent.get("args"),dict):
             return False
         args=intent["args"]
+        capabilities=intent.get("required_capabilities")
+        if (not isinstance(capabilities,(list,tuple,set,frozenset)) or
+                any(not isinstance(item,str) for item in capabilities) or
+                len(capabilities)!=len(_CAPABILITIES) or
+                set(capabilities)!=_CAPABILITIES):
+            return False
         if (effect.get("effect_id")!=row["effect_id"] or
                 effect.get("tool")!=_TOOL or
                 str(effect.get("effect_class"))!="IRREVERSIBLE" or
