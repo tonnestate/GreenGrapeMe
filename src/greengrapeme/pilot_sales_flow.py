@@ -1,0 +1,253 @@
+"""Tenant-scoped, non-sending inbound B2B pilot sales case workflow.
+
+The local sales case is a *reported human workflow*, not legal authorization,
+a confirmed corporate identity, a communications provider or MangoMe truth.
+A case step creates its non-financial PilotLedger event in the SAME SQLite
+transaction. No generated draft/agent output can send, call or sign.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from dataclasses import asdict
+import hashlib
+import json
+
+from .operations import SalesWorkspace
+from .pilot_metrics import PilotLedger, _id, _instant
+from .sales import Opportunity, Evidence
+
+
+_STEPS = {
+    "INBOUND_REVIEW": {"QUALIFIED_REPORTED", "CLOSED_LOST"},
+    "QUALIFIED_REPORTED": {"FOLLOWUP_SCHEDULED", "MEETING_HELD_REPORTED", "CLOSED_LOST"},
+    "FOLLOWUP_SCHEDULED": {"FOLLOWUP_RECORDED", "MEETING_HELD_REPORTED", "CLOSED_LOST"},
+    "FOLLOWUP_RECORDED": {"FOLLOWUP_SCHEDULED", "MEETING_HELD_REPORTED", "CLOSED_LOST"},
+    "MEETING_HELD_REPORTED": {"PROPOSAL_DELIVERED_REPORTED", "CLOSED_LOST"},
+    "PROPOSAL_DELIVERED_REPORTED": {"DEAL_SIGNED_REPORTED", "CLOSED_LOST"},
+    "DEAL_SIGNED_REPORTED": set(),
+    "CLOSED_LOST": set(),
+}
+_LEDGER_EVENT = {
+    "QUALIFIED_REPORTED": "LEAD_ACCEPTED",
+    "MEETING_HELD_REPORTED": "MEETING_HELD",
+    "PROPOSAL_DELIVERED_REPORTED": "PROPOSAL_DELIVERED",
+    "DEAL_SIGNED_REPORTED": "DEAL_SIGNED",
+}
+_CHANNELS = {"WEB_FORM", "CRM_INBOUND", "CUSTOMER_REFERRAL", "EXISTING_CUSTOMER"}
+
+
+def _reference(ref: str) -> str:
+    if (not isinstance(ref, str) or len(ref) < 12 or len(ref) > 1024 or
+            any(ch.isspace() for ch in ref) or
+            not ref.startswith(("https://", "urn:"))):
+        raise ValueError("source evidence requires an HTTPS or URN reference")
+    return ref
+
+
+def _future_date(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("follow-up requires an ISO timestamp")
+    try:
+        date = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("invalid follow-up timestamp") from exc
+    if date.tzinfo is None or date.utcoffset() is None:
+        raise ValueError("follow-up timestamp must include its timezone")
+    date = date.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if not now < date <= now + timedelta(days=365):
+        raise ValueError("follow-up due date must be within next 365 days")
+    return date.isoformat()
+
+
+class PilotSalesFlow:
+    def __init__(self, store: SalesWorkspace):
+        self.store = store
+        # Reuse the existing commercial evidence ledger, not another CRM or
+        # payment/truth schema.
+        PilotLedger(store)
+        with store._db() as db:
+            db.executescript("""
+            CREATE TABLE IF NOT EXISTS sales_pilot_cases (
+                tenant TEXT NOT NULL, pilot_id TEXT NOT NULL, case_id TEXT NOT NULL,
+                opportunity_id TEXT NOT NULL, reported_channel TEXT NOT NULL,
+                inbound_ref TEXT NOT NULL, reporter_ref TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL,
+                company_name TEXT NOT NULL, state TEXT NOT NULL,
+                next_followup_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                PRIMARY KEY(tenant,pilot_id,case_id),
+                UNIQUE(tenant,opportunity_id));
+            CREATE TABLE IF NOT EXISTS sales_pilot_case_steps (
+                tenant TEXT NOT NULL, pilot_id TEXT NOT NULL, case_id TEXT NOT NULL,
+                step_id TEXT NOT NULL, from_state TEXT NOT NULL, to_state TEXT NOT NULL,
+                evidence_ref TEXT NOT NULL, reporter_ref TEXT NOT NULL,
+                followup_at TEXT, occurred_at TEXT NOT NULL,
+                PRIMARY KEY(tenant,pilot_id,case_id,step_id));
+            CREATE INDEX IF NOT EXISTS i_pilot_case_followup
+                ON sales_pilot_cases(tenant,state,next_followup_at);
+            """)
+
+    def open_inbound(self, tenant: str, pilot_id: str, case_id: str, *,
+                     company_name: str, channel: str, evidence_ref: str,
+                     reporter_ref: str) -> dict:
+        """Import an actual *reported* inbound lead; do not infer consent."""
+        pilot = PilotLedger(self.store).get(tenant, pilot_id)
+        case_id = _id(case_id, "case_id")
+        reporter_ref = _id(reporter_ref, "reporter_ref")
+        evidence_ref = _reference(evidence_ref)
+        if channel not in _CHANNELS:
+            raise ValueError("inbound origin must be an existing authorized business source")
+        if not isinstance(company_name, str) or not 1 <= len(company_name.strip()) <= 160:
+            raise ValueError("invalid company name")
+        company_name = company_name.strip()
+        oid = "inbound-" + hashlib.sha256(
+            (pilot_id + ":" + case_id).encode()).hexdigest()[:32]
+        observation = Opportunity(
+            opportunity_id=oid, company_name=company_name,
+            offer_id=pilot["offer_id"],
+            evidence=(Evidence(source=channel.lower(), reference=evidence_ref,
+                               claim="Reported inbound company inquiry; permission and legal identity not verified",
+                               kind="OTHER"),),
+            verified_company=False)
+        source_sha = hashlib.sha256(json.dumps(asdict(observation), sort_keys=True).encode()).hexdigest()
+        # Source ingest is independently idempotent. On interrupted startup
+        # the next identical call recovers the durable case row.
+        intake = self.store.ingest(tenant, [observation])
+        if intake["conflict"]:
+            raise ValueError("inbound source revision requires independent review")
+        with self.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute("""SELECT * FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? AND case_id=?""",
+                (tenant,pilot_id,case_id)).fetchone()
+            if old:
+                if (old["opportunity_id"] != oid or old["company_name"] != company_name or
+                        old["reported_channel"] != channel or
+                        old["inbound_ref"] != evidence_ref or old["reporter_ref"] != reporter_ref or
+                        old["source_sha256"] != source_sha):
+                    raise ValueError("inbound case ID was reused with different source")
+            else:
+                other = db.execute("""SELECT pilot_id FROM sales_pilot_cases
+                    WHERE tenant=? AND opportunity_id=?""",(tenant,oid)).fetchone()
+                if other:
+                    raise ValueError("inbound account already bound to another pilot")
+                now = self.store._now()
+                db.execute("""INSERT INTO sales_pilot_cases VALUES
+                    (?,?,?,?,?,?,?,?,?,'INBOUND_REVIEW',NULL,?,?)""",
+                    (tenant,pilot_id,case_id,oid,channel,evidence_ref,
+                     reporter_ref,source_sha,company_name,now,now))
+                self.store._audit(db,tenant,oid,"PILOT_INBOUND_REPORTED",
+                                  {"pilot_id":pilot_id,"case_id":case_id,
+                                   "channel":channel,"source_ref":evidence_ref,
+                                   "identity_verified":False,"contact_authority":"NONE"})
+        return self.get(tenant,pilot_id,case_id)
+
+    def get(self, tenant: str, pilot_id: str, case_id: str) -> dict:
+        pilot=PilotLedger(self.store).get(tenant,pilot_id)
+        case_id=_id(case_id,"case_id")
+        with self.store._db() as db:
+            row=db.execute("""SELECT * FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? AND case_id=?""",
+                (tenant,pilot_id,case_id)).fetchone()
+            if row is None:
+                raise LookupError("unknown tenant pilot case")
+            suppressed=db.execute("""SELECT 1 FROM suppressions
+                WHERE tenant=? AND opportunity_id=?""",
+                (tenant,row["opportunity_id"])).fetchone() is not None
+        return {**dict(row),"suppressed":suppressed,"offer_id":pilot["offer_id"],
+                "identity_verified":False,"contact_authority":"NONE",
+                "reported_only":True,"external_actions_executed":0}
+
+    def step(self, tenant: str, pilot_id: str, case_id: str, *,
+             step_id: str, expected_state: str, to_state: str,
+             reporter_ref: str, evidence_ref: str,
+             followup_at: str = "") -> dict:
+        """CAS transition with one durable PilotLedger event per sales milestone."""
+        pilot = PilotLedger(self.store).get(tenant,pilot_id)
+        case_id=_id(case_id,"case_id")
+        step_id=_id(step_id,"step_id")
+        reporter_ref=_id(reporter_ref,"reporter_ref")
+        evidence_ref=_reference(evidence_ref)
+        if expected_state not in _STEPS or to_state not in _STEPS.get(expected_state,set()):
+            raise ValueError("unsupported sales case transition")
+        due = _future_date(followup_at) if to_state=="FOLLOWUP_SCHEDULED" else None
+        if to_state!="FOLLOWUP_SCHEDULED" and followup_at:
+            raise ValueError("followup_at applies only to FOLLOWUP_SCHEDULED")
+        with self.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            current=db.execute("""SELECT * FROM sales_pilot_cases WHERE
+                tenant=? AND pilot_id=? AND case_id=?""",
+                (tenant,pilot_id,case_id)).fetchone()
+            if not current:
+                raise LookupError("unknown tenant pilot case")
+            prior=db.execute("""SELECT from_state,to_state,evidence_ref,reporter_ref,
+                       followup_at FROM sales_pilot_case_steps WHERE
+                       tenant=? AND pilot_id=? AND case_id=? AND step_id=?""",
+                       (tenant,pilot_id,case_id,step_id)).fetchone()
+            if prior:
+                if tuple(prior)!=(expected_state,to_state,evidence_ref,reporter_ref,due):
+                    raise ValueError("step ID reused with changed evidence")
+                return self.get(tenant,pilot_id,case_id)
+            if current["state"]!=expected_state:
+                raise ValueError("sales state changed; refresh before submitting a new step")
+            suppressed=db.execute("""SELECT 1 FROM suppressions WHERE
+                    tenant=? AND opportunity_id=?""",
+                    (tenant,current["opportunity_id"])).fetchone()
+            if suppressed and to_state!="CLOSED_LOST":
+                raise PermissionError("account suppression blocks further commercial steps")
+            linked=db.execute("""SELECT source_json,offer_id FROM opportunities
+                WHERE tenant=? AND opportunity_id=?""",
+                (tenant,current["opportunity_id"])).fetchone()
+            if (not linked or linked["offer_id"] != pilot["offer_id"] or
+                    hashlib.sha256(linked["source_json"].encode()).hexdigest() != current["source_sha256"]):
+                raise ValueError("original inbound opportunity source changed")
+            now=self.store._now()
+            event_kind=_LEDGER_EVENT.get(to_state)
+            if event_kind:
+                eid="case-" + hashlib.sha256(
+                    (pilot_id+":"+case_id+":"+to_state).encode()).hexdigest()[:32]
+                existing=db.execute("""SELECT opportunity_id,event_kind,amount_cents,
+                         evidence_ref,reporter_ref FROM sales_pilot_events
+                         WHERE tenant=? AND pilot_id=? AND event_id=?""",
+                         (tenant,pilot_id,eid)).fetchone()
+                if existing:
+                    if tuple(existing)!=(current["opportunity_id"],event_kind,0,
+                                         evidence_ref,reporter_ref):
+                        raise ValueError("existing PilotLedger milestone conflicts with new case step")
+                else:
+                    db.execute("""INSERT INTO sales_pilot_events VALUES
+                        (?,?,?,?,?,0,'EUR',?,?,?,'REPORTED',NULL,NULL,NULL,?)""",
+                        (tenant,pilot_id,eid,current["opportunity_id"],event_kind,
+                         now,evidence_ref,reporter_ref,now))
+                    self.store._audit(db,tenant,pilot_id,"PILOT_EVENT_REPORTED",
+                                      {"event_id":eid,"kind":event_kind,
+                                       "amount_cents":0,
+                                       "opportunity_id":current["opportunity_id"],
+                                       "not_independently_confirmed":True})
+            db.execute("""INSERT INTO sales_pilot_case_steps
+                VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (tenant,pilot_id,case_id,step_id,expected_state,to_state,
+                 evidence_ref,reporter_ref,due,now))
+            db.execute("""UPDATE sales_pilot_cases SET state=?,next_followup_at=?,
+                updated_at=? WHERE tenant=? AND pilot_id=? AND case_id=? AND state=?""",
+                (to_state,due,now,tenant,pilot_id,case_id,expected_state))
+            self.store._audit(db,tenant,current["opportunity_id"],"PILOT_CASE_STEP_REPORTED",
+                              {"pilot_id":pilot_id,"case_id":case_id,
+                               "step_id":step_id,"from":expected_state,"to":to_state,
+                               "evidence_ref":evidence_ref,"reporter_ref":reporter_ref,
+                               "external_effects":0,"verified":False})
+        return self.get(tenant,pilot_id,case_id)
+
+    def list(self, tenant: str, pilot_id: str, *, limit: int = 100) -> dict:
+        PilotLedger(self.store).get(tenant,pilot_id)
+        if type(limit) is not int or not 1<=limit<=1000:
+            raise ValueError("invalid case limit")
+        with self.store._db() as db:
+            rows=db.execute("""SELECT case_id FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? ORDER BY created_at,case_id LIMIT ?""",
+                (tenant,pilot_id,limit)).fetchall()
+            total=db.execute("""SELECT count(*) FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=?""",(tenant,pilot_id)).fetchone()[0]
+        return {"items":[self.get(tenant,pilot_id,r["case_id"]) for r in rows],
+                "total":total, "count_shown":len(rows),
+                "all_sales_events_self_reported_until_external_confirmation":True}

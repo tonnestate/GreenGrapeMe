@@ -1,0 +1,502 @@
+"""Offline tests for UI-created, durable FruitStack Discovery jobs."""
+from __future__ import annotations
+
+import asyncio
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json
+import unittest
+from types import SimpleNamespace
+
+from greengrapeme.blackberry_bridge import research_account
+from wsgiref.util import setup_testing_defaults
+
+from greengrapeme.discovery_catalog import DiscoveryCatalog
+from greengrapeme.discovery_jobs import (
+    DiscoveryJobQueue, DiscoverySpec, TrustedWorkAdmission
+)
+from greengrapeme.live_discovery import SourceCapacityExceeded, SourceSnapshotError
+from greengrapeme.missions import NeuronProposal
+from greengrapeme.operations import SalesWorkspace
+from greengrapeme.sales import Evidence, Opportunity
+from greengrapeme.webapp import create_app
+
+
+JOB = "a" * 24
+TOKEN = "another-local-preview-key-of-sufficient-length"
+
+
+class StubSource:
+    def __init__(self, *, create_error=False, run_error=False):
+        self.calls = []
+        self.name = "Example GmbH"
+        self.create_error = create_error
+        self.run_error = run_error
+
+    async def create(self, spec):
+        self.calls.append("create")
+        if self.create_error:
+            raise TimeoutError("response lost from StarFruitMe")
+        return {"job_id": JOB, "status": "PLANNED_NOT_EXECUTED"}
+
+    async def run(self, job_id, *, max_searches):
+        self.calls.append("run")
+        if self.run_error:
+            raise TimeoutError("source ran but receipt was lost")
+        return {"summary": {"job_id": job_id,
+                            "job_state": "COMPLETED_NO_KNOWN_GAPS",
+                            "searches": max_searches}}
+
+    async def status(self, job_id):
+        self.calls.append("status")
+        return {"job_id": job_id, "job_state": "COMPLETED_NO_KNOWN_GAPS",
+                "source": "STARFRUITME_DISCOVERY_STAGING"}
+
+    async def read(self, job_id, offer_id, limit):
+        self.calls.append("read")
+        return [Opportunity(
+            "starfruitme:" + job_id + ":candidate1", self.name, offer_id,
+            (Evidence("starfruitme","https://example.org/observed",
+                      "Observed source, legal identity not verified",
+                      "DISCOVERY_OBSERVATION"),), verified_company=False
+        )]
+
+
+class StubBlackberryClient:
+    def __init__(self):
+        self.calls = []
+
+    async def call_tool(self, tool, arguments):
+        self.calls.append((tool, arguments))
+        if tool != "blackberry_plan_company":
+            raise AssertionError("Unexpected external website/contact call")
+        return SimpleNamespace(is_error=False,
+                structured_content={"result": json.dumps(
+                    {"company_key": "example", "steps": [{"kind": "review_legal_identity"}]}
+                )})
+
+
+class StubResearcher:
+    def __init__(self, *, fail=False):
+        self.client = StubBlackberryClient()
+        self.calls = []
+        self.fail = fail
+
+    async def research(self, store, tenant, opportunity_id, objective):
+        self.calls.append(opportunity_id)
+        if self.fail:
+            raise TimeoutError("Blackberry receipt ambiguous")
+        return await research_account(store, tenant, opportunity_id,
+                                      objective=objective, client=self.client)
+
+
+class StubNeuron:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(self, role, objective, context):
+        self.calls.append(role)
+        account = context["accounts"][0]
+        return NeuronProposal({
+            "summary": "Source observation requires independent confirmation",
+            "recommendations": [{
+                "opportunity_id": account["opportunity_id"],
+                "rationale": "Research stage: legal entity is not verified",
+                "evidence_refs": [account["evidence"][0]["reference"]],
+                "next_action": "REVIEW",
+            }]
+        }, "fixture-" + role, 0.0)
+
+
+class StubMango:
+    def __init__(self, workspace):
+        self.workspace = str(Path(workspace).resolve())
+        self.calls = 0
+
+    def attached_workspace(self):
+        return self.workspace
+
+    def enter_work(self, **kwargs):
+        self.calls += 1
+        return {
+            "project": {"entity_id": "project-canonical"},
+            "family": {"entity_id": "family-canonical"},
+            "work_identity": {"entity_id": "work-canonical",
+                              "family_id": "family-canonical",
+                              "project_id": "project-canonical"},
+            "normative_baseline": {"entity_id": "baseline-canonical"},
+            "spec": None, "spec_admitted": False,
+            "work": {"plan": {"entity_id": "plan-canonical"},
+                     "slice": {"entity_id": "slice-canonical"}},
+            "disposition": "NEW_WORK_ADMITTED",
+            "admission": {"identity_role": "DEDUP_HINT_ONLY"},
+            "persistence": {"identity": "CANONICAL", "working_state": "PROGRESSIVE"},
+        }
+
+
+def old_spec():
+    return DiscoverySpec(mode="existing", job_id=JOB, offer_id="offer",
+                         objective="Find source-grounded customers", icp="German B2B software")
+
+
+def new_spec(*, ack=True):
+    return DiscoverySpec(mode="new", offer_id="offer",
+                         objective="Find source-grounded customers", icp="German B2B software",
+                         nace="68.12", south=53.0, west=9.0, north=53.2, east=9.3,
+                         seed_km=10, max_searches=2, max_accounts=10,
+                         source_rights_acknowledged=ack)
+
+
+def call(app, path, *, method="GET", token=TOKEN, payload=None, origin=None,
+         content_type="application/json", tenant="other"):
+    body=json.dumps(payload).encode() if payload is not None else b""
+    env={"REQUEST_METHOD":method,"PATH_INFO":path,"QUERY_STRING":"tenant="+tenant,
+         "wsgi.input": BytesIO(body), "CONTENT_LENGTH":str(len(body)),
+         "CONTENT_TYPE":content_type,
+         "HTTP_HOST":"127.0.0.1:8765"}
+    if token: env["HTTP_X_GREEN_GRAPE_TOKEN"]=token
+    if origin is not None:env["HTTP_ORIGIN"]=origin
+    setup_testing_defaults(env)
+    result={}
+    def start(status,headers):
+        result["code"]=int(status.split(" ")[0])
+    raw=b"".join(app(env,start))
+    return result["code"],json.loads(raw)
+
+
+class DiscoveryJobTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=TemporaryDirectory()
+        self.store=SalesWorkspace(Path(self.temp.name)/"sales.sqlite")
+        self.jobs=DiscoveryJobQueue(self.store)
+        self.source=StubSource()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def runjob(self, tenant="A", rid="job-00000001", **kwargs):
+        kwargs.setdefault("allowed_existing_jobs", frozenset({JOB}))
+        return asyncio.run(self.jobs.advance(tenant,rid,self.source,**kwargs))
+
+    def test_idempotent_creation_and_tenant_isolation(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.jobs.create("A","job-00000001",old_spec())
+        self.assertEqual(len(self.jobs.list("A")["items"]),1)
+        self.assertEqual(self.jobs.list("B")["items"],[])
+        with self.assertRaises(LookupError):
+            self.jobs.get("B","job-00000001")
+        with self.assertRaisesRegex(ValueError,"reused"):
+            self.jobs.create("A","job-00000001",new_spec())
+
+    def test_existing_job_progresses_to_canonical_admission_wait(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        result=self.runjob()
+        self.assertEqual(result["state"],"AWAITING_BLACKBERRY")
+        self.assertEqual(result["result"]["discovered"],1)
+        self.assertEqual(self.source.calls,["status","read"])
+        self.assertEqual(self.store.overview("A")["opportunities"],1)
+        self.assertEqual(self.runjob()["state"],"AWAITING_BLACKBERRY")
+        self.assertEqual(self.source.calls,["status","read"])
+
+    def test_existing_job_without_host_binding_is_blocked_before_any_source_read(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        r=asyncio.run(self.jobs.advance("A","job-00000001",self.source))
+        self.assertEqual(r["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(r["error_kind"],"EXISTING_SOURCE_JOB_NOT_AUTHORIZED")
+        self.assertEqual(self.source.calls,[])
+
+    def test_full_path_with_explicit_trusted_mango_and_neuron(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        host=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(
+            actor_id="authorized-user", workspace=self.temp.name,
+            current_user_request="Find source-grounded B2B customers", backend=host)
+        neuron=StubNeuron()
+        researcher=StubResearcher()
+        pending=self.runjob(admission=admission,neuron=neuron)
+        self.assertEqual(pending["state"],"AWAITING_BLACKBERRY")
+        self.assertEqual(host.calls,0)
+        review=self.runjob(admission=admission,neuron=neuron,researcher=researcher)
+        self.assertEqual(review["state"],"AWAITING_BLACKBERRY")
+        self.assertEqual(researcher.calls,["starfruitme:"+JOB+":candidate1"])
+        result=self.runjob(admission=admission,neuron=neuron,researcher=researcher)
+        self.assertEqual(result["state"],"REVIEW_READY")
+        self.assertEqual(neuron.calls,["HEAD_OF_SALES","MARKET_INTELLIGENCE","SDR"])
+        self.assertEqual(host.calls,1)
+        self.assertEqual(self.runjob(admission=admission,neuron=neuron,researcher=researcher)["state"],"REVIEW_READY")
+        self.assertEqual(host.calls,1)
+        self.assertEqual(len(neuron.calls),3)
+
+    def test_blackberry_failure_is_fenced_and_never_blindly_retried(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher(fail=True)
+        result=self.runjob(researcher=researcher)
+        self.assertEqual(result["state"],"BLACKBERRY_UNCERTAIN")
+        self.assertEqual(result["error_kind"],"BLACKBERRY_RESEARCH_UNCERTAIN")
+        self.runjob(researcher=researcher)
+        self.assertEqual(len(researcher.calls),1)
+        self.assertIsNone(self.store.overview("A").get("outbound_sent"))
+
+    def test_blackberry_plan_is_required_before_canonical_work(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        mango=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(actor_id="operator",workspace=self.temp.name,
+                current_user_request="Find verified prospects",backend=mango)
+        pending=self.runjob(admission=admission,neuron=StubNeuron())
+        self.assertEqual(pending["state"],"AWAITING_BLACKBERRY")
+        self.assertEqual(mango.calls,0)
+        researcher=StubResearcher()
+        self.runjob(researcher=researcher)
+        result=self.runjob(researcher=researcher)
+        self.assertEqual(result["state"],"AWAITING_CANONICAL_WORK")
+        self.assertEqual(result["result"]["contact_authority"],"NONE")
+        self.assertEqual(result["result"]["legal_identity"],"NOT_VERIFIED")
+        self.assertEqual([x[0] for x in researcher.client.calls],
+                         ["blackberry_plan_company"])
+
+    def test_zero_discovery_explicitly_blocks(self):
+        class EmptySource(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                self.calls.append("read")
+                return []
+        self.jobs.create("A","job-00000001",old_spec())
+        outcome=asyncio.run(self.jobs.advance(
+            "A","job-00000001",EmptySource(),
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(outcome["state"],"BLOCKED_NO_SOURCE")
+        self.assertEqual(outcome["result"]["discovered"],0)
+
+    def test_research_from_another_objective_cannot_be_reused(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher()
+        self.runjob(researcher=researcher)
+        self.runjob(researcher=researcher)
+        self.jobs.create("A","job-00000002",DiscoverySpec(
+            mode="existing",job_id=JOB,offer_id="offer",
+            objective="Different commercial objective",icp="German B2B software"))
+        self.runjob(rid="job-00000002")
+        result=self.runjob(rid="job-00000002",researcher=researcher)
+        self.assertEqual(result["state"],"BLOCKED_BLACKBERRY_REVISION")
+        self.assertEqual(result["error_kind"],"RESEARCH_CONTEXT_CHANGED")
+        self.assertEqual(len(researcher.calls),1)
+
+    def test_host_revocation_blocks_existing_source_before_status_or_read(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.jobs._transition("A","job-00000001","QUEUED","SOURCE_READY",
+                              external_job_id=JOB)
+        result=asyncio.run(self.jobs.advance("A","job-00000001",self.source))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(result["error_kind"],"EXISTING_SOURCE_JOB_ACCESS_REVOKED")
+        self.assertEqual(self.source.calls,[])
+        self.jobs.create("A","job-00000002",old_spec())
+        self.jobs._transition("A","job-00000002","QUEUED","SOURCE_DONE",
+                              external_job_id=JOB)
+        result=asyncio.run(self.jobs.advance("A","job-00000002",self.source))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(self.source.calls,[])
+
+    def test_suppression_after_blackberry_plan_blocks_mango(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher()
+        self.runjob(researcher=researcher)
+        with self.store._db() as db:
+            db.execute("INSERT INTO suppressions VALUES(?,?,?,?)",
+                       ("A","starfruitme:"+JOB+":candidate1","OPT_OUT",
+                        self.store._now()))
+        host=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(actor_id="operator",workspace=self.temp.name,
+                current_user_request="Find customers",backend=host)
+        result=self.runjob(researcher=researcher,admission=admission,
+                           neuron=StubNeuron())
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(host.calls,0)
+
+    def test_new_source_denied_without_host_rights_and_ack(self):
+        self.jobs.create("A","job-00000001",new_spec(ack=True))
+        result=self.runjob(allow_external_source=False)
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(self.source.calls,[])
+        self.jobs.create("A","job-00000002",new_spec(ack=False))
+        other=self.runjob(rid="job-00000002",allow_external_source=True)
+        self.assertEqual(other["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(self.source.calls,[])
+
+    def test_new_source_bounded_create_run_and_import(self):
+        self.jobs.create("A","job-00000001",new_spec())
+        result=self.runjob(allow_external_source=True)
+        self.assertEqual(result["state"],"AWAITING_BLACKBERRY")
+        self.assertEqual(result["external_job_id"],JOB)
+        self.assertEqual(self.source.calls,["create","run","read"])
+        self.assertEqual(result["result"]["discovered"],1)
+
+    def test_uncertain_creation_never_retried(self):
+        source=StubSource(create_error=True)
+        self.jobs.create("A","job-00000001",new_spec())
+        r=asyncio.run(self.jobs.advance("A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(r["state"],"ADMISSION_UNCERTAIN")
+        asyncio.run(self.jobs.advance("A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(source.calls,["create"])
+
+    def test_uncertain_run_never_retried(self):
+        source=StubSource(run_error=True)
+        self.jobs.create("A","job-00000001",new_spec())
+        r=asyncio.run(self.jobs.advance("A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(r["state"],"ADMISSION_UNCERTAIN")
+        self.assertEqual(source.calls,["create","run"])
+        asyncio.run(self.jobs.advance("A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(source.calls,["create","run"])
+
+
+    def test_existing_source_in_progress_does_not_create_missions(self):
+        class PartialSource(StubSource):
+            async def status(self, job_id):
+                self.calls.append("status")
+                return {"job_id": job_id, "job_state": "IN_PROGRESS"}
+        source=PartialSource()
+        self.jobs.create("A","job-00000001",old_spec())
+        result=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_COVERAGE")
+        self.assertEqual(result["result"]["source_job_state"],"IN_PROGRESS")
+        self.assertEqual(result["result"]["imported"],0)
+        self.assertEqual(source.calls,["status"])
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_new_source_with_search_gaps_is_not_reported_as_complete(self):
+        class GappedSource(StubSource):
+            async def run(self, job_id, *, max_searches):
+                self.calls.append("run")
+                return {"summary":{"job_id":job_id,"job_state":"COMPLETED_WITH_GAPS"}}
+        source=GappedSource()
+        self.jobs.create("A","job-00000001",new_spec())
+        result=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_COVERAGE")
+        self.assertEqual(result["result"]["source_job_state"],"COMPLETED_WITH_GAPS")
+        self.assertEqual(source.calls,["create","run"])
+        self.assertEqual(result["result"]["imported"],0)
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_unknown_source_status_does_not_make_complete_claim(self):
+        class UnknownSource(StubSource):
+            async def status(self, job_id):
+                self.calls.append("status")
+                return {"job_id":job_id}
+        source=UnknownSource()
+        self.jobs.create("A","job-00000001",old_spec())
+        result=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_COVERAGE")
+        self.assertEqual(result["result"]["source_job_state"],"UNKNOWN")
+        self.assertEqual(source.calls,["status"])
+
+    def test_source_overflow_blocks_without_importing_partial_accounts(self):
+        class OverflowSource(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                raise SourceCapacityExceeded(1201, limit)
+        source = OverflowSource()
+        self.jobs.create("A","job-00000001",old_spec())
+        outcome = asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(outcome["state"],"BLOCKED_SOURCE_CAPACITY")
+        self.assertEqual(outcome["error_kind"],"SOURCE_EXCEEDS_ADMITTED_ACCOUNT_LIMIT")
+        self.assertEqual(outcome["result"]["total_matching"],1201)
+        self.assertEqual(outcome["result"]["imported"],0)
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_inconsistent_pagination_blocks_with_no_partial_import(self):
+        class DriftingSource(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                raise SourceSnapshotError("source total changed between pages")
+        self.jobs.create("A","job-00000001",old_spec())
+        outcome = asyncio.run(self.jobs.advance(
+            "A","job-00000001",DriftingSource(),
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(outcome["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(outcome["error_kind"],"SOURCE_PAGINATION_INCONSISTENT")
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_account_limit_up_to_1000_is_valid(self):
+        candidate = DiscoverySpec(mode="existing", job_id=JOB,
+            offer_id="offer", objective="Find B2B leads", icp="Companies",
+            max_accounts=1000)
+        self.assertEqual(candidate.max_accounts, 1000)
+        with self.assertRaisesRegex(ValueError,"max_accounts"):
+            DiscoverySpec(mode="existing", job_id=JOB,
+                offer_id="offer",objective="Find",icp="Companies",max_accounts=1001)
+
+    def test_source_revision_conflict_blocks(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.store.ingest("A",[Opportunity(
+            "starfruitme:"+JOB+":candidate1","Old identity","offer",
+            (Evidence("starfruitme","https://example.org/observed",
+                      "Observed source","DISCOVERY_OBSERVATION"),))])
+        result=self.runjob()
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+
+    def test_worker_only_picks_queued_scoped_jobs(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.jobs.create("B","job-00000002",old_spec())
+        r=asyncio.run(self.jobs.run_next(
+            "A",self.source,allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(r["state"],"AWAITING_BLACKBERRY")
+        self.assertIsNone(asyncio.run(self.jobs.run_next("A",self.source)))
+        self.assertEqual(self.jobs.get("B","job-00000002")["state"],"QUEUED")
+
+    def test_strict_geography_and_budgets(self):
+        with self.assertRaisesRegex(ValueError,"German"):
+            DiscoverySpec(mode="new",offer_id="offer",objective="x",icp="y",
+                          nace="68.12",south=0,west=0,north=1,east=1)
+        with self.assertRaisesRegex(ValueError,"max_searches"):
+            DiscoverySpec(mode="existing",job_id=JOB,offer_id="o",objective="x",
+                          icp="y",max_searches=100)
+        with self.assertRaisesRegex(ValueError,"unexpected"):
+            DiscoverySpec.parse({"mode":"existing","job_id":JOB,
+                 "offer_id":"o","objective":"x","icp":"y","auto_send":True})
+
+    def test_http_create_requires_same_origin_token_and_json(self):
+        app=create_app(DiscoveryCatalog(self.store),tenant="A",token=TOKEN)
+        payload={"request_id":"job-00000001","spec":{
+            "mode":"existing","job_id":JOB,"offer_id":"offer",
+            "objective":"Find customers","icp":"German B2B"}}
+        code,_=call(app,"/api/discovery-jobs",method="POST",payload=payload,token="")
+        self.assertEqual(code,401)
+        code,_=call(app,"/api/discovery-jobs",method="POST",payload=payload,origin="https://attacker.example")
+        self.assertEqual(code,403)
+        code,_=call(app,"/api/discovery-jobs",method="POST",payload=payload,origin="http://127.0.0.1:8765",content_type="text/plain")
+        self.assertEqual(code,415)
+        code,r=call(app,"/api/discovery-jobs",method="POST",payload=payload,origin="http://127.0.0.1:8765")
+        self.assertEqual(code,202)
+        self.assertEqual(r["state"],"QUEUED")
+        code,r=call(app,"/api/discovery-jobs")
+        self.assertEqual(code,200)
+        self.assertEqual(len(r["items"]),1)
+        code,r=call(app,"/api/discovery-job")
+        self.assertEqual(code,400)
+        code,r=call(app,"/api/discovery-jobs",method="POST",payload=payload,origin="http://127.0.0.1:8765",token="bad")
+        self.assertEqual(code,401)
+        # The HTTP handler ignores any client-specified tenant.
+        self.assertEqual(self.jobs.list("B")["items"],[])
+
+    def test_http_never_runs_collector_inline(self):
+        app=create_app(DiscoveryCatalog(self.store),tenant="A",token=TOKEN)
+        payload={"request_id":"job-00000001","spec":{
+            "mode":"new","offer_id":"offer","objective":"Research",
+            "icp":"German B2B","nace":"68.12",
+            "south":53.0,"west":9.0,"north":53.2,"east":9.3,
+            "source_rights_acknowledged":True}}
+        code,r=call(app,"/api/discovery-jobs",method="POST",payload=payload,origin="http://127.0.0.1:8765")
+        self.assertEqual(code,202)
+        self.assertEqual(r["state"],"QUEUED")
+        self.assertEqual(self.source.calls,[])
+
+
+if __name__ == "__main__":
+    unittest.main()
