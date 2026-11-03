@@ -117,7 +117,11 @@ async def check_starfruit_source(job_id: str, authorized_jobs: frozenset[str],
             return _blocked("StarFruitMe status is not a structured record")
         if status.get("job_id") != job_id:
             return _blocked("StarFruitMe status job identity mismatch")
-        return _pass("Existing StarFruitMe job returned its matching source status; no collection performed")
+        # A matching job ID is not evidence of complete source coverage.
+        # Unknown, running, partially complete and missing states fail closed.
+        if status.get("job_state") != "COMPLETED_NO_KNOWN_GAPS":
+            return _blocked("StarFruitMe source coverage is not completed without known gaps")
+        return _pass("Existing authorized StarFruitMe job is complete without known gaps; no collection performed")
     except Exception as exc:
         return _blocked("StarFruitMe source unavailable/incompatible: " + type(exc).__name__)
 
