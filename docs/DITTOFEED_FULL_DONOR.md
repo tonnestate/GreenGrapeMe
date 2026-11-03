@@ -431,3 +431,22 @@ PomeloMe as a GreenGrapeMe code change. Upgrading the donor pin should
 require a reviewed cross-repo integration run. Production readiness still
 requires a running Dittofeed workspace, real approved data and lawful
 destination policies, infrastructure costs and a live E2E acceptance.
+
+## Real loopback HTTP wire-level integration tests (2026-11-03)
+
+The independent real-PomeloMe integration CI now also starts an actual
+`ThreadingHTTPServer` bound to `127.0.0.1` on an ephemeral local port
+and exercises **the standard Python urllib network stack** with the
+unchanged `DittofeedTrackEffectAdapter` (without the fake transport).
+
+Wire-level tests validate exact `POST /api/public/apps/batch`,
+Basic write-key authorization and immutable JSON batch, plus receipt handling
+for a real HTTP 204, an explicit HTTP 401 rejection, and a 302 redirect that
+must never be followed/retried. Each test sends exclusively to the ephemeral
+localhost test service, verifies the actual PomeloMe SQLite receipt and
+irreversible dispatch count, and then shuts down that service.
+
+This tests a real HTTP exchange over the loopback TCP stack, but the server
+is an **isolated Dittofeed protocol test double**, not a running Dittofeed
+Community engine; it does not create segments/journeys or perform customer
+messaging. Production live E2E is still outstanding.

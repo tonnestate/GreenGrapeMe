@@ -7,6 +7,10 @@ deployed Dittofeed server or legal customer contact permission.
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+from base64 import b64encode
+import json
 import unittest
 
 from pomelome.effects import EffectGateway
@@ -156,6 +160,95 @@ class RealPomeloIntegration(unittest.TestCase):
         self.assertEqual(self.effects.reconcile(
             "tenant-01", "pilot-0001", "event-001",
             gateway=self.gateway)["effect_state"], "PROVIDER_ACCEPTED")
+
+    def _real_loopback(self, status):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                received.append({
+                    "path": self.path,
+                    "headers": dict(self.headers),
+                    "body": self.rfile.read(length),
+                })
+                self.send_response(status)
+                if status == 302:
+                    self.send_header("Location", "http://127.0.0.1:65534/redirect")
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        adapter = DittofeedTrackEffectAdapter(
+            self.store, tenant="tenant-01", authorized_tenant="tenant-01",
+            workspace_id="workspace-1234",
+            base_url=f"http://127.0.0.1:{server.server_port}",
+            write_key_secret_id="integration-key-001",
+            write_key_value="placeholder-integration-secret-001",
+            final_permission=FinalHopApproval())
+        self.gateway = EffectGateway(
+            SqliteEffectStore(self.pomelo_path), {_TOOL: adapter})
+        return server, thread, received
+
+    def test_real_loopback_http_204_with_pomelo_receipt(self):
+        server, thread, requests = self._real_loopback(204)
+        try:
+            result = self.execute()
+            self.assertEqual(result["effect_state"], "PROVIDER_ACCEPTED")
+            self.assertEqual(len(requests), 1)
+            req = requests[0]
+            self.assertEqual(req["path"], "/api/public/apps/batch")
+            self.assertEqual(json.loads(req["body"]),
+                             {"batch": [self.frozen["payload"]]})
+            self.assertEqual(
+                req["headers"]["Authorization"],
+                "Basic " + b64encode(
+                    b"integration-key-001:placeholder-integration-secret-001"
+                ).decode())
+            self.assertEqual(self.gateway.store.count_receipts(), 1)
+            self.assertEqual(self.gateway.store.get_effect(
+                result["effect_id"])["dispatch_count"], 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_real_loopback_http_401_is_not_success(self):
+        server, thread, requests = self._real_loopback(401)
+        try:
+            result = self.execute()
+            self.assertEqual(result["effect_state"], "PROVIDER_FAILED")
+            self.assertIsNone(result["provider_ref"])
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(self.gateway.store.count_receipts(), 1)
+            with self.assertRaises(RuntimeError):
+                self.execute()
+            self.assertEqual(len(requests), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+    def test_real_loopback_redirect_never_follows_or_retries(self):
+        server, thread, requests = self._real_loopback(302)
+        try:
+            result = self.execute()
+            self.assertEqual(result["effect_state"], "DISPATCH_UNCERTAIN")
+            self.assertFalse(result["provider_accepted"])
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(self.gateway.store.count_receipts(), 0)
+            self.assertEqual(self.gateway.store.get_effect(
+                result["effect_id"])["dispatch_count"], 1)
+            with self.assertRaises(RuntimeError):
+                self.execute()
+            self.assertEqual(len(requests), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
 
     def test_real_gateway_ambiguous_http_never_replays(self):
         self.transport.error = TimeoutError("response lost after POST")
