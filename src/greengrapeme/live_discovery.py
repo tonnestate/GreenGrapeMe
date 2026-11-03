@@ -57,6 +57,18 @@ async def read_starfruit_companies(client: SourceToolClient, *,
     if type(limit) is not int or not 1 <= limit <= 1000:
         raise ValueError("limit must be 1..1000")
 
+    # A complete paginated candidate view is not proof that the donor job
+    # finished all scheduled discovery tasks. Check source coverage explicitly
+    # on the exact MCP connection used for the subsequent company reads.
+    async def require_completed_source() -> None:
+        status = _result(await client.call_tool(
+            "get_discovery_status", {"job_id": job_id}), "get_discovery_status")
+        if (status.get("job_id") != job_id or
+                status.get("job_state") != "COMPLETED_NO_KNOWN_GAPS"):
+            raise SourceSnapshotError(
+                "StarFruitMe source coverage incomplete, unknown or changed")
+
+    await require_completed_source()
     page_size = min(100, limit)
     first_page_ids = None
     all_candidates = []
@@ -158,6 +170,10 @@ async def read_starfruit_companies(client: SourceToolClient, *,
                 or [r.get("candidate_id") if isinstance(r, dict) else None
                     for r in refreshed] != first_page_ids):
             raise SourceSnapshotError("StarFruitMe source changed after pagination")
+    # A collector may become incomplete after the first status read. This
+    # read-only second gate must pass before ANY consumer can ingest results.
+    # StarFruitMe currently provides no immutable cross-call snapshot token.
+    await require_completed_source()
     return records
 
 

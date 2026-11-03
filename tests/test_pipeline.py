@@ -10,17 +10,18 @@ from greengrapeme.sales import Evidence, Opportunity
 
 
 class FakeSource:
-    def __init__(self):
+    def __init__(self, count=1):
         self.name = "Company"
         self.calls = 0
+        self.count = count
 
     async def __call__(self, *, job_id, offer_id, limit):
         self.calls += 1
         return [Opportunity(
-            f"starfruitme:{job_id}:candidate1",
+            f"starfruitme:{job_id}:candidate{i}",
             self.name, offer_id, (Evidence("starfruitme", "https://example.org/p",
                                            "Observed business listing", "DISCOVERY_OBSERVATION"),)
-        )]
+        ) for i in range(1, self.count + 1)]
 
 
 class FakeNeuron:
@@ -62,6 +63,24 @@ class FullPipelineContractTests(unittest.TestCase):
             self.assertEqual(again["state"], "REVIEW_READY")
             self.assertEqual(neuron.calls, 3)
             self.assertEqual(again["intake"]["unchanged"], 1)
+
+    def test_oversized_cohort_blocks_before_any_persistence_or_model_call(self):
+        with TemporaryDirectory() as t:
+            store = SalesWorkspace(Path(t)/"state.db")
+            source, neuron = FakeSource(count=26), FakeNeuron()
+            result = self._run(store, source, neuron)
+            self.assertEqual(result["state"], "BLOCKED_ACCOUNT_CAPACITY")
+            self.assertEqual(result["discovered"], 26)
+            self.assertEqual(result["max_cohort"], 25)
+            self.assertEqual(result["effects"], 0)
+            self.assertEqual(neuron.calls, 0)
+            self.assertEqual(store.overview("tenant-A")["opportunities"], 0)
+            self.assertEqual(store.queue("tenant-A"), [])
+            with store._db() as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM audit").fetchone()[0], 0)
+            # Repeated failure cannot accumulate orphan source or sales work.
+            self._run(store, source, neuron)
+            self.assertEqual(store.overview("tenant-A")["opportunities"], 0)
 
     def test_revised_source_blocks_without_new_model_call(self):
         with TemporaryDirectory() as t:
