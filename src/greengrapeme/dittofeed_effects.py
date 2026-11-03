@@ -109,13 +109,21 @@ class DittofeedPomeloEffects:
         if not isinstance(intent, dict) or not isinstance(intent.get("args"), dict):
             return False
         args = intent["args"]
+        capabilities = intent.get("required_capabilities")
+        # The durable effect store can be corrupted or contain malformed
+        # legacy data. Never raise while interpreting an untrusted receipt.
+        if (not isinstance(capabilities, (list, tuple, frozenset, set)) or
+                any(not isinstance(item, str) for item in capabilities) or
+                len(capabilities) != len(_CAPABILITIES) or
+                set(capabilities) != _CAPABILITIES):
+            return False
         if (effect.get("effect_id") != attempt["effect_id"] or
                 effect.get("tool") != _TOOL or
                 str(effect.get("effect_class")) != "IRREVERSIBLE" or
                 intent.get("effect_id") != attempt["effect_id"] or
                 intent.get("tool") != _TOOL or
                 intent.get("idempotency_key") != attempt["effect_id"] or
-                set(intent.get("required_capabilities", [])) != _CAPABILITIES):
+                intent.get("effect_class", "IRREVERSIBLE") != "IRREVERSIBLE"):
             return False
         expected = {
             "tenant": attempt["tenant"],
