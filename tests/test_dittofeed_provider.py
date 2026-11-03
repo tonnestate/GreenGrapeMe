@@ -123,6 +123,7 @@ class ProviderTests(unittest.TestCase):
         self.patcher=patch.dict(sys.modules,fake)
         self.patcher.start()
         # Mirror the real DittofeedPomeloEffects transaction fence.
+        DittofeedPomeloEffects(self.store)
         now=self.store._now()
         with self.store._db() as db:
             db.execute("""INSERT INTO dittofeed_pomelo_effects VALUES
