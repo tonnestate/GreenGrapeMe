@@ -104,6 +104,37 @@ class DittofeedOutboxTests(unittest.TestCase):
         self.assertEqual(after["state"],"BLOCKED_SOURCE_REVISION")
         self.assertEqual(after["workspace_id"],"workspace-1234")
 
+    def test_changed_confirmed_event_kind_blocks_existing_intent(self):
+        self.verified()
+        self.prepare()
+        with self.store._db() as db:
+            db.execute("""UPDATE sales_pilot_events SET event_kind='DEAL_SIGNED'
+                          WHERE tenant='tenant-a' AND pilot_id='pilot-001'
+                            AND event_id='event-001'""")
+        result=self.outbox.get("tenant-a","pilot-001","event-001")
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertFalse(result["data_sync_authorized"])
+
+    def test_null_source_data_fails_closed_without_exception(self):
+        self.verified()
+        self.prepare()
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET source_json=NULL
+                          WHERE tenant='tenant-a' AND opportunity_id='account-001'""")
+        result=self.outbox.get("tenant-a","pilot-001","event-001")
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+
+    def test_corrupt_stored_payload_fails_closed_without_exception(self):
+        self.verified()
+        self.prepare()
+        with self.store._db() as db:
+            db.execute("""UPDATE dittofeed_sync_outbox SET payload_json='{corrupt'
+                          WHERE tenant='tenant-a' AND pilot_id='pilot-001'
+                            AND event_id='event-001'""")
+        result=self.outbox.get("tenant-a","pilot-001","event-001")
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertIsNone(result["payload"])
+
     def test_suppressed_account_cannot_stage_and_existing_intent_blocked(self):
         self.verified()
         with self.store._db() as db:
