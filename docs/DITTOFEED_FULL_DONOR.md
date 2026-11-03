@@ -358,3 +358,23 @@ The provider adapter now independently verifies the exact
 An empty, partial or substituted capability set is rejected before any
 HTTP request, even if an incorrectly configured caller attempts to lower
 the scope on the gateway side. Tests cover these downgrade attempts.
+
+## Provider-side durable effect fence (2026-11-03)
+
+The Dittofeed HTTP adapter now enforces the **GreenGrapeMe-side durable
+`dittofeed_pomelo_effects` claim**, not just a correctly shaped PomeloMe
+`EffectIntent`. Before accessing the outbox/permission and immediately
+after the final policy callback, the provider verifies the exact tenant,
+pilot, event, irreversible effect ID, `DISPATCH_IN_FLIGHT` state, workspace,
+message ID, payload fingerprint and permission receipt against the local
+SQLite claim. A missing, revised or uncertain claim refuses the HTTP
+request, including direct calls to the adapter outside the approved
+`DittofeedPomeloEffects.dispatch` path. No programmatic public/CLI
+dispatch endpoint was introduced.
+
+This is a **defense-in-depth local** check: it cannot atomically enforce
+revocation across a separate external policy service or a running Dittofeed
+server. The host still must guarantee the real gateway's policy/capability
+checks and maintain authoritative final-hop consent, suppression and journey
+configuration. Offline tests prove zero provider requests for unfenced,
+uncertain or mid-policy modified claims.

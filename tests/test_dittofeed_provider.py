@@ -122,6 +122,16 @@ class ProviderTests(unittest.TestCase):
         fake["pomelome.models"].EffectClass=FakeClass
         self.patcher=patch.dict(sys.modules,fake)
         self.patcher.start()
+        # Mirror the real DittofeedPomeloEffects transaction fence.
+        DittofeedPomeloEffects(self.store)
+        now=self.store._now()
+        with self.store._db() as db:
+            db.execute("""INSERT INTO dittofeed_pomelo_effects VALUES
+                (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("tenant-01","pilot-0001","event-001",effect_id,
+                 "DISPATCH_IN_FLIGHT","workspace-1234",
+                 self.item["message_id"],self.item["payload_sha256"],
+                 "urn:permission:source-001",None,now,now))
 
     def tearDown(self):
         self.patcher.stop()
@@ -139,6 +149,42 @@ class ProviderTests(unittest.TestCase):
         }
         args.update(overrides)
         return DittofeedTrackEffectAdapter(self.store,**args)
+
+    def test_unfenced_or_mismatched_claim_cannot_call_provider(self):
+        adapter_transport=Transport()
+        adapter=self.adapter(transport=adapter_transport)
+        with self.store._db() as db:
+            db.execute("""DELETE FROM dittofeed_pomelo_effects
+                          WHERE tenant='tenant-01' AND event_id='event-001'""")
+        with self.assertRaisesRegex(PermissionError,"claim"):
+            adapter.dispatch(self.intent)
+        self.assertEqual(adapter_transport.calls,[])
+        now=self.store._now()
+        with self.store._db() as db:
+            db.execute("""INSERT INTO dittofeed_pomelo_effects VALUES
+                (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("tenant-01","pilot-0001","event-001",
+                 self.intent.effect_id,"DISPATCH_UNCERTAIN",
+                 "workspace-1234",self.item["message_id"],
+                 self.item["payload_sha256"],
+                 "urn:permission:source-001",None,now,now))
+        with self.assertRaisesRegex(PermissionError,"claim"):
+            adapter.dispatch(self.intent)
+        self.assertEqual(adapter_transport.calls,[])
+
+    def test_permission_callback_cannot_replace_durable_fence(self):
+        transport=Transport()
+        store=self.store
+        class TamperPolicy:
+            def allow(self, request):
+                with store._db() as db:
+                    db.execute("""UPDATE dittofeed_pomelo_effects
+                      SET permission_ref='urn:policy:changed'
+                      WHERE tenant='tenant-01' AND event_id='event-001'""")
+                return True
+        with self.assertRaisesRegex(PermissionError,"claim changed"):
+            self.adapter(transport=transport,policy=TamperPolicy()).dispatch(self.intent)
+        self.assertEqual(transport.calls,[])
 
     def test_real_batch_api_shape_and_http_204_receipt_only(self):
         transport=Transport()
