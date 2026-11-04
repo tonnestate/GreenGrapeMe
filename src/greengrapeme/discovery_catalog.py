@@ -23,6 +23,53 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _source_state(row) -> tuple[list[dict], bool, bool]:
+    """Read a source without confusing upstream suppression with no opt-out.
+
+    Tenant-local suppressions are stored separately. The imported source may
+    already have `suppressed=True`, and malformed source evidence must never
+    appear as an eligible business account in a read-only dashboard.
+    """
+    raw = row["source_json"]
+    if not isinstance(raw, str):
+        return [], False, False
+    try:
+        source = json.loads(raw)
+    except (ValueError, TypeError):
+        return [], False, False
+    if not isinstance(source, dict):
+        return [], False, False
+    upstream_suppressed = source.get("suppressed") is True
+    evidence = source.get("evidence")
+    valid = (
+        source.get("opportunity_id") == row["opportunity_id"]
+        and source.get("offer_id") == row["offer_id"]
+        and source.get("company_name") == row["company_name"]
+        and isinstance(source.get("company_name"), str)
+        and bool(source["company_name"].strip())
+        and type(source.get("suppressed")) is bool
+        and isinstance(evidence, list)
+        and all(
+            isinstance(item, dict)
+            and all(isinstance(item.get(field), str)
+                    for field in ("kind", "source", "reference", "claim"))
+            for item in evidence
+        )
+    )
+    return (evidence if valid else []), upstream_suppressed, valid
+
+
+def _display_suppression(local_reason, upstream_suppressed: bool,
+                         source_valid: bool) -> tuple[bool, str | None]:
+    if local_reason is not None:
+        return True, local_reason
+    if not source_valid:
+        return True, "SOURCE_DATA_INVALID"
+    if upstream_suppressed:
+        return True, "UPSTREAM_SUPPRESSION"
+    return False, None
+
+
 class DiscoveryCatalog:
     def __init__(self, store: SalesWorkspace):
         self.store = store
@@ -87,19 +134,21 @@ class DiscoveryCatalog:
             rows = db.execute(sql, (*params, limit, offset)).fetchall()
         data = []
         for row in rows:
-            source = json.loads(row["source_json"])
-            evidence = source.get("evidence", [])
+            evidence, upstream_suppressed, source_valid = _source_state(row)
+            suppressed, suppression_reason = _display_suppression(
+                row["suppression_reason"], upstream_suppressed, source_valid)
             data.append({
                 "opportunity_id": row["opportunity_id"],
                 "company_name": row["company_name"],
                 "offer_id": row["offer_id"],
-                "qualification": row["status"],
-                "reason": row["reason"],
+                "qualification": row["status"] if source_valid else "NEEDS_REVIEW",
+                "reason": row["reason"] if source_valid else "SOURCE_DATA_INVALID",
                 "updated_at": row["updated_at"],
                 "source_count": len({(e.get("source"), e.get("reference")) for e in evidence}),
                 "evidence_count": len(evidence),
-                "suppressed": row["suppression_reason"] is not None,
-                "suppression_reason": row["suppression_reason"],
+                "suppressed": suppressed,
+                "suppression_reason": suppression_reason,
+                "source_integrity": "VALID" if source_valid else "INVALID",
                 "identity_state": "NOT_INDEPENDENTLY_LINKED",
             })
         return {"items": data, "total": n, "offset": offset, "limit": limit}
@@ -115,7 +164,9 @@ class DiscoveryCatalog:
                 (tenant, opportunity_id)).fetchone()
             if not row:
                 raise LookupError("company not found")
-            evidence = json.loads(row["source_json"]).get("evidence", [])
+            evidence, upstream_suppressed, source_valid = _source_state(row)
+            suppressed, suppression_reason = _display_suppression(
+                row["suppression_reason"], upstream_suppressed, source_valid)
             signal_rows = db.execute("""SELECT kind,evidence_url,observed_at,strength,claim
                 FROM signals WHERE tenant=? AND opportunity_id=?
                 ORDER BY observed_at DESC LIMIT 100""",
@@ -144,11 +195,13 @@ class DiscoveryCatalog:
             "opportunity_id": row["opportunity_id"],
             "company_name": row["company_name"],
             "offer_id": row["offer_id"],
-            "qualification": row["status"], "reason": row["reason"],
+            "qualification": row["status"] if source_valid else "NEEDS_REVIEW",
+            "reason": row["reason"] if source_valid else "SOURCE_DATA_INVALID",
             "updated_at": row["updated_at"],
             "identity_state": "NOT_INDEPENDENTLY_LINKED",
-            "suppressed": row["suppression_reason"] is not None,
-            "suppression_reason": row["suppression_reason"],
+            "suppressed": suppressed,
+            "suppression_reason": suppression_reason,
+            "source_integrity": "VALID" if source_valid else "INVALID",
             "evidence": evidence,
             "intent_score": score, "intent_score_type": "HEURISTIC_NOT_PROBABILITY",
             "signal_breakdown": signal_types,

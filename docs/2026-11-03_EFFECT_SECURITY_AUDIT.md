@@ -399,3 +399,30 @@ reclassification is intentionally conservative: if a transport corrupts
 an existing message's text, the system prefers a possible unnecessary
 suppression over further unrequested contact. The host must still
 authenticate the inbound provider to prevent forged unsubscribe events.
+
+## E2E dashboard suppression projection (2026-11-04)
+
+A functional error persisted in the customer-facing local Discovery UI:
+`DiscoveryCatalog.list_companies()` and `.company()` derived
+`suppressed` only from a separately persisted local `suppressions` row.
+An imported `Opportunity(suppressed=True)` was already correctly rejected
+from sales tasks, but the list rendered its contact suppression as **No**
+when it had no additional inbox-generated opt-out row. This contradicted
+the core account safety state in the visible sales interface.
+
+Both read-only projections now combine the **original imported source
+suppression** and the local opt-out table; they expose a bounded
+`UPSTREAM_SUPPRESSION` reason where appropriate. A corrupt or
+identity-mismatched original source is shown as
+`source_integrity=INVALID`, `suppressed=True` and
+`qualification=NEEDS_REVIEW`, with no invented evidence. Local opt-out
+reasons still take precedence. These are display-only fail-closed
+projections; they do not write new suppression records.
+
+An end-to-end test exercises the **real local WSGI /api/companies and
+/api/company routes**, using SQLite data and the actual access-token
+check, including an original upstream-suppressed company, a customer
+opt-out, a malformed SQLite BLOB and a cross-tenant request.
+The test verifies the business meaning of the fields, not merely their
+shape. It does not claim actual browser rendering, public SaaS
+authentication or contact-provider acceptance.
