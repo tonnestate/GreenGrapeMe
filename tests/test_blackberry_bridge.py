@@ -19,6 +19,20 @@ def answer(payload, *, wrapped=False, error=False):
                            content=[SimpleNamespace(text=body)])
 
 
+class MidflightMutation:
+    """Run a real SQLite source/suppression mutation inside a donor callback."""
+    def __init__(self, original, callback):
+        self.original=original
+        self.callback=callback
+        self.mutated=False
+
+    async def call_tool(self, name, arguments):
+        if name=="blackberry_plan_company" and not self.mutated:
+            self.mutated=True
+            self.callback()
+        return await self.original.call_tool(name,arguments)
+
+
 class BlackberryFake:
     def __init__(self, *, status="PARTIAL", linked=True, broken=False):
         self.calls = []
@@ -110,6 +124,93 @@ class BlackberryBridgeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "reconcile"):
                 asyncio.run(research_account(store, "tenant-a", "account-1",
                                               client=fake, objective="Other"))
+
+    def test_source_evidence_revision_during_donor_call_is_rejected(self):
+        with TemporaryDirectory() as temp:
+            store=SalesWorkspace(Path(temp)/"state.db")
+            store.ingest("tenant-a",[account()])
+            def revise_source():
+                with store._db() as db:
+                    raw=db.execute("""SELECT source_json FROM opportunities
+                        WHERE tenant='tenant-a' AND opportunity_id='account-1'
+                    """).fetchone()[0]
+                    source=json.loads(raw)
+                    source["evidence"][0]["claim"]="Source evidence revised during lookup"
+                    db.execute("""UPDATE opportunities SET source_json=?
+                        WHERE tenant='tenant-a' AND opportunity_id='account-1'
+                    """,(json.dumps(source,sort_keys=True),))
+            backend=MidflightMutation(BlackberryFake(),revise_source)
+            with self.assertRaisesRegex(ValueError,"source changed during donor"):
+                asyncio.run(research_account(
+                    store,"tenant-a","account-1",objective="Sell CRM",
+                    client=backend))
+            self.assertTrue(backend.mutated)
+            self.assertIsNone(BlackberryReviewStore(store).get(
+                "tenant-a","account-1"))
+            with store._db() as db:
+                completion=db.execute("""
+                    SELECT count(*) FROM audit
+                    WHERE tenant='tenant-a' AND event='BLACKBERRY_RESEARCH_COMPLETED'
+                """).fetchone()[0]
+            self.assertEqual(completion,0)
+
+    def test_opt_out_during_donor_call_never_persists_research(self):
+        with TemporaryDirectory() as temp:
+            store=SalesWorkspace(Path(temp)/"state.db")
+            store.ingest("tenant-a",[account()])
+            def opt_out():
+                with store._db() as db:
+                    db.execute("""INSERT INTO suppressions VALUES(?,?,?,?)""",
+                        ("tenant-a","account-1","OPT_OUT",store._now()))
+            backend=MidflightMutation(BlackberryFake(),opt_out)
+            with self.assertRaisesRegex(PermissionError,"current suppression"):
+                asyncio.run(research_account(
+                    store,"tenant-a","account-1",objective="Sell CRM",
+                    client=backend))
+            self.assertIsNone(BlackberryReviewStore(store).get(
+                "tenant-a","account-1"))
+
+    def test_cached_research_is_invalidated_by_source_drift_without_new_tool_call(self):
+        with TemporaryDirectory() as temp:
+            store=SalesWorkspace(Path(temp)/"state.db")
+            store.ingest("tenant-a",[account()])
+            original=BlackberryFake()
+            first=asyncio.run(research_account(
+                store,"tenant-a","account-1",objective="Sell CRM",
+                client=original))
+            self.assertEqual(first["opportunity_id"],"account-1")
+            with store._db() as db:
+                row=db.execute("""SELECT source_json FROM opportunities
+                    WHERE tenant='tenant-a' AND opportunity_id='account-1'
+                """).fetchone()
+                source=json.loads(row["source_json"])
+                source["evidence"][0]["reference"]="https://example.org/revised"
+                db.execute("""UPDATE opportunities SET source_json=?
+                    WHERE tenant='tenant-a' AND opportunity_id='account-1'
+                """,(json.dumps(source,sort_keys=True),))
+            replay=BlackberryFake()
+            with self.assertRaisesRegex(ValueError,"reconcile"):
+                asyncio.run(research_account(
+                    store,"tenant-a","account-1",objective="Sell CRM",
+                    client=replay))
+            self.assertEqual(replay.calls,[])
+
+    def test_cached_research_is_blocked_after_later_suppression(self):
+        with TemporaryDirectory() as temp:
+            store=SalesWorkspace(Path(temp)/"state.db")
+            store.ingest("tenant-a",[account()])
+            asyncio.run(research_account(
+                store,"tenant-a","account-1",objective="Sell CRM",
+                client=BlackberryFake()))
+            with store._db() as db:
+                db.execute("INSERT INTO suppressions VALUES(?,?,?,?)",
+                    ("tenant-a","account-1","OPT_OUT",store._now()))
+            subsequent=BlackberryFake()
+            with self.assertRaisesRegex(ValueError,"suppressed"):
+                asyncio.run(research_account(
+                    store,"tenant-a","account-1",objective="Sell CRM",
+                    client=subsequent))
+            self.assertEqual(subsequent.calls,[])
 
     def test_suppressed_account_is_not_enriched(self):
         with TemporaryDirectory() as temp:
