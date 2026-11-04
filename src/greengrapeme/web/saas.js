@@ -627,9 +627,19 @@ async function main() {
     } else {
       throw new Error("Unbekannter Discovery-Modus.");
     }
-    await queueDiscovery(spec);
-    await discovery();
-    return "Discovery-Auftrag in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
+    const accepted = await queueDiscovery(spec);
+    try {
+      await discovery();
+    } catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      // An accepted job must never be reported as a failed submission
+      // solely because the subsequent list refresh could not be fetched.
+      return "Discovery-Auftrag " + accepted.request_id +
+        " angenommen. Die Übersicht konnte nicht aktualisiert werden; " +
+        "Auftrag nicht erneut absenden. " + error.message;
+    }
+    return "Discovery-Auftrag " + accepted.request_id +
+      " in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
   });
   onForm("appointment-form", async () => {
     const result = await api("/api/pilot-appointment-prepare", {
