@@ -101,6 +101,25 @@
       <section id="sales-view" aria-labelledby="sales-title" hidden>
         <h2 id="sales-title">CRM-Vorgänge</h2>
         <p>Eine gemeldete Kundenanfrage ist kein geprüfter Identitäts- oder Kontaktberechtigungsnachweis.</p>
+        <form id="crm-case-filter" class="filters">
+          <div><label for="crm-pilot-id">Pilot-ID für CRM-Arbeitsliste</label><input id="crm-pilot-id" required maxlength="120"></div>
+          <button type="submit">Vorgänge und Wiedervorlagen laden</button>
+        </form>
+        <p id="crm-case-count" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Vorgang</th><th>Unternehmen</th><th>Status</th><th>Fälligkeit</th><th>Kontaktsperre</th></tr></thead>
+            <tbody id="crm-case-list"></tbody>
+          </table>
+        </div>
+        <h3>Fällige Wiedervorlagen – nur manuelle Prüfung, kein Versand</h3>
+        <p id="crm-followup-count" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Vorgang</th><th>Unternehmen</th><th>Fälligkeit</th><th>Prüfstatus</th></tr></thead>
+            <tbody id="crm-followup-list"></tbody>
+          </table>
+        </div>
         <form id="inbound-form" class="discovery-form" hidden>
           <div><label for="inbound-pilot">Pilot-ID</label><input id="inbound-pilot" required></div>
           <div><label for="inbound-case">Vorgangs-ID</label><input id="inbound-case" required></div>
