@@ -14,6 +14,7 @@ from .database_recovery import verify_database
 
 
 _REQUIRED_OPERATIONS_TABLES = frozenset({
+    "greengrapeme_schema_migrations",
     "saas_tenants", "saas_memberships",
     "sales_pilots", "sales_pilot_events", "sales_pilot_cases",
     "sales_pilot_case_steps", "sales_pilot_reply_effects",
