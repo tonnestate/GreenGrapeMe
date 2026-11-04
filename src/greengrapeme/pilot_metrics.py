@@ -8,6 +8,7 @@ can match its immutable details. No payment is invented by an LLM or UI.
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import hashlib
 import json
 import re
 from typing import Protocol
@@ -93,6 +94,49 @@ class PilotLedger:
                 WHERE provider_receipt_id IS NOT NULL;
             """)
 
+    @staticmethod
+    def _require_current_account_link(db, tenant: str, pilot_id: str,
+                                      offer_id: str, account_id: str) -> None:
+        """Fail closed when a claimed sale no longer belongs to its source.
+
+        No contact-policy inference: a customer may pay after opting out.
+        The source identity and optional linked inbound-case fingerprint
+        must nevertheless agree before NEW evidence is confirmed.
+        """
+        row = db.execute("""
+            SELECT opportunity_id,offer_id,company_name,source_json
+            FROM opportunities
+            WHERE tenant=? AND opportunity_id=?
+        """, (tenant, account_id)).fetchone()
+        if row is None or row["offer_id"] != offer_id or not isinstance(
+                row["source_json"], str):
+            raise ValueError("pilot account source no longer matches offer")
+        try:
+            source = json.loads(row["source_json"])
+        except (TypeError, ValueError):
+            raise ValueError("pilot account source is malformed") from None
+        if (not isinstance(source, dict)
+                or source.get("opportunity_id") != account_id
+                or source.get("offer_id") != offer_id
+                or source.get("company_name") != row["company_name"]
+                or not isinstance(source.get("evidence"), list)
+                or type(source.get("suppressed")) is not bool):
+            raise ValueError("pilot account source identity changed")
+        linked_cases_available = db.execute("""
+            SELECT 1 FROM sqlite_master
+            WHERE type='table' AND name='sales_pilot_cases'
+        """).fetchone() is not None
+        if linked_cases_available:
+            case = db.execute("""
+                SELECT pilot_id,source_sha256 FROM sales_pilot_cases
+                WHERE tenant=? AND opportunity_id=?
+            """, (tenant, account_id)).fetchone()
+            if case and (
+                    case["pilot_id"] != pilot_id or
+                    hashlib.sha256(row["source_json"].encode()).hexdigest()
+                        != case["source_sha256"]):
+                raise ValueError("pilot account case source has changed")
+
     def create(self, tenant: str, pilot_id: str, offer_id: str,
                label: str, *, monthly_fee_cents: int, setup_fee_cents: int = 0) -> dict:
         tenant = self.store._required(tenant, "tenant")
@@ -165,11 +209,8 @@ class PilotLedger:
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
             if opportunity_id:
-                linked = db.execute("""SELECT 1 FROM opportunities
-                     WHERE tenant=? AND opportunity_id=? AND offer_id=?""",
-                     (tenant,opportunity_id,pilot["offer_id"])).fetchone()
-                if not linked:
-                    raise ValueError("pilot opportunity absent or wrong tenant/offer")
+                self._require_current_account_link(
+                    db, tenant, pilot_id, pilot["offer_id"], opportunity_id)
             old = db.execute("""SELECT tenant,pilot_id,event_id,opportunity_id,
                        event_kind,amount_cents,currency,occurred_at,evidence_ref,reporter_ref,
                        state,provider_kind,provider_receipt_id,confirmed_at,created_at
@@ -258,6 +299,20 @@ class PilotLedger:
                         old["provider_kind"] is not None or
                         old["provider_receipt_id"] is not None):
                     raise ValueError("pilot event state changed during verification")
+                if old["opportunity_id"]:
+                    pilot_row = db.execute("""
+                        SELECT offer_id FROM sales_pilots
+                        WHERE tenant=? AND pilot_id=?
+                    """, (tenant, pilot_id)).fetchone()
+                    if pilot_row is None:
+                        raise ValueError("pilot no longer exists")
+                    # Recheck the linked account AFTER the independent
+                    # verification, under this exact write transaction.
+                    # Otherwise the validated payment/deal can inherit a
+                    # concurrently reassigned or rewritten account.
+                    self._require_current_account_link(
+                        db, tenant, pilot_id, pilot_row["offer_id"],
+                        old["opportunity_id"])
                 now = self.store._now()
                 db.execute("""UPDATE sales_pilot_events
                     SET state='SOURCE_CONFIRMED',provider_kind=?,
