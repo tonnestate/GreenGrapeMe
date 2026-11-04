@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import json
 from .operations import SalesWorkspace
+from .database_recovery import backup_database, restore_database, verify_database
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .dittofeed_lifecycle import DittofeedLifecycleProjection
@@ -30,7 +31,8 @@ import time
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="greengrapeme")
     p.add_argument("--db", default="greengrapeme.sqlite")
-    p.add_argument("--tenant", required=True)
+    p.add_argument("--tenant",
+                   help="Required for tenant-scoped operations; not for backups")
     sub = p.add_subparsers(dest="command", required=True)
     imp = sub.add_parser("import")
     imp.add_argument("source", choices=["starfruitme", "kigor"])
@@ -44,6 +46,14 @@ def main(argv: list[str] | None = None) -> int:
     cycle.add_argument("--limit", type=int, default=100)
     sub.add_parser("overview")
     sub.add_parser("queue")
+    sub.add_parser("db-verify", help="Read-only SQLite integrity and base schema check")
+    backup = sub.add_parser("db-backup",
+        help="Consistent SQLite snapshot; no overwrite, all tenants")
+    backup.add_argument("--output", required=True, help="New backup file path")
+    restore = sub.add_parser("db-restore",
+        help="Verify and restore an offline backup to a NEW path only")
+    restore.add_argument("--backup", required=True, help="Existing backup file")
+    restore.add_argument("--output", required=True, help="Unused destination file")
     sub.add_parser("rankings")
     sub.add_parser("pilots", help="List source-qualified commercial pilot reports")
     pilot_make = sub.add_parser("pilot-create", help="Record pilot commercial terms (not revenue)")
@@ -160,6 +170,17 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--once", action="store_true", help="Process one queued item and exit")
     worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
+    if a.command in {"db-verify", "db-backup", "db-restore"}:
+        if a.command == "db-verify":
+            result = verify_database(a.db)
+        elif a.command == "db-backup":
+            result = backup_database(a.db, a.output)
+        else:
+            result = restore_database(a.backup, a.output)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
+    if not a.tenant:
+        p.error("--tenant is required for tenant-scoped operations")
     # Direct CLI import/sales-run are independent entry points from the
     # Discovery worker. Enforce the same explicit existing-job allowlist
     # BEFORE opening the database or contacting StarFruitMe.
