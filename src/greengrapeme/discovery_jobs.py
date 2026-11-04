@@ -298,6 +298,19 @@ class DiscoveryJobQueue:
                            (tenant, request_id)).fetchone()
         spec = DiscoverySpec.parse(json.loads(r["spec_json"]))
         state, job_id = entry["state"], entry["external_job_id"]
+        # An existing StarFruitMe job ID is not a standing authorization.
+        # Revalidate host-scoped access before every downstream step, not
+        # just before initial status/read. Otherwise the <=25-account path
+        # could continue to BlackberryMe, MangoMe or the model after a host
+        # revoked the job's tenant binding.
+        if (spec.mode == "existing" and
+                state in ("AWAITING_BLACKBERRY", "AWAITING_CANONICAL_WORK",
+                          "ADMITTED") and
+                job_id not in allowed_existing_jobs):
+            self._transition(tenant, request_id, state,
+                             "BLOCKED_SOURCE_POLICY",
+                             error_kind="EXISTING_SOURCE_JOB_ACCESS_REVOKED")
+            return self.get(tenant, request_id)
         if state == "QUEUED":
             if spec.mode == "new":
                 if not (allow_external_source and spec.source_rights_acknowledged):
@@ -476,7 +489,8 @@ class DiscoveryJobQueue:
                     WHERE m.tenant=? AND m.mission_id=?
                     ORDER BY m.opportunity_id""", (tenant, mission_id)).fetchall()
             if not checks or len(checks) != len(scope) or any(
-                item["source_json"] is None or item["suppressed"] is not None or
+                not isinstance(item["source_json"], str) or
+                item["suppressed"] is not None or
                 hashlib.sha256(item["source_json"].encode("utf-8")).hexdigest()
                     != item["source_sha256"]
                 for item in checks
@@ -512,7 +526,7 @@ class DiscoveryJobQueue:
                            WHERE m.tenant=? AND m.mission_id=? AND m.opportunity_id=?""",
                            (tenant, mission_id, oid)).fetchone()
                 if (not source_row or source_row["suppressed"] is not None or
-                        source_row["source_json"] is None or
+                        not isinstance(source_row["source_json"], str) or
                         hashlib.sha256(source_row["source_json"].encode("utf-8")).hexdigest() !=
                         source_row["source_sha256"]):
                     self._transition(tenant, request_id, state, "BLOCKED_SOURCE_REVISION",
