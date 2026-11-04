@@ -216,7 +216,7 @@ class DittofeedTrackEffectAdapter:
         # and COMMIT the claim before crossing the network boundary.
         # On crash, timeout, HTTP 4xx or unknown response it stays consumed;
         # no adapter call may re-send this event.
-        from .dittofeed_lifecycle import _EVENT_NAMES
+        from .dittofeed_lifecycle import _EVENT_NAMES, _valid_source_link
         with self.outbox.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
             locked_claim = db.execute("""
@@ -255,7 +255,9 @@ class DittofeedTrackEffectAdapter:
                     event_row["opportunity_id"] != frozen["opportunity_id"] or
                     _EVENT_NAMES.get(event_row["event_kind"]) != payload["event"] or
                     source["offer_id"] != pilot["offer_id"] or
-                    not isinstance(source["source_json"], str) or
+                    not _valid_source_link(source["source_json"],
+                                           frozen["opportunity_id"],
+                                           pilot["offer_id"]) or
                     hashlib.sha256(source["source_json"].encode()).hexdigest()
                         != frozen["source_sha256"] or
                     frozen["workspace_id"] != self.workspace_id or
