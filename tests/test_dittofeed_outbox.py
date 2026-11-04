@@ -98,7 +98,9 @@ class DittofeedOutboxTests(unittest.TestCase):
         with self.store._db() as db:
             db.execute("""UPDATE opportunities SET source_json='{}'
                           WHERE tenant='tenant-a' AND opportunity_id='account-001'""")
-        with self.assertRaisesRegex(ValueError,"changed"):
+        # A malformed replacement source is denied at the source-integrity
+        # gate, before the immutable-intent comparison can run.
+        with self.assertRaisesRegex(PermissionError,"source/account"):
             self.prepare()
         after=self.outbox.get("tenant-a","pilot-001","event-001")
         self.assertEqual(after["state"],"BLOCKED_SOURCE_REVISION")
