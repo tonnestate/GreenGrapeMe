@@ -110,11 +110,19 @@ async function receiveAuthorizationCode() {
   const code = target.searchParams.get("code");
   const returnedState = target.searchParams.get("state");
   const failure = target.searchParams.get("error");
-  if (!code && !failure) return;
-  // Remove the sensitive code from history immediately, including on error.
+  if (!code && !failure && !returnedState) return;
+  // Remove all callback parameters from browser history before parsing them.
   window.history.replaceState(null, "", target.pathname);
+  // Ambiguous callback parameters must never be resolved by taking the first
+  // value. A replayed or malformed response also consumes the transaction.
+  const counts = ["code", "state", "error"].map(
+    (name) => target.searchParams.getAll(name).length);
   const stored = sessionStorage.getItem(LOGIN_TRANSACTION);
   sessionStorage.removeItem(LOGIN_TRANSACTION);
+  if (counts.some((count) => count > 1) ||
+      (code && failure) || !returnedState || !code && !failure) {
+    throw new Error("Ungültiger OIDC-Anmelderücksprung.");
+  }
   if (failure) throw new Error("Anmeldung vom Identitätsanbieter abgelehnt.");
   let txn;
   try { txn = JSON.parse(stored || "null"); } catch (_) { txn = null; }
