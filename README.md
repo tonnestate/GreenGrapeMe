@@ -173,3 +173,21 @@ JWKS rotation, scoped access, HTTPS WSGI configuration, commands, roles,
 security behavior and remaining release blockers. This is an authenticated
 API foundation, **not yet** a finished login UI, real customer onboarding,
 contract/payment execution or a public production deployment.
+
+## SaaS dashboard with OIDC Authorization Code + PKCE
+
+The authenticated SaaS WSGI service now serves a dedicated dark-mode
+browser dashboard at `/` when the public OIDC browser configuration is
+provided. It initiates Authorization Code + PKCE (S256) login with the
+configured identity provider, holds the access token in memory only,
+verifies tenant membership on the backend, and supports lead and sourcing
+review, Discovery queueing, reported CRM cases and milestones, pilot
+financial reports and reported-only payment events. No self-assigned
+authorization or unverified payment confirmation.
+
+The original local `GG_VIEWER_TOKEN` demo remains separate.
+See [SAAS_AUTH_DEPLOYMENT.md](docs/SAAS_AUTH_DEPLOYMENT.md) for
+provider registration, client ID, HTTPS/CORS settings and limitations.
+Unit tests plus a Node JavaScript syntax check run in every PR.
+Actual IdP/browser/provider acceptance and commercial onboarding remain
+separate release requirements.

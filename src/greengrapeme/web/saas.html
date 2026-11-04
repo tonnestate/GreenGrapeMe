@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>GreenGrapeMe – Vertrieb & Nachweise</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/saas.js" defer></script>
+</head>
+<body>
+  <header>
+    <strong>GreenGrapeMe</strong>
+    <span>Vertrieb. Quellen. Nachweise.</span>
+    <small id="auth-status">Nicht angemeldet</small>
+  </header>
+  <main>
+    <section id="login" aria-labelledby="login-title">
+      <h1 id="login-title">Sicher anmelden</h1>
+      <p>Die Anmeldung erfolgt über den konfigurierten Identitätsanbieter. GreenGrapeMe speichert dein Zugriffstoken nicht dauerhaft im Browser.</p>
+      <button id="login-button" type="button">Mit SSO anmelden</button>
+      <form id="tenant-form" hidden>
+        <label for="tenant-id">Mandant</label>
+        <input id="tenant-id" name="tenant" autocomplete="organization" minlength="2" maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{1,79}" required placeholder="Mandantenkennung">
+        <button type="submit">Mandant öffnen</button>
+      </form>
+      <p id="login-feedback" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="workspace" hidden aria-label="GreenGrapeMe Arbeitsbereich">
+      <div class="toolbar">
+        <h1>Vertriebszentrale</h1>
+        <button id="logout-button" type="button">Sitzung beenden</button>
+      </div>
+      <p id="workspace-info" class="hint"></p>
+      <div class="metrics" aria-label="Kennzahlen">
+        <div class="metric"><strong id="metric-companies">–</strong><span>Unternehmen</span></div>
+        <div class="metric"><strong id="metric-work">–</strong><span>Arbeitsaufträge</span></div>
+        <div class="metric"><strong id="metric-missions">–</strong><span>Missionen</span></div>
+        <div class="metric"><strong id="metric-pilots">–</strong><span>Pilotprojekte</span></div>
+      </div>
+      <nav aria-label="Produktbereiche">
+        <button type="button" data-view="companies-view" aria-current="page">Unternehmen</button>
+        <button type="button" data-view="discovery-view">Discovery</button>
+        <button type="button" data-view="pilots-view">Piloten</button>
+        <button type="button" data-view="sales-view">CRM</button>
+        <button type="button" data-view="finance-view">Finanzen</button>
+      </nav>
+      <p id="app-feedback" role="status" aria-live="polite"></p>
+
+      <section id="companies-view" aria-labelledby="companies-title">
+        <h2 id="companies-title">Unternehmen und Qualifizierung</h2>
+        <form id="company-search" class="filters">
+          <div>
+            <label for="company-query">Unternehmen suchen</label>
+            <input id="company-query" placeholder="Name oder Account-ID" maxlength="200">
+          </div>
+          <button type="submit">Suchen</button>
+        </form>
+        <p id="companies-count" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Unternehmen</th><th>Angebot</th><th>Qualifizierung</th><th>Kontaktsperre</th><th>Details</th></tr></thead>
+            <tbody id="companies-list"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button id="companies-prev" type="button">Zurück</button>
+          <span id="companies-page"></span>
+          <button id="companies-next" type="button">Weiter</button>
+        </div>
+        <section id="company-details" hidden aria-live="polite"></section>
+      </section>
+
+      <section id="discovery-view" aria-labelledby="discovery-title" hidden>
+        <h2 id="discovery-title">Discovery-Aufträge</h2>
+        <p>Aufträge werden nur in die lokale Queue aufgenommen. Externe Recherche benötigt zusätzlich eine aktuelle Freigabe im FruitStack-Host.</p>
+        <form id="discovery-form" class="discovery-form" hidden>
+          <div><label for="disc-job">Bereits autorisierte StarFruitMe-Job-ID</label><input id="disc-job" required minlength="24" maxlength="24" pattern="[0-9a-f]{24}"></div>
+          <div><label for="disc-offer">Angebots-ID</label><input id="disc-offer" required maxlength="160"></div>
+          <div><label for="disc-objective">Vertriebsziel</label><input id="disc-objective" required maxlength="2000"></div>
+          <div><label for="disc-icp">Ideales Kundenprofil</label><input id="disc-icp" required maxlength="2000"></div>
+          <button type="submit">Auftrag in Queue aufnehmen</button>
+        </form>
+        <div class="table-wrap">
+          <table><thead><tr><th>Auftrag</th><th>Angebot</th><th>Status</th><th>Fehler</th></tr></thead><tbody id="discovery-list"></tbody></table>
+        </div>
+      </section>
+
+      <section id="pilots-view" aria-labelledby="pilots-title" hidden>
+        <h2 id="pilots-title">Pilotprojekte und Nachweise</h2>
+        <p>Bestätigte Zahlungen sind nicht automatisch wiederkehrender Umsatz oder verifizierter Mehrumsatz.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Pilot</th><th>Geplante Monatsgebühr</th><th>Plattformzahlungen</th><th>Kundenzahlungen</th><th>Vertragsnachweise</th><th>Klärfälle</th></tr></thead>
+            <tbody id="pilots-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="sales-view" aria-labelledby="sales-title" hidden>
+        <h2 id="sales-title">CRM-Vorgänge</h2>
+        <p>Eine gemeldete Kundenanfrage ist kein geprüfter Identitäts- oder Kontaktberechtigungsnachweis.</p>
+        <form id="inbound-form" class="discovery-form" hidden>
+          <div><label for="inbound-pilot">Pilot-ID</label><input id="inbound-pilot" required></div>
+          <div><label for="inbound-case">Vorgangs-ID</label><input id="inbound-case" required></div>
+          <div><label for="inbound-company">Unternehmen</label><input id="inbound-company" required></div>
+          <div><label for="inbound-channel">Eingangskanal</label><select id="inbound-channel"><option>CRM_INBOUND</option><option>WEB_FORM</option><option>CUSTOMER_REFERRAL</option><option>EXISTING_CUSTOMER</option></select></div>
+          <div><label for="inbound-evidence">Quellenbeleg (URN/HTTPS)</label><input id="inbound-evidence" required placeholder="urn:crm:inbound:…"></div>
+          <button type="submit">Anfrage dokumentieren</button>
+        </form>
+        <form id="sales-step-form" class="discovery-form" hidden>
+          <div><label for="step-pilot">Pilot-ID</label><input id="step-pilot" required></div>
+          <div><label for="step-case">Vorgangs-ID</label><input id="step-case" required></div>
+          <div><label for="step-id">Meilenstein-ID</label><input id="step-id" required></div>
+          <div><label for="step-from">Aktueller Status</label><input id="step-from" required placeholder="INBOUND_REVIEW"></div>
+          <div><label for="step-to">Neuer Status</label><input id="step-to" required placeholder="QUALIFIED_REPORTED"></div>
+          <div><label for="step-evidence">Belegreferenz</label><input id="step-evidence" required placeholder="urn:crm:step:…"></div>
+          <div><label for="step-followup">Fälligkeit (ISO, nur bei Follow-up)</label><input id="step-followup" placeholder="2026-11-12T10:00:00+01:00"></div>
+          <button type="submit">Meilenstein dokumentieren</button>
+        </form>
+      </section>
+
+      <section id="finance-view" aria-labelledby="finance-title" hidden>
+        <h2 id="finance-title">Kommerzielle Ereignisse</h2>
+        <p>Erfasste Ereignisse werden als gemeldet gespeichert. Die unabhängige Bank- oder Vertragsbestätigung erfolgt ausschließlich über freigegebene Provider.</p>
+        <form id="pilot-form" class="discovery-form" hidden>
+          <div><label for="pilot-id">Pilot-ID</label><input id="pilot-id" required></div>
+          <div><label for="pilot-offer">Angebots-ID</label><input id="pilot-offer" required></div>
+          <div><label for="pilot-label">Bezeichnung</label><input id="pilot-label" required></div>
+          <div><label for="pilot-monthly">Monatspreis in Cent</label><input id="pilot-monthly" type="number" min="0" max="100000000" step="1" required></div>
+          <div><label for="pilot-setup">Einmalpreis in Cent</label><input id="pilot-setup" type="number" min="0" max="100000000" step="1" value="0" required></div>
+          <button type="submit">Pilotbedingungen erfassen</button>
+        </form>
+        <form id="payment-form" class="discovery-form" hidden>
+          <div><label for="payment-pilot">Pilot-ID</label><input id="payment-pilot" required></div>
+          <div><label for="payment-id">Ereignis-ID</label><input id="payment-id" required></div>
+          <div><label for="payment-kind">Art</label><select id="payment-kind"><option>PLATFORM_PAYMENT_RECEIVED</option><option>CUSTOMER_PAYMENT_RECEIVED</option><option>PROVIDER_COST_INCURRED</option></select></div>
+          <div><label for="payment-account">Account-ID (bei Kundenzahlung)</label><input id="payment-account"></div>
+          <div><label for="payment-cents">Betrag in Cent</label><input id="payment-cents" type="number" min="1" max="1000000000" step="1" required></div>
+          <div><label for="payment-evidence">Belegreferenz (URN/HTTPS)</label><input id="payment-evidence" required></div>
+          <button type="submit">Ereignis als gemeldet erfassen</button>
+        </form>
+      </section>
+    </section>
+  </main>
+  <footer>GreenGrapeMe · Nachweisorientierter Vertrieb · SaaS-Zugriff über OIDC</footer>
+</body>
+</html>

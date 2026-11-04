@@ -1,9 +1,13 @@
 # GreenGrapeMe SaaS identity and tenant API (G6 implementation)
 
-This feature is a **real authenticated, tenant-scoped WSGI API** distinct
-from the existing *local loopback demo viewer*. It does not provide an IdP
-login screen, tenant self-service registration, billing, or a replacement
-CRM. Those require their own acceptance and release work.
+This feature is a **real authenticated, tenant-scoped WSGI API with a
+browser-based OIDC Authorization Code + PKCE dashboard**, distinct from
+the existing local shared-token demo viewer. The dashboard supports
+login via an external OIDC provider, explicit authorized tenant selection,
+lead/source review, Discovery queueing, reported CRM milestones and
+reported-only financial events. It does not supply an IdP service,
+tenant self-service registration, subscriptions/billing or a replacement
+enterprise CRM. Those require separate release work.
 
 ## Authentication boundary
 
@@ -123,6 +127,9 @@ export GG_OIDC_ISSUER=https://idp.example.com/realms/acme
 export GG_OIDC_AUDIENCE=greengrapeme-api
 export GG_OIDC_JWKS_URI=https://idp.example.com/realms/acme/protocol/openid-connect/certs
 export GG_SAAS_ORIGIN=https://app.example.com
+export GG_OIDC_AUTHORIZE_URI=https://idp.example.com/realms/acme/protocol/openid-connect/auth
+export GG_OIDC_TOKEN_URI=https://idp.example.com/realms/acme/protocol/openid-connect/token
+export GG_OIDC_CLIENT_ID=greengrapeme-browser
 
 gunicorn --bind 127.0.0.1:8700 --workers 2 \
   'greengrapeme.saas_webapp:create_service_from_env()'
@@ -138,8 +145,33 @@ whose JWKS endpoint is under your administrative trust policy.
 
 ## Supported API contracts
 
-All paths are JSON-only under `/api/`. The existing local HTML app and
-shared `GG_VIEWER_TOKEN` are **not** part of this service.
+All business paths are JSON-only under `/api/`. In addition,
+`GET /`, `GET /saas.js`, `GET /app.css` and
+`GET /public/config` serve the OIDC PKCE dashboard without exposing a
+secret. Configure `GG_OIDC_AUTHORIZE_URI`, `GG_OIDC_TOKEN_URI` and
+`GG_OIDC_CLIENT_ID` together to enable it. Without all three, the
+service remains API-only (partial configurations refuse startup).
+
+Register `GG_SAAS_ORIGIN + '/'` as an exact public-SPA redirect URI
+with your identity provider; enable **Authorization Code + PKCE (S256)**
+for the public client. The token endpoint must allow the registered
+browser origin through the provider's own CORS policy. Access tokens
+must be RS256 JWTs with issuer and audience exactly matching the
+API configuration; opaque tokens or ID tokens do not substitute for
+them.
+
+The SPA stores only transient PKCE state/code-verifier/nonce in
+`sessionStorage`, scrubs the authorization code from the browser URL
+and holds access tokens **in JavaScript memory only**. It does not keep
+refresh tokens, passwords or access tokens in local/session storage or
+cookies. Refreshing the page requires a new sign-in, which can use the
+existing IdP SSO session. The local logout button clears the SPA token
+but does not automatically terminate the IdP's separate login session.
+Static assets have restrictive CSP: local scripts/styles, no framing,
+and network access only to the same origin and configured token endpoint.
+
+The existing shared-token HTML prototype and `GG_VIEWER_TOKEN`
+are **not** part of this SaaS service.
 
 - GET: `/api/me`, `/api/overview`, `/api/companies`,
   `/api/company`, `/api/missions`, `/api/work`,
@@ -170,9 +202,12 @@ cross-tenant account IDs, origin and TLS enforcement, browser/API
 authorization, user-attributed business events and safe CLI administration.
 It cannot substitute for a running production IdP.
 
-Still to finish before a production release: actual login via OIDC
-Authorization Code + PKCE in a supported frontend, real multi-user UI,
-proper WSGI/TLS deployment configuration, schema migration for old DBs,
-provider integration tests against real installations, observability,
-rate limits, incident and key rotation runbooks, subscriptions and
-contract/finance execution. **The release audit remains NO-GO.**
+Still to finish before a production release: independently
+validated IdP/PKCE/CORS setup and browser-level acceptance in the actual
+deployment, proper supervised WSGI/TLS configuration, provider integration
+tests against real installations, observability, rate limits, incident
+and key-rotation runbooks, subscriptions, onboarding, and complete
+contract/finance execution. Versioned copy-forward schema migration for
+existing DBs is available via `db-migrate`; production cutover still
+requires explicit operator reconciliation. **The release audit remains
+NO-GO until the remaining external and business gates are satisfied.**
