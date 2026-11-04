@@ -272,8 +272,6 @@ class CalendarBookings:
                 old["provider_kind"] != provider or
                 old["provider_event_id"] != event_id):
                 raise ValueError("calendar event identity changed")
-            if old["state"] == "CANCELLED_CONFIRMED" and state != old["state"]:
-                raise ValueError("cancelled booking cannot silently become active")
             if old["provider_updated_at"] is not None:
                 previous = _instant(old["provider_updated_at"])
                 if revised < previous:
@@ -283,6 +281,8 @@ class CalendarBookings:
                         old["provider_receipt_id"] != proof_id):
                         raise ValueError("conflicting calendar provider revision")
                     return dict(old)
+            if old["state"] == "CANCELLED_CONFIRMED" and state != old["state"]:
+                raise ValueError("cancelled booking cannot silently become active")
             try:
                 db.execute("""
                     UPDATE sales_pilot_appointments
