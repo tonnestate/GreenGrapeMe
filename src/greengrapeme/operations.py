@@ -151,10 +151,41 @@ class SalesWorkspace:
                 result["new"] += 1
         return result
 
+    @staticmethod
+    def _validated_work_source(opportunity) -> dict | None:
+        """Fail closed on malformed or substituted persisted account evidence.
+
+        The source JSON is not a trusted runtime object. Review-ready tasks
+        must refer to the SAME immutable account/offer/company identity
+        originally imported and must never bypass original suppression.
+        """
+        if opportunity is None or not isinstance(opportunity["source_json"], str):
+            return None
+        try:
+            source = json.loads(opportunity["source_json"])
+        except (ValueError, TypeError):
+            return None
+        if (not isinstance(source, dict)
+                or source.get("opportunity_id") != opportunity["opportunity_id"]
+                or source.get("offer_id") != opportunity["offer_id"]
+                or source.get("company_name") != opportunity["company_name"]
+                or not isinstance(source.get("company_name"), str)
+                or not source["company_name"].strip()
+                or source.get("suppressed") is not False
+                or not isinstance(source.get("evidence"), list)
+                or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("kind"), str)
+                    or not isinstance(item.get("claim"), str)
+                    or not isinstance(item.get("reference"), str)
+                    for item in source["evidence"])):
+            return None
+        return source
+
     def run_cycle(self, tenant: str, limit: int = 100) -> dict:
         """Bounded, deterministic work loop. Never sends, calls or signs."""
         tenant = self._required(tenant, "tenant")
-        if not 1 <= limit <= 1000:
+        if type(limit) is not int or not 1 <= limit <= 1000:
             raise ValueError("limit must be 1..1000")
         out = {"processed": 0, "ready_for_review": 0, "blocked": 0}
         with self._db() as db:
@@ -164,18 +195,23 @@ class SalesWorkspace:
             for row in rows:
                 suppressed = db.execute("SELECT 1 FROM suppressions WHERE tenant=? AND opportunity_id=?",
                                         (tenant, row["opportunity_id"])).fetchone()
-                if suppressed:
+                opportunity = db.execute(
+                    """SELECT opportunity_id,offer_id,company_name,source_json
+                       FROM opportunities WHERE tenant=? AND opportunity_id=?""",
+                    (tenant, row["opportunity_id"])).fetchone()
+                source = self._validated_work_source(opportunity)
+                if suppressed or source is None:
+                    # A corrupt row blocks only its own queued work; other
+                    # accounts in the same batch remain operable.
                     state = "BLOCKED"
                 elif row["action"] == "PREPARE_EVIDENCE_GROUNDED_DRAFT":
-                    opportunity = db.execute(
-                        "SELECT source_json FROM opportunities WHERE tenant=? AND opportunity_id=?",
-                        (tenant, row["opportunity_id"])
-                    ).fetchone()
-                    data = json.loads(opportunity["source_json"])
-                    claims = [e for e in data["evidence"] if e["kind"] == "BUYING_SIGNAL"]
-                    brief = {"account": data["company_name"], "offer_id": data["offer_id"],
-                             "buying_signals": [{"claim": e["claim"], "reference": e["reference"]}
-                                                for e in claims],
+                    claims = [e for e in source["evidence"]
+                              if e["kind"] == "BUYING_SIGNAL"]
+                    brief = {"account": source["company_name"],
+                             "offer_id": source["offer_id"],
+                             "buying_signals": [
+                                 {"claim": e["claim"], "reference": e["reference"]}
+                                 for e in claims],
                              "not_contact_authority": True}
                     db.execute("UPDATE work_items SET details_json=? WHERE tenant=? AND work_id=?",
                                (json.dumps(brief, sort_keys=True), tenant, row["work_id"]))
