@@ -120,6 +120,36 @@ class DittofeedLifecycleTests(unittest.TestCase):
         self.assertEqual(changed["withheld_source_conflict"], 1)
         self.assertEqual(changed["batch"], [])
 
+    def test_preview_rejects_invalid_structured_account_source(self):
+        self.record(confirmed=True)
+        for raw in ("{}", "{invalid-json", "[]", b"binary-invalid", 123):
+            with self.subTest(source=raw):
+                with self.store._db() as db:
+                    db.execute("""UPDATE opportunities SET source_json=?
+                                  WHERE tenant='tenant-a' AND opportunity_id='opportunity-001'""",
+                               (raw,))
+                result = self.preview.preview("tenant-a", "pilot-001")
+                self.assertEqual(result["eligible_count"], 0)
+                self.assertEqual(result["withheld_source_conflict"], 1)
+                self.assertEqual(result["batch"], [])
+
+    def test_preview_never_ignores_original_upstream_suppression(self):
+        self.record(confirmed=True)
+        with self.store._db() as db:
+            source = db.execute("""SELECT source_json FROM opportunities
+                                   WHERE tenant='tenant-a'
+                                   AND opportunity_id='opportunity-001'""").fetchone()[0]
+            changed = json.loads(source)
+            changed["suppressed"] = True
+            db.execute("""UPDATE opportunities SET source_json=?
+                          WHERE tenant='tenant-a' AND opportunity_id='opportunity-001'""",
+                       (json.dumps(changed),))
+            db.execute("""DELETE FROM suppressions
+                          WHERE tenant='tenant-a' AND opportunity_id='opportunity-001'""")
+        result = self.preview.preview("tenant-a", "pilot-001")
+        self.assertEqual(result["eligible_count"], 0)
+        self.assertEqual(result["withheld_source_conflict"], 1)
+
     def test_customer_payment_is_not_automatic_churn_or_revenue_uplift(self):
         self.record(event_id="payment-001", kind="CUSTOMER_PAYMENT_RECEIVED",
                     confirmed=True, amount=123400)
