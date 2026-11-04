@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 
-from .dittofeed_lifecycle import _EVENT_NAMES, _opaque_id
+from .dittofeed_lifecycle import _EVENT_NAMES, _opaque_id, _valid_source_link
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger, _id
 
@@ -69,7 +69,9 @@ class DittofeedOutbox:
             if row["suppressed_id"] is not None:
                 raise PermissionError("local suppression blocks Dittofeed lifecycle intent")
             if (not row["opportunity_id"] or row["offer_id"] != pilot["offer_id"]
-                    or not row["source_json"]):
+                    or not _valid_source_link(row["source_json"],
+                                               row["opportunity_id"],
+                                               pilot["offer_id"])):
                 raise PermissionError("Dittofeed lifecycle source/account link invalid")
             source_sha = hashlib.sha256(row["source_json"].encode()).hexdigest()
             message_id = _opaque_id("event", tenant, pilot_id, event_id)
@@ -152,7 +154,8 @@ class DittofeedOutbox:
         source_current = bool(
             payload_current and source and event and
             isinstance(source["source_json"], str) and
-            bool(source["source_json"]) and
+            _valid_source_link(source["source_json"],
+                               row["opportunity_id"], source["offer_id"]) and
             source["offer_id"] == PilotLedger(self.store).get(
                 tenant, pilot_id)["offer_id"] and
             hashlib.sha256(source["source_json"].encode()).hexdigest()
