@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import sqlite3
 
 from .operations import SalesWorkspace
@@ -70,6 +71,60 @@ def _display_suppression(local_reason, upstream_suppressed: bool,
     return False, None
 
 
+def _safe_blackberry_review(raw: object) -> dict:
+    """Never present a malformed external review as verified account context."""
+    try:
+        source = json.loads(raw) if isinstance(raw, str) else None
+    except (TypeError, ValueError):
+        source = None
+    if (not isinstance(source, dict)
+            or not isinstance(source.get("donor_status"), str)
+            or not isinstance(source.get("role_reviews"), list)
+            or not isinstance(source.get("source_urls", []), list)
+            or not all(isinstance(role, dict) for role in source["role_reviews"])):
+        return {
+            "donor_status": "SOURCE_DATA_INVALID",
+            "account_linkage": "UNVERIFIED",
+            "contact_authority": "NONE",
+            "legal_name": "",
+            "role_reviews": [],
+            "source_urls": [],
+        }
+    return {
+        "donor_status": source["donor_status"],
+        "account_linkage": "UNVERIFIED",
+        "contact_authority": "NONE",
+        "legal_name": (source.get("legal_name", "")
+                       if isinstance(source.get("legal_name", ""), str) else ""),
+        "role_reviews": source["role_reviews"],
+        "source_urls": [
+            url for url in source["source_urls"] if isinstance(url, str)
+        ],
+    }
+
+
+def _valid_signal_rows(rows: list) -> tuple[list[Signal], int]:
+    """Malformed persisted signals cannot inflate a business priority score."""
+    accepted = []
+    invalid = 0
+    for row in rows:
+        try:
+            if (not all(isinstance(row[field], str)
+                        for field in ("kind", "evidence_url",
+                                      "observed_at", "claim"))
+                    or type(row["strength"]) not in (int, float)
+                    or not math.isfinite(row["strength"])):
+                raise ValueError("malformed signal fields")
+            timestamp = datetime.fromisoformat(row["observed_at"])
+            signal = Signal(
+                row["kind"], row["evidence_url"], timestamp,
+                row["strength"], row["claim"])
+            accepted.append(signal)
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            invalid += 1
+    return accepted, invalid
+
+
 class DiscoveryCatalog:
     def __init__(self, store: SalesWorkspace):
         self.store = store
@@ -102,7 +157,7 @@ class DiscoveryCatalog:
             raise ValueError("invalid search query")
         if not isinstance(offer_id, str) or len(offer_id) > 160:
             raise ValueError("invalid offer filter")
-        if status and status not in _STATUSES:
+        if not isinstance(status, str) or (status and status not in _STATUSES):
             raise ValueError("invalid qualification status")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -118,20 +173,44 @@ class DiscoveryCatalog:
         if offer_id.strip():
             filters.append("o.offer_id=?")
             params.append(offer_id.strip())
-        if status:
+        # Qualification shown to operators is a DERIVED business status.
+        # A malformed source is always shown as NEEDS_REVIEW regardless
+        # of the persisted status. Status filters and total counts must
+        # use that same displayed status, not a stale SQL-only value.
+        if status in ("QUALIFIED", "REJECTED"):
+            # Invalid rows cannot qualify for either of these categories,
+            # so this persisted-state restriction reduces scanned records.
             filters.append("o.status=?")
             params.append(status)
         where = " AND ".join(filters)
         with self.store._db() as db:
-            n = db.execute("SELECT count(*) FROM opportunities o WHERE " + where,
-                           params).fetchone()[0]
             sql = ("""SELECT o.opportunity_id,o.company_name,o.offer_id,o.status,o.reason,
                              o.updated_at,o.source_json,s.reason AS suppression_reason
                       FROM opportunities o LEFT JOIN suppressions s
                       ON s.tenant=o.tenant AND s.opportunity_id=o.opportunity_id
                       WHERE """ + where +
-                   " ORDER BY o.company_name COLLATE NOCASE,o.opportunity_id LIMIT ? OFFSET ?")
-            rows = db.execute(sql, (*params, limit, offset)).fetchall()
+                   " ORDER BY o.company_name COLLATE NOCASE,o.opportunity_id")
+            if status:
+                rows = []
+                n = 0
+                # Streaming scan ensures limit, offset and count use the
+                # same effective qualification contract. Do not expose a
+                # projected NEEDS_REVIEW row under a QUALIFIED filter.
+                for row in db.execute(sql, params):
+                    _, _, valid = _source_state(row)
+                    effective = row["status"] if valid else "NEEDS_REVIEW"
+                    if effective != status:
+                        continue
+                    if offset <= n < offset + limit:
+                        rows.append(row)
+                    n += 1
+            else:
+                n = db.execute(
+                    "SELECT count(*) FROM opportunities o WHERE " + where,
+                    params).fetchone()[0]
+                rows = db.execute(
+                    sql + " LIMIT ? OFFSET ?",
+                    (*params, limit, offset)).fetchall()
         data = []
         for row in rows:
             evidence, upstream_suppressed, source_valid = _source_state(row)
@@ -180,17 +259,20 @@ class DiscoveryCatalog:
                     WHERE tenant=? AND opportunity_id=?""",
                     (tenant, opportunity_id)).fetchone()
                 if b:
-                    source = json.loads(b["review_json"])
-                    blackberry = {"donor_status": source["donor_status"],
-                                  "account_linkage": "UNVERIFIED",
-                                  "contact_authority": "NONE",
-                                  "legal_name": source.get("legal_name", ""),
-                                  "role_reviews": source.get("role_reviews", []),
-                                  "source_urls": source.get("source_urls", [])}
-        signals = [Signal(r["kind"], r["evidence_url"],
-                          datetime.fromisoformat(r["observed_at"]),
-                          r["strength"], r["claim"]) for r in signal_rows]
-        score, signal_types = score_signals(signals, datetime.now(timezone.utc))
+                    blackberry = _safe_blackberry_review(b["review_json"])
+        signals, invalid_signals = _valid_signal_rows(signal_rows)
+        # A stale/corrupt source or malformed signal set is not a
+        # trustworthy basis for CURRENT lead prioritization. Keep the
+        # original rows available for operator inspection, but do not
+        # compute a plausible-looking partial score.
+        if source_valid and invalid_signals == 0:
+            score, signal_types = score_signals(
+                signals, datetime.now(timezone.utc))
+            signal_integrity = "VALID"
+        else:
+            score, signal_types = 0, {}
+            signal_integrity = ("SOURCE_DATA_INVALID" if not source_valid
+                                else "SIGNAL_DATA_INVALID")
         return {
             "opportunity_id": row["opportunity_id"],
             "company_name": row["company_name"],
@@ -205,6 +287,8 @@ class DiscoveryCatalog:
             "evidence": evidence,
             "intent_score": score, "intent_score_type": "HEURISTIC_NOT_PROBABILITY",
             "signal_breakdown": signal_types,
+            "signal_integrity": signal_integrity,
+            "invalid_signal_count": invalid_signals,
             "signals": [dict(r) for r in signal_rows],
             "tasks": tasks, "blackberry_research": blackberry,
             "contact_authority": "NONE",

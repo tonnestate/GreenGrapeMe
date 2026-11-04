@@ -9,6 +9,7 @@ from contextlib import closing, contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import sqlite3
 from typing import Iterable
@@ -316,28 +317,61 @@ class SalesWorkspace:
             return bool(cursor.rowcount)
 
     def rankings(self, tenant: str, now: datetime | None = None) -> list[dict]:
+        """Current source-valid, non-suppressed accounts only.
+
+        Lead priority must not silently override the original source's
+        suppression flag or assign a credible score to broken evidence.
+        """
         tenant = self._required(tenant, "tenant")
         now = now or datetime.now(timezone.utc)
         with self._db() as db:
-            rows = db.execute("""SELECT o.opportunity_id,o.company_name,s.kind,s.evidence_url,
-                              s.observed_at,s.strength,s.claim FROM opportunities o
-                              LEFT JOIN signals s ON s.tenant=o.tenant AND s.opportunity_id=o.opportunity_id
-                              LEFT JOIN suppressions p ON p.tenant=o.tenant AND p.opportunity_id=o.opportunity_id
+            rows = db.execute("""SELECT o.opportunity_id,o.company_name,
+                              o.offer_id,o.source_json,s.kind,s.evidence_url,
+                              s.observed_at,s.strength,s.claim
+                              FROM opportunities o
+                              LEFT JOIN signals s ON s.tenant=o.tenant
+                                  AND s.opportunity_id=o.opportunity_id
+                              LEFT JOIN suppressions p ON p.tenant=o.tenant
+                                  AND p.opportunity_id=o.opportunity_id
                               WHERE o.tenant=? AND p.opportunity_id IS NULL
                               ORDER BY o.opportunity_id""", (tenant,)).fetchall()
         grouped: dict[str, dict] = {}
         for row in rows:
-            obj = grouped.setdefault(row["opportunity_id"],
-                     {"opportunity_id": row["opportunity_id"],
-                      "company_name": row["company_name"], "signals": []})
-            if row["kind"]:
+            oid = row["opportunity_id"]
+            if oid not in grouped:
+                if self._validated_work_source(row) is None:
+                    continue
+                grouped[oid] = {
+                    "opportunity_id": oid,
+                    "company_name": row["company_name"],
+                    "signals": [], "bad_signal": False,
+                }
+            obj = grouped.get(oid)
+            if obj is None or row["kind"] is None:
+                continue
+            try:
+                if (not all(isinstance(row[field], str)
+                            for field in ("kind", "evidence_url",
+                                          "observed_at", "claim"))
+                        or type(row["strength"]) not in (int, float)
+                        or not math.isfinite(row["strength"])):
+                    raise ValueError("malformed stored signal")
                 obj["signals"].append(Signal(
                     row["kind"], row["evidence_url"],
-                    datetime.fromisoformat(row["observed_at"]), row["strength"], row["claim"]
+                    datetime.fromisoformat(row["observed_at"]),
+                    row["strength"], row["claim"],
                 ))
+            except (TypeError, ValueError, AttributeError, OverflowError):
+                obj["bad_signal"] = True
         output = []
         for obj in grouped.values():
-            score, breakdown = score_signals(obj.pop("signals"), now)
+            if obj.pop("bad_signal"):
+                # Do not quietly compute a partial business score from
+                # only the surviving subset of a damaged signal set.
+                obj.pop("signals")
+                score, breakdown = 0, {}
+            else:
+                score, breakdown = score_signals(obj.pop("signals"), now)
             output.append({**obj, "intent_score": score, "signal_breakdown": breakdown})
         return sorted(output, key=lambda row: (-row["intent_score"], row["opportunity_id"]))
 
