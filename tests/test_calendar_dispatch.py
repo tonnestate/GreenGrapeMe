@@ -48,9 +48,24 @@ class CalendarTransport:
         self.fail_before_insert = False
         self.timeout_after_delete = False
         self.fail_before_delete = False
+        self.availability_calls = []
+        self.freebusy_busy = []
+        self.freebusy_failure = None
 
     def open(self, request, timeout):
         method = request.get_method()
+        if request.full_url == "https://www.googleapis.com/calendar/v3/freeBusy":
+            self.availability_calls.append((method, request.full_url, timeout))
+            if self.freebusy_failure is not None:
+                raise self.freebusy_failure
+            requested = json.loads(request.data)
+            calendar = requested["items"][0]["id"]
+            record = {
+                "kind": "calendar#freeBusy",
+                "timeMin": requested["timeMin"], "timeMax": requested["timeMax"],
+                "calendars": {calendar: {"busy": self.freebusy_busy}},
+            }
+            return Response(200, json.dumps(record).encode("utf-8"))
         self.calls.append((method, request.full_url, timeout))
         if method == "POST":
             if self.fail_before_insert:
@@ -181,12 +196,16 @@ class CalendarDispatchTests(unittest.TestCase):
         self.assertEqual(url, "https://www.googleapis.com/calendar/v3/calendars/"
                               "organizer%40example.org/events?sendUpdates=all")
         self.assertEqual(seconds, 5.0)
+        self.assertEqual(len(self.transport.availability_calls), 1)
+        self.assertEqual(self.transport.availability_calls[0][1],
+                         "https://www.googleapis.com/calendar/v3/freeBusy")
         self.assertEqual(release_audit(self.path)[
             "uncertain_external_effect_counts"]["sales_calendar_dispatch_attempts"], 1)
         self.assertEqual(self.policy.calls[0]["action"], "CREATE_AND_INVITE")
         self.assertEqual(self.policy.calls[0]["send_updates"], "all")
         self.assertEqual(self.send()["http_post_attempted_now"], False)
         self.assertEqual(len(self.policy.calls), 1)
+        self.assertEqual(len(self.transport.availability_calls), 1)
         self.assertEqual([method for method, _, _ in self.transport.calls],
                          ["POST"])
         after = self.dispatcher.reconcile(*self.keys)
@@ -201,6 +220,61 @@ class CalendarDispatchTests(unittest.TestCase):
         self.assertEqual(self.send()["http_post_attempted_now"], False)
         self.assertEqual([method for method, _, _ in self.transport.calls],
                          ["POST", "GET", "GET"])
+
+    def test_busy_slot_blocks_create_before_durable_attempt(self):
+        self.policy.allowed = True
+        self.transport.freebusy_busy = [{
+            "start": (self.begin - timedelta(minutes=10)).isoformat(),
+            "end": (self.begin + timedelta(minutes=10)).isoformat(),
+        }]
+        with self.assertRaisesRegex(ValueError, "slot is already busy"):
+            self.send()
+        self.assertEqual(self.transport.calls, [])
+        self.assertEqual(len(self.transport.availability_calls), 1)
+        self.assertIsNone(self.dispatcher.get_attempt(*self.keys))
+        self.assertEqual(self.bookings.get(*self.keys)["state"], "REQUESTED")
+
+    def test_failed_provider_availability_does_not_create_or_consume_fence(self):
+        self.policy.allowed = True
+        self.transport.freebusy_failure = TimeoutError("Google response timed out")
+        with self.assertRaisesRegex(RuntimeError, "FreeBusy lookup unavailable"):
+            self.send()
+        self.assertEqual(self.transport.calls, [])
+        self.assertIsNone(self.dispatcher.get_attempt(*self.keys))
+        self.transport.freebusy_failure = None
+        self.assertTrue(self.send()["http_post_attempted_now"])
+        self.assertEqual(len(self.transport.availability_calls), 2)
+        self.assertEqual(len(self.transport.calls), 1)
+
+    def test_overlapping_local_invites_are_fenced_even_if_freebusy_is_stale(self):
+        self.policy.allowed = True
+        self.send()
+        flow = PilotSalesFlow(self.store)
+        flow.open_inbound(
+            "tenant-01", "pilot-0001", "case-0002",
+            company_name="Second Example GmbH", channel="CRM_INBOUND",
+            evidence_ref="urn:crm:calendar:inbound:002",
+            reporter_ref="operator-001")
+        flow.step(
+            "tenant-01", "pilot-0001", "case-0002",
+            step_id="qualified-002", expected_state="INBOUND_REVIEW",
+            to_state="QUALIFIED_REPORTED",
+            evidence_ref="urn:crm:calendar:qualified:002",
+            reporter_ref="operator-001")
+        self.bookings.prepare(
+            "tenant-01", "pilot-0001", "case-0002", "booking-0002",
+            calendar_ref="urn:calendar:tenant:owned-001",
+            slot_start_at=(self.begin+timedelta(minutes=15)).isoformat(),
+            slot_end_at=(self.end+timedelta(minutes=15)).isoformat(),
+            reporter_ref="operator-001")
+        with self.assertRaisesRegex(ValueError, "conflicting locally dispatched"):
+            self.dispatcher.book(
+                "tenant-01", "pilot-0001", "case-0002", "booking-0002",
+                permission_ref=self.policy_ref)
+        self.assertEqual([method for method, _, _ in self.transport.calls],
+                         ["POST"])
+        self.assertIsNone(self.dispatcher.get_attempt(
+            "tenant-01", "pilot-0001", "case-0002", "booking-0002"))
 
     def test_timeout_after_provider_creation_never_reposts_even_after_restart(self):
         self.policy.allowed = True

@@ -136,9 +136,27 @@ verified = dispatcher.reconcile(tenant_id, pilot_id, case_id, booking_id)
 
 The host binds immutable prepared appointment data to a deterministic Google
 event ID composed only of allowed Google ID characters. After independent
-permission evaluation, the system rechecks the stored tenant, CRM source,
-offer, case state, suppression, slot and booking intent under one SQLite
-`BEGIN IMMEDIATE` transaction. It commits an attempt row **before**
+permission evaluation, it queries the trusted organizer calendar using Google
+Calendar `POST /calendar/v3/freeBusy` (read-only operation) over the exact
+proposed time window:
+https://developers.google.com/workspace/calendar/api/v3/reference/freebusy/query
+
+`GoogleCalendarAvailability` accepts only the host-authorized tenant and
+calendar reference, requires a single complete response from the expected
+provider calendar with no calendar errors, and rejects malformed or partial
+responses. FreeBusy intervals are half-open: `busy.start` is inclusive and
+`busy.end` exclusive. If occupied, unavailable, or unverifiable, no
+irreversible invitation fence is created and no invitation is sent. The
+return value intentionally contains only a boolean and no existing meeting
+details. It does **not** assert the invitee's own availability.
+
+After availability evaluation, the system rechecks the stored tenant, CRM
+source, offer, case state, suppression, slot and booking intent under one
+SQLite `BEGIN IMMEDIATE` transaction. The transaction also rejects an
+overlapping, already-dispatched appointment for the same GreenGrapeMe
+calendar reference, including uncertain provider attempts. FreeBusy itself
+does not reserve time atomically against third-party calendar writers;
+independent provider booking verification remains mandatory. It commits an attempt row **before**
 crossing the network boundary. Only then may it invoke the pinned Google
 Calendar `events.insert?sendUpdates=all` endpoint, inviting the attendee.
 
@@ -153,8 +171,9 @@ count as completed bookings. Booking creation never marks a meeting attended
 or asserts that the guest opened/accepted the notification.
 
 This module has no live Google credentials, automatic OAuth onboarding,
-calendar availability negotiation, or general-purpose user-initiated
-consent bypass. Its tests intercept HTTP and exercise the real SQLite
+attendee-side availability confirmation, multi-slot calendar negotiation or
+general-purpose user-initiated consent bypass. The FreeBusy read and
+Google event write tests intercept HTTP and exercise the real SQLite
 ledger; no invitations are sent during CI.
 
 ## Authorized Google Calendar cancellation with no duplicate DELETE
@@ -203,9 +222,9 @@ Google Calendar event creation, confirmation and cancellation now
 have concrete host-side provider operations, a durable one-shot attempt fence
 per irreversible operation and independent read recovery. Remaining
 development/integration work includes the host's real OAuth onboarding and
-refresh, customer/contact authorization and approval, availability/slot
-selection, delegated host scheduling and recovery execution, provider
-notification visibility and Google tombstones lacking sufficient evidence.
+refresh, customer/contact authorization and approval, multi-slot selection,
+delegated host scheduling and recovery execution, provider notification
+visibility and Google tombstones lacking sufficient evidence.
 CalDAV and Microsoft Graph adapters are not bundled. CI uses intercepted
 HTTP and must not be described as live provider acceptance.
 `release-audit` remains NO-GO.
