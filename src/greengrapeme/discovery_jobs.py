@@ -568,7 +568,8 @@ class DiscoveryJobQueue:
                 source_data = json.loads(item["source_json"])
                 expected = research_fingerprint(
                     item["opportunity_id"], source_data["company_name"],
-                    spec.objective, (), "", "")
+                    spec.objective, (), "", "",
+                    source_sha256=item["source_sha256"])
                 if item["input_sha256"] is not None and item["input_sha256"] != expected:
                     self._transition(tenant, request_id, state, "BLOCKED_BLACKBERRY_REVISION",
                                      error_kind="RESEARCH_CONTEXT_CHANGED")
