@@ -141,7 +141,7 @@ async function admit(tenant) {
 
 async function run() {
   // A valid ISO instant must be parsed as an exact offset-aware moment.
-  assert.equal(appointmentInstant.bind(null, "appointment-start") instanceof Function, true);
+  assert.equal(typeof appointmentInstant, "function");
   element("appointment-start").value = "2028-02-29T09:15:02+05:30";
   assert.equal(appointmentInstant("appointment-start"), "2028-02-29T03:45:02.000Z");
   element("appointment-start").value = "2028-02-29T09:15:02-03:30";
