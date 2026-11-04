@@ -288,6 +288,27 @@ class PilotLedger:
                 receipt.get("currency") != "EUR" or
                 receipt.get("evidence_ref") != event["evidence_ref"]):
             raise ValueError("independent receipt does not match event identity/amount/source")
+        # Existing provider adapters may return only the legacy minimal
+        # receipt shape. However, when an independent source explicitly
+        # supplies binding fields, a contradiction is an immediate denial:
+        # a receipt for another tenant, pilot, account or dated event must
+        # never silently confirm this one merely because amount/ref match.
+        explicit_bindings = (
+            ("tenant", "tenant"),
+            ("pilot_id", "pilot_id"),
+            ("event_id", "event_id"),
+            ("opportunity_id", "opportunity_id"),
+            ("occurred_at", "occurred_at"),
+        )
+        for receipt_field, event_field in explicit_bindings:
+            if (receipt_field in receipt
+                    and (type(receipt[receipt_field]) is not str
+                         if event[event_field] is not None
+                         else receipt[receipt_field] is not None)):
+                raise ValueError("independent receipt has invalid explicit identity")
+            if (receipt_field in receipt
+                    and receipt[receipt_field] != event[event_field]):
+                raise ValueError("independent receipt conflicts with event identity")
         try:
             with self.store._db() as db:
                 db.execute("BEGIN IMMEDIATE")
