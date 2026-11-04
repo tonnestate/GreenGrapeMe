@@ -59,8 +59,13 @@ class DashboardSuppressionE2E(unittest.TestCase):
         return received["status"], json.loads(body), received["headers"]
 
     def test_upstream_suppression_is_visible_without_local_suppression(self):
-        # No local opt-out record exists, but the original source says not
-        # to contact this company. The UI must not show 'Nein' (not blocked).
+        # The importer normally stores a local suppression as well.
+        # Simulate a lost suppression row (backup drift / manual recovery):
+        # the original source flag must STILL prevent a 'Nein' display.
+        with self.store._db() as db:
+            db.execute(
+                "DELETE FROM suppressions WHERE tenant=? AND opportunity_id=?",
+                ("tenant-a", "upstream-0001"))
         self.assertEqual(self.store.overview("tenant-a")["suppressions"], 0)
         status, response, headers = self.request("/api/companies")
         self.assertEqual(status, "200 OK")
