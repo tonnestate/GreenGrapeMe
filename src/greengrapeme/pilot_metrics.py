@@ -257,6 +257,19 @@ class PilotLedger:
         event = self.event(tenant, pilot_id, event_id)
         if event["state"] == "SOURCE_CONFIRMED":
             return event
+        if event["opportunity_id"]:
+            with self.store._db() as db:
+                pilot = db.execute("""
+                    SELECT offer_id FROM sales_pilots
+                    WHERE tenant=? AND pilot_id=?
+                """, (tenant, pilot_id)).fetchone()
+                if pilot is None:
+                    raise LookupError("unknown tenant pilot")
+                # Refuse a third-party evidence lookup for a locally
+                # mismatched company, before disclosing event metadata.
+                self._require_current_account_link(
+                    db, tenant, pilot_id, pilot["offer_id"],
+                    event["opportunity_id"])
         receipt = source.verify(event)
         if not isinstance(receipt, dict) or receipt.get("confirmed") is not True:
             raise ValueError("source did not confirm event")
