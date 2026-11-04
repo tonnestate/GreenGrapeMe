@@ -15,10 +15,81 @@ import stat
 import tempfile
 
 
+# Known persisted business and irreversible-effect schemas. Optional tables
+# are initialized by their respective feature modules; once present, they
+# must be structurally valid. Never silently certify a backup which would
+# fail as soon as a Sales/CRM/payment/provider module is reopened.
+# The column list is a minimum: additive, backward-compatible columns are
+# permitted, but a broken primary key or missing source/fence field is not.
+_SCHEMA = {
+    "opportunities": ("tenant opportunity_id offer_id company_name source_json status reason updated_at",
+                       ("tenant", "opportunity_id")),
+    "work_items": ("tenant work_id opportunity_id role action state details_json created_at",
+                   ("tenant", "work_id")),
+    "inbox": ("tenant message_id opportunity_id result created_at",
+              ("tenant", "message_id")),
+    "suppressions": ("tenant opportunity_id reason created_at",
+                     ("tenant", "opportunity_id")),
+    "signals": ("tenant opportunity_id kind evidence_url observed_at strength claim",
+                ("tenant", "opportunity_id", "kind", "evidence_url", "observed_at")),
+    "audit": ("seq tenant entity_id event payload_json occurred_at", ("seq",)),
+    "sales_pilots": ("tenant pilot_id offer_id label planned_monthly_fee_cents "
+                     "planned_setup_fee_cents currency created_at",
+                     ("tenant", "pilot_id")),
+    "sales_pilot_events": ("tenant pilot_id event_id opportunity_id event_kind "
+                           "amount_cents currency occurred_at evidence_ref reporter_ref "
+                           "state provider_kind provider_receipt_id confirmed_at created_at",
+                           ("tenant", "pilot_id", "event_id")),
+    "sales_pilot_cases": ("tenant pilot_id case_id opportunity_id reported_channel "
+                          "inbound_ref reporter_ref source_sha256 company_name state "
+                          "next_followup_at created_at updated_at",
+                          ("tenant", "pilot_id", "case_id")),
+    "sales_pilot_case_steps": ("tenant pilot_id case_id step_id from_state to_state "
+                               "evidence_ref reporter_ref followup_at occurred_at",
+                               ("tenant", "pilot_id", "case_id", "step_id")),
+    "sales_pilot_reply_effects": ("tenant pilot_id case_id reply_id opportunity_id "
+                                  "recipient_ref content_ref content_sha256 "
+                                  "case_source_sha256 effect_id state permission_receipt_ref "
+                                  "provider_ref created_at updated_at",
+                                  ("tenant", "pilot_id", "case_id", "reply_id")),
+    "sales_missions": ("tenant mission_id offer_id objective icp_json status "
+                        "stage_index created_at updated_at",
+                        ("tenant", "mission_id")),
+    "sales_mission_steps": ("tenant mission_id stage state input_sha256 output_json "
+                            "receipt_id provider_status cost_usd error_class updated_at",
+                            ("tenant", "mission_id", "stage")),
+    "sales_mission_accounts": ("tenant mission_id opportunity_id source_sha256",
+                               ("tenant", "mission_id", "opportunity_id")),
+    "discovery_product_jobs": ("tenant request_id spec_sha256 spec_json state "
+                                "external_job_id result_json error_kind created_at updated_at",
+                                ("tenant", "request_id")),
+    "dittofeed_sync_outbox": ("tenant pilot_id event_id workspace_id opportunity_id "
+                              "source_sha256 message_id payload_sha256 payload_json "
+                              "state created_at",
+                              ("tenant", "pilot_id", "event_id")),
+    "dittofeed_pomelo_effects": ("tenant pilot_id event_id effect_id state workspace_id "
+                                 "message_id payload_sha256 permission_ref provider_ref "
+                                 "created_at updated_at",
+                                 ("tenant", "pilot_id", "event_id")),
+    "dittofeed_provider_attempts": ("tenant pilot_id event_id effect_id workspace_id "
+                                    "message_id payload_sha256 started_at",
+                                    ("tenant", "pilot_id", "event_id")),
+}
+
 _BASE_TABLES = frozenset({
-    "opportunities", "work_items", "inbox",
-    "suppressions", "signals", "audit",
+    "opportunities", "work_items", "inbox", "suppressions", "signals", "audit",
 })
+
+# A missing unique effect/receipt constraint is as dangerous as a missing
+# column: restored systems could replay paid events or external sends.
+_UNIQUE_BINDINGS = {
+    "sales_pilot_events": (("tenant", "provider_kind", "provider_receipt_id"),),
+    "sales_pilot_cases": (("tenant", "opportunity_id"),),
+    "sales_pilot_reply_effects": (("tenant", "effect_id"),),
+    "dittofeed_sync_outbox": (("tenant", "workspace_id", "message_id"),),
+    "dittofeed_pomelo_effects": (("tenant", "effect_id"),),
+    "dittofeed_provider_attempts": (("tenant", "effect_id"),),
+}
 
 
 def _source_path(path: str | Path) -> Path:
@@ -63,9 +134,61 @@ def _check_open_database(db: sqlite3.Connection) -> dict:
             "SELECT name FROM sqlite_master WHERE type='table'")}
     if not _BASE_TABLES.issubset(tables):
         raise ValueError("database does not contain the GreenGrapeMe base schema")
+
+    present = sorted(tables.intersection(_SCHEMA))
+    for table in present:
+        # Identifiers are constants from the module, never user input.
+        info = db.execute(f'PRAGMA table_info("{table}")').fetchall()
+        columns = {field[1] for field in info}
+        expected_columns, expected_pk = _SCHEMA[table]
+        if not set(expected_columns.split()).issubset(columns):
+            raise ValueError(f"GreenGrapeMe schema missing required columns: {table}")
+        primary = tuple(
+            field[1] for field in sorted(info, key=lambda field: field[5])
+            if field[5] > 0
+        )
+        if primary != expected_pk:
+            raise ValueError(f"GreenGrapeMe schema missing primary key: {table}")
+
+        for required_unique in _UNIQUE_BINDINGS.get(table, ()):
+            found = False
+            for index in db.execute(f'PRAGMA index_list("{table}")'):
+                if not index[2]:  # not UNIQUE
+                    continue
+                index_name = index[1]
+                # SQLite creates index names; a bound parameter is not valid
+                # in PRAGMA index_info, so quote the internal name safely.
+                quoted = index_name.replace('"', '""')
+                indexed_columns = tuple(
+                    field[2] for field in db.execute(
+                        f'PRAGMA index_info("{quoted}")')
+                )
+                if indexed_columns != required_unique:
+                    continue
+                # Partial indexes may only protect some events; the allowed
+                # ledger receipt index explicitly excludes NULL receipt IDs.
+                if len(index) > 4 and index[4]:
+                    definition = db.execute(
+                        "SELECT sql FROM sqlite_master WHERE name=?",
+                        (index_name,)).fetchone()
+                    sql = (definition[0] or "").upper() if definition else ""
+                    if (table != "sales_pilot_events" or
+                            "WHERE PROVIDER_RECEIPT_ID IS NOT NULL" not in
+                            " ".join(sql.split())):
+                        continue
+                found = True
+                break
+            if not found:
+                raise ValueError(
+                    f"GreenGrapeMe schema missing unique identity fence: {table}")
     return {
         "integrity": "ok",
         "foreign_keys": "ok",
+        "schema_integrity": "ok",
+        "schema_tables_verified": present,
+        "uninitialized_optional_tables": sorted(
+            set(_SCHEMA).difference(_BASE_TABLES).difference(tables)
+        ),
         "table_count": len(tables),
         "user_version": db.execute("PRAGMA user_version").fetchone()[0],
     }
