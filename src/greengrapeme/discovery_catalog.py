@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import sqlite3
 
 from .operations import SalesWorkspace
@@ -68,6 +69,60 @@ def _display_suppression(local_reason, upstream_suppressed: bool,
     if upstream_suppressed:
         return True, "UPSTREAM_SUPPRESSION"
     return False, None
+
+
+def _safe_blackberry_review(raw: object) -> dict:
+    """Never present a malformed external review as verified account context."""
+    try:
+        source = json.loads(raw) if isinstance(raw, str) else None
+    except (TypeError, ValueError):
+        source = None
+    if (not isinstance(source, dict)
+            or not isinstance(source.get("donor_status"), str)
+            or not isinstance(source.get("role_reviews"), list)
+            or not isinstance(source.get("source_urls", []), list)
+            or not all(isinstance(role, dict) for role in source["role_reviews"])):
+        return {
+            "donor_status": "SOURCE_DATA_INVALID",
+            "account_linkage": "UNVERIFIED",
+            "contact_authority": "NONE",
+            "legal_name": "",
+            "role_reviews": [],
+            "source_urls": [],
+        }
+    return {
+        "donor_status": source["donor_status"],
+        "account_linkage": "UNVERIFIED",
+        "contact_authority": "NONE",
+        "legal_name": (source.get("legal_name", "")
+                       if isinstance(source.get("legal_name", ""), str) else ""),
+        "role_reviews": source["role_reviews"],
+        "source_urls": [
+            url for url in source["source_urls"] if isinstance(url, str)
+        ],
+    }
+
+
+def _valid_signal_rows(rows: list) -> tuple[list[Signal], int]:
+    """Malformed persisted signals cannot inflate a business priority score."""
+    accepted = []
+    invalid = 0
+    for row in rows:
+        try:
+            if (not all(isinstance(row[field], str)
+                        for field in ("kind", "evidence_url",
+                                      "observed_at", "claim"))
+                    or type(row["strength"]) not in (int, float)
+                    or not math.isfinite(row["strength"])):
+                raise ValueError("malformed signal fields")
+            timestamp = datetime.fromisoformat(row["observed_at"])
+            signal = Signal(
+                row["kind"], row["evidence_url"], timestamp,
+                row["strength"], row["claim"])
+            accepted.append(signal)
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            invalid += 1
+    return accepted, invalid
 
 
 class DiscoveryCatalog:
@@ -180,17 +235,20 @@ class DiscoveryCatalog:
                     WHERE tenant=? AND opportunity_id=?""",
                     (tenant, opportunity_id)).fetchone()
                 if b:
-                    source = json.loads(b["review_json"])
-                    blackberry = {"donor_status": source["donor_status"],
-                                  "account_linkage": "UNVERIFIED",
-                                  "contact_authority": "NONE",
-                                  "legal_name": source.get("legal_name", ""),
-                                  "role_reviews": source.get("role_reviews", []),
-                                  "source_urls": source.get("source_urls", [])}
-        signals = [Signal(r["kind"], r["evidence_url"],
-                          datetime.fromisoformat(r["observed_at"]),
-                          r["strength"], r["claim"]) for r in signal_rows]
-        score, signal_types = score_signals(signals, datetime.now(timezone.utc))
+                    blackberry = _safe_blackberry_review(b["review_json"])
+        signals, invalid_signals = _valid_signal_rows(signal_rows)
+        # A stale/corrupt source or malformed signal set is not a
+        # trustworthy basis for CURRENT lead prioritization. Keep the
+        # original rows available for operator inspection, but do not
+        # compute a plausible-looking partial score.
+        if source_valid and invalid_signals == 0:
+            score, signal_types = score_signals(
+                signals, datetime.now(timezone.utc))
+            signal_integrity = "VALID"
+        else:
+            score, signal_types = 0, {}
+            signal_integrity = ("SOURCE_DATA_INVALID" if not source_valid
+                                else "SIGNAL_DATA_INVALID")
         return {
             "opportunity_id": row["opportunity_id"],
             "company_name": row["company_name"],
@@ -205,6 +263,8 @@ class DiscoveryCatalog:
             "evidence": evidence,
             "intent_score": score, "intent_score_type": "HEURISTIC_NOT_PROBABILITY",
             "signal_breakdown": signal_types,
+            "signal_integrity": signal_integrity,
+            "invalid_signal_count": invalid_signals,
             "signals": [dict(r) for r in signal_rows],
             "tasks": tasks, "blackberry_research": blackberry,
             "contact_authority": "NONE",
