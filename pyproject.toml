@@ -7,7 +7,7 @@ name = "greengrapeme"
 version = "0.1.0"
 requires-python = ">=3.11"
 description = "Evidence-first sales team execution contracts for FruitStack"
-dependencies = []
+dependencies = ["PyJWT[crypto]>=2.10,<3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
