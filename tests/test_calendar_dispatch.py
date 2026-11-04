@@ -398,6 +398,21 @@ class CalendarDispatchTests(unittest.TestCase):
             self.cancel_invitation()
         self.assertEqual(len(self.transport.calls), before)
 
+    def test_competing_cancellation_workers_send_one_delete(self):
+        self.confirm_existing_booking()
+        nested = self.make_dispatcher()
+        other = []
+        def competing_worker():
+            self.policy.on_allow = None
+            other.append(nested.cancel(
+                *self.keys, permission_ref="urn:policy:cancel-invitation-001"))
+        self.policy.on_allow = competing_worker
+        first = self.cancel_invitation()
+        self.assertFalse(first["http_delete_attempted_now"])
+        self.assertTrue(other[0]["http_delete_attempted_now"])
+        self.assertEqual([method for method, _, _ in self.transport.calls].count(
+            "DELETE"), 1)
+
     def test_provider_tombstone_without_identity_does_not_certify_cancellation(self):
         self.confirm_existing_booking()
         self.cancel_invitation()
