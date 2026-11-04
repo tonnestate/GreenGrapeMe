@@ -129,6 +129,107 @@ class MissionTests(unittest.TestCase):
                 m.status("C", "same")
             self.assertEqual(m.status("B", "same")["tenant"], "B")
 
+    def test_invalid_persisted_source_prevents_mission_creation(self):
+        for corrupt in (b"broken-source", "{not-json", "{}",
+                        '{"opportunity_id":"foreign","offer_id":"offer-1",'
+                        '"company_name":"Example GmbH","suppressed":false,'
+                        '"evidence":[]}'):
+            with self.subTest(corrupt=repr(corrupt)), TemporaryDirectory() as temp:
+                store = SalesWorkspace(Path(temp) / "sales.db")
+                store.ingest("tenant", [lead()])
+                with store._db() as db:
+                    db.execute(
+                        "UPDATE opportunities SET source_json=? "
+                        "WHERE tenant=? AND opportunity_id=?",
+                        (corrupt, "tenant", "account-1"))
+                engine = SalesMissionEngine(store)
+                with self.assertRaisesRegex(ValueError, "source record invalid"):
+                    engine.create("tenant", "mission", "offer-1",
+                                  "Research fit", "Software agencies",
+                                  account_ids=("account-1",))
+                with store._db() as db:
+                    self.assertEqual(db.execute(
+                        "SELECT count(*) FROM sales_missions").fetchone()[0], 0)
+
+    def test_changed_mission_source_before_model_fails_closed_and_survives_restart(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "sales.db"
+            store = SalesWorkspace(path)
+            store.ingest("tenant", [lead()])
+            engine = SalesMissionEngine(store)
+            engine.create("tenant", "mission", "offer-1",
+                          "Research fit", "Software agencies")
+            with store._db() as db:
+                db.execute("UPDATE opportunities SET source_json=X'000102' "
+                           "WHERE tenant=? AND opportunity_id=?",
+                           ("tenant", "account-1"))
+            neuron = VerifiedFake()
+            result = asyncio.run(engine.run("tenant", "mission", neuron))
+            self.assertEqual(result["status"], "BLOCKED_SOURCE_REVISION")
+            self.assertEqual(result["steps"], [])
+            self.assertEqual(neuron.calls, [])
+            resumed = SalesMissionEngine(SalesWorkspace(path))
+            self.assertEqual(
+                asyncio.run(resumed.run("tenant", "mission", neuron))["status"],
+                "BLOCKED_SOURCE_REVISION")
+            self.assertEqual(neuron.calls, [])
+
+    def test_midflight_source_corruption_never_accepts_model_proposal(self):
+        with TemporaryDirectory() as temp:
+            store = SalesWorkspace(Path(temp) / "sales.db")
+            store.ingest("tenant", [lead()])
+            engine = SalesMissionEngine(store)
+            engine.create("tenant", "mission", "offer-1",
+                          "Research fit", "Software agencies")
+            class MutatingNeuron(VerifiedFake):
+                async def execute(self, role, objective, context):
+                    with store._db() as db:
+                        db.execute("UPDATE opportunities SET source_json=X'000102' "
+                                   "WHERE tenant=? AND opportunity_id=?",
+                                   ("tenant", "account-1"))
+                    return await super().execute(role, objective, context)
+            neuron = MutatingNeuron()
+            result = asyncio.run(engine.run("tenant", "mission", neuron))
+            self.assertEqual(result["status"], "BLOCKED_SOURCE_REVISION")
+            self.assertEqual([x["state"] for x in result["steps"]],
+                             ["SOURCE_INVALIDATED"])
+            self.assertEqual(neuron.calls, ["HEAD_OF_SALES"])
+            self.assertEqual(engine.proposals("tenant", "mission"), [])
+            asyncio.run(engine.run("tenant", "mission", neuron))
+            self.assertEqual(neuron.calls, ["HEAD_OF_SALES"])
+
+    def test_invalid_model_cost_receipts_never_enter_mission_ledger(self):
+        for invalid_cost in (True, -1, float("nan"), float("inf"),
+                             -float("inf"), "3.50"):
+            with self.subTest(cost=invalid_cost), TemporaryDirectory() as temp:
+                store = SalesWorkspace(Path(temp) / "sales.db")
+                store.ingest("tenant", [lead()])
+                engine = SalesMissionEngine(store)
+                engine.create("tenant", "mission", "offer-1",
+                              "Research fit", "Software agencies")
+                class InvalidCostNeuron(VerifiedFake):
+                    async def execute(self, role, objective, context):
+                        value = await super().execute(role, objective, context)
+                        return NeuronProposal(
+                            value.output, value.receipt_id, invalid_cost,
+                            value.provider_status)
+                neuron = InvalidCostNeuron()
+                result = asyncio.run(engine.run("tenant", "mission", neuron))
+                self.assertEqual(result["status"], "UNKNOWN")
+                self.assertEqual(result["steps"][0]["error_class"], "ValueError")
+                self.assertEqual(neuron.calls, ["HEAD_OF_SALES"])
+                self.assertEqual(engine.proposals("tenant", "mission"), [])
+
+    def test_boolean_model_step_limit_is_invalid(self):
+        with TemporaryDirectory() as temp:
+            store = SalesWorkspace(Path(temp) / "sales.db")
+            engine = SalesMissionEngine(store)
+            engine.create("tenant", "mission", "offer-1",
+                          "Research fit", "Software agencies")
+            with self.assertRaises(ValueError):
+                asyncio.run(engine.run("tenant", "mission", VerifiedFake(),
+                                       max_steps=True))
+
     def test_crash_after_claim_never_blind_reexecutes(self):
         with TemporaryDirectory() as temp:
             s = SalesWorkspace(Path(temp)/"db")
