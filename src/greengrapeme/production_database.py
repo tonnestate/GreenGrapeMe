@@ -39,6 +39,7 @@ def bootstrap_operational_database(destination: str | Path) -> dict:
         from .missions import SalesMissionEngine
         from .discovery_jobs import DiscoveryJobQueue
         from .dittofeed_effects import DittofeedPomeloEffects
+        from .tenant_access import TenantMemberships
 
         store = SalesWorkspace(staging)
         PilotLedger(store)
@@ -47,6 +48,7 @@ def bootstrap_operational_database(destination: str | Path) -> dict:
         SalesMissionEngine(store)
         DiscoveryJobQueue(store)
         DittofeedPomeloEffects(store)
+        TenantMemberships(store, initialize=True)
 
         details = verify_database(staging)
         missing = _REQUIRED_OPERATIONS_TABLES.difference(

@@ -17,6 +17,7 @@ from greengrapeme.pilot_metrics import PilotLedger
 from greengrapeme.pilot_sales_flow import PilotSalesFlow
 from greengrapeme.release_audit import release_audit
 from greengrapeme.reply_effects import ReplyEffects
+from greengrapeme.tenant_access import TenantMemberships
 
 
 class ProductionReleaseAuditTests(unittest.TestCase):
@@ -33,6 +34,7 @@ class ProductionReleaseAuditTests(unittest.TestCase):
         SalesMissionEngine(self.store)
         DiscoveryJobQueue(self.store)
         DittofeedPomeloEffects(self.store)
+        TenantMemberships(self.store, initialize=True)
 
     def test_local_integrity_pass_is_not_a_production_authorization(self):
         self._initialize_all_schemas()

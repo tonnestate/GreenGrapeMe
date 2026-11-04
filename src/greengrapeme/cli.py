@@ -8,6 +8,7 @@ from .operations import SalesWorkspace
 from .database_recovery import backup_database, restore_database, verify_database
 from .production_database import bootstrap_operational_database
 from .release_audit import release_audit
+from .tenant_access import Principal, TenantMemberships
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .dittofeed_lifecycle import DittofeedLifecycleProjection
@@ -59,6 +60,23 @@ def main(argv: list[str] | None = None) -> int:
         help="Verify and restore an offline backup to a NEW path only")
     restore.add_argument("--backup", required=True, help="Existing backup file")
     restore.add_argument("--output", required=True, help="Unused destination file")
+    saas_create = sub.add_parser(
+        "saas-tenant-create",
+        help="Operator-only: explicitly provision a tenant in an existing operational DB")
+    saas_grant = sub.add_parser(
+        "saas-member-grant",
+        help="Operator-only: grant role to verified OIDC issuer+subject")
+    saas_grant.add_argument("--issuer", required=True)
+    saas_grant.add_argument("--subject", required=True)
+    saas_grant.add_argument("--role", required=True,
+                            choices=["viewer", "operator", "finance", "admin"])
+    saas_revoke = sub.add_parser(
+        "saas-member-revoke",
+        help="Operator-only: revoke a tenant role immediately")
+    saas_revoke.add_argument("--issuer", required=True)
+    saas_revoke.add_argument("--subject", required=True)
+    sub.add_parser("saas-tenant-suspend",
+                   help="Operator-only: suspend all access to a tenant")
     sub.add_parser("rankings")
     sub.add_parser("pilots", help="List source-qualified commercial pilot reports")
     pilot_make = sub.add_parser("pilot-create", help="Record pilot commercial terms (not revenue)")
@@ -207,6 +225,30 @@ def main(argv: list[str] | None = None) -> int:
                 len(a.job_id) != 24 or
                 any(ch not in "0123456789abcdef" for ch in a.job_id)):
             p.error("existing StarFruitMe job is not authorized by this host")
+    if a.command in {"saas-tenant-create", "saas-member-grant",
+                     "saas-member-revoke", "saas-tenant-suspend"}:
+        if not a.tenant:
+            p.error("--tenant is required for SaaS access administration")
+        # An operator with filesystem/DB privileges is the only actor
+        # allowed to bootstrap or change memberships. No HTTP route can
+        # elevate its own identity, role or tenant.
+        strict = SalesWorkspace(a.db, bootstrap=False,
+                                require_operational=True)
+        memberships = TenantMemberships(strict, initialize=False)
+        if a.command == "saas-tenant-create":
+            memberships.create_tenant(a.tenant)
+            result = {"tenant": a.tenant, "created": True}
+        elif a.command == "saas-member-grant":
+            memberships.grant(a.tenant, Principal(a.issuer, a.subject), a.role)
+            result = {"tenant": a.tenant, "granted": True, "role": a.role}
+        elif a.command == "saas-member-revoke":
+            result = {"tenant": a.tenant, "revoked": memberships.revoke(
+                a.tenant, Principal(a.issuer, a.subject))}
+        else:
+            result = {"tenant": a.tenant,
+                      "suspended": memberships.suspend_tenant(a.tenant)}
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
     # The CLI must not create an empty database BEFORE calling the
     # already strict WSGI serve() path. This was a separate accidental
     # creation route even after the web server's runtime gate was fixed.
