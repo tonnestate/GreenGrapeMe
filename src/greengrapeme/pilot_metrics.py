@@ -233,14 +233,30 @@ class PilotLedger:
         try:
             with self.store._db() as db:
                 db.execute("BEGIN IMMEDIATE")
-                old = db.execute("""SELECT state,provider_kind,provider_receipt_id
-                            FROM sales_pilot_events
+                # External verification may be slow. Re-read the entire
+                # original observation under the write lock, otherwise a
+                # revised amount/evidence/account could inherit a receipt
+                # verified against the previous version.
+                old = db.execute("""SELECT * FROM sales_pilot_events
                             WHERE tenant=? AND pilot_id=? AND event_id=?""",
                             (tenant,pilot_id,event_id)).fetchone()
+                if old is None:
+                    raise LookupError("pilot event disappeared during source verification")
+                immutable_fields = (
+                    "tenant", "pilot_id", "event_id", "opportunity_id",
+                    "event_kind", "amount_cents", "currency", "occurred_at",
+                    "evidence_ref", "reporter_ref",
+                )
+                if any(old[key] != event[key] for key in immutable_fields):
+                    raise ValueError("pilot event changed during source verification")
                 if old["state"] == "SOURCE_CONFIRMED":
                     if (old["provider_kind"],old["provider_receipt_id"]) != (provider,receipt_id):
                         raise ValueError("event was already confirmed by a different receipt")
                     return self.event(tenant,pilot_id,event_id)
+                if (old["state"] != "REPORTED" or
+                        old["provider_kind"] is not None or
+                        old["provider_receipt_id"] is not None):
+                    raise ValueError("pilot event state changed during verification")
                 now = self.store._now()
                 db.execute("""UPDATE sales_pilot_events
                     SET state='SOURCE_CONFIRMED',provider_kind=?,
