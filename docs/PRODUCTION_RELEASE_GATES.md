@@ -89,3 +89,46 @@ verified evidence from the deployed host and providers. It therefore
 always returns `production_ready=false`, even on a clean test database.
 The correct response to a red report is to complete and verify the missing
 work, not to manually edit or suppress its gate values.
+
+## Fail-closed application startup and explicit database bootstrap
+
+The previous web startup constructed `SalesWorkspace(db)`, which
+implicitly ran `CREATE TABLE IF NOT EXISTS` against the configured path.
+SQLite creates missing databases by default. A typo, missing mount or
+misconfigured volume could therefore start an empty, superficially usable
+web workspace instead of refusing to start; absent optional product
+modules could be silently initialized on GET endpoints.
+
+This is now split into separate operator and runtime responsibilities.
+
+**Initial installation only (new, unused path):**
+
+```bash
+PYTHONPATH=src python -m greengrapeme.cli \
+  --db /srv/greengrapeme/production.sqlite db-bootstrap
+PYTHONPATH=src python -m greengrapeme.cli \
+  --db /srv/greengrapeme/production.sqlite db-verify
+PYTHONPATH=src python -m greengrapeme.cli \
+  --db /srv/greengrapeme/production.sqlite release-audit
+```
+
+`db-bootstrap` builds every currently known operational module's tables
+in a private temporary database, verifies the structure, then publishes
+the SQLite database to an unused path without replacement. A preexisting
+file or symlink causes an error and is **never** overwritten. This
+action performs no external provider requests, model runs or contact
+effects. The output explicitly reports `production_ready=false`.
+
+**Runtime startup:** The local web server now opens only an existing,
+verified database via `SalesWorkspace(..., bootstrap=False,
+require_operational=True)`. Missing/corrupt SQLite, missing operational
+tables or a removed database path prevent service startup/requests and
+never trigger implicit re-creation. The old implicit-bootstrap constructor
+remains for existing developer test fixtures and CLI workflows; it must
+**not** be used as the production web startup path.
+
+**Still required:** production-grade authenticated SaaS HTTP gateway,
+actual host deployment, backups/offsite recovery, schema-versioned
+migrations for **existing** databases, secret rotation and real G1–G5
+provider/business acceptance. The explicit bootstrap is a safe initial
+schema creation operation, **not** a production-ready service on its own.
