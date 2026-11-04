@@ -42,6 +42,9 @@ class ReplyBusinessRulesTests(unittest.TestCase):
         cases = (
             "Please don't unsubscribe me.",
             "Do not unsubscribe me from your list.",
+            "Please don't stop contacting me.",
+            "Do not stop emailing me.",
+            "Do not stop sending me emails.",
             "Thanks for the info.\n> unsubscribe me",
             "Thanks for the call.\nOn Tue, 3 Nov 2026 wrote:\nunsubscribe me",
         )
