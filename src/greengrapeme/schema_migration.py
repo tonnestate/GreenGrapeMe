@@ -37,6 +37,20 @@ def _table_counts(path: Path) -> dict[str, int]:
         }
 
 
+def _migration_history(path: Path) -> list[tuple[int, str]]:
+    """Record exact existing ledger provenance before creating newer versions."""
+    with closing(sqlite3.connect(
+            path.as_uri() + "?mode=ro", uri=True, timeout=5)) as db:
+        table = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='greengrapeme_schema_migrations'").fetchone()
+        if not table:
+            return []
+        return [tuple(row) for row in db.execute(
+            "SELECT version,applied_at FROM greengrapeme_schema_migrations "
+            "ORDER BY version")]
+
+
 def migrate_database(source: str | Path, new_destination: str | Path) -> dict:
     """Migrate a VALID prior DB into a verified new path without replacement.
 
@@ -58,6 +72,7 @@ def migrate_database(source: str | Path, new_destination: str | Path) -> dict:
         # including WAL data. No raw copy of a live SQLite database.
         backup_database(original, staged)
         original_counts = _table_counts(staged)
+        original_history = _migration_history(staged)
 
         # This is deliberately allowed to create missing base/optional
         # tables ONLY in the isolated candidate. No direct live DDL.
@@ -70,8 +85,16 @@ def migrate_database(source: str | Path, new_destination: str | Path) -> dict:
 
         migrated_counts = _table_counts(staged)
         if any(migrated_counts.get(table) != count
-               for table, count in original_counts.items()):
+               for table, count in original_counts.items()
+               if table != "greengrapeme_schema_migrations"):
             raise ValueError("migration changed historical customer/effect rows")
+        upgraded_history = _migration_history(staged)
+        # A version ledger is an append-only record, not a business table.
+        # Every prior row must keep its original version and timestamp.
+        if (upgraded_history[:len(original_history)] != original_history
+                or [version for version, _ in upgraded_history] !=
+                    list(range(1, SCHEMA_VERSION + 1))):
+            raise ValueError("migration changed historical version ledger")
 
         with staged.open("rb") as stream:
             os.fsync(stream.fileno())
