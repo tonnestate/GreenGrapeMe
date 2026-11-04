@@ -232,6 +232,25 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("keine Kontaktfreigabe", segment)
         self.assertNotIn('api("/api/pilot-inbound"', segment)
 
+    def test_calendar_cockpit_shows_provider_status_not_fabricated_booking(self):
+        html=self.get("/")["body"].decode()
+        js=self.get("/saas.js")["body"].decode()
+        for identifier in (
+            "appointment-form","appointment-pilot","appointment-case",
+            "appointment-id","appointment-calendar","appointment-start",
+            "appointment-end","crm-appointments-list",
+            "crm-appointments-count"):
+            self.assertIn('id="'+identifier+'"',html)
+        self.assertIn('$("appointment-form").hidden = !operates;',js)
+        self.assertIn('api("/api/pilot-appointments" + filter)',js)
+        section=js[js.index('onForm("appointment-form"'):
+                   js.index('onForm("source-case-form"')]
+        self.assertIn('api("/api/pilot-appointment-prepare"',section)
+        self.assertIn("kein Kalendertermin erstellt",section)
+        self.assertNotIn("BOOKED_CONFIRMED",section)
+        self.assertNotIn('api("/api/pilot-appointment-reconcile"',js)
+        self.assertNotIn("innerHTML",section)
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),

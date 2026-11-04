@@ -14,11 +14,11 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _initialize_operational_schema(staging: Path) -> None:
-    """Idempotent additive application of the v1 local business schemas.
+    """Idempotent additive application of the v2 local business schemas.
 
     Applied only to an explicitly provisioned NEW database or an offline
     copy-forward migration candidate, never to a running tenant database.
@@ -27,6 +27,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     from .pilot_metrics import PilotLedger
     from .pilot_sales_flow import PilotSalesFlow
     from .reply_effects import ReplyEffects
+    from .calendar_bookings import CalendarBookings
     from .missions import SalesMissionEngine
     from .discovery_jobs import DiscoveryJobQueue
     from .dittofeed_effects import DittofeedPomeloEffects
@@ -36,6 +37,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     PilotLedger(store)
     PilotSalesFlow(store)
     ReplyEffects(store)
+    CalendarBookings(store, initialize=True)
     SalesMissionEngine(store)
     DiscoveryJobQueue(store)
     DittofeedPomeloEffects(store)
@@ -54,10 +56,13 @@ def _initialize_operational_schema(staging: Path) -> None:
         if any(version > SCHEMA_VERSION or version <= 0
                for version in versions):
             raise ValueError("unsupported existing schema migration version")
-        db.execute(
-            "INSERT OR IGNORE INTO greengrapeme_schema_migrations "
-            "(version, applied_at) VALUES (?,?)",
-            (SCHEMA_VERSION, store._now()))
+        # Preserve v1 provenance when upgrading legacy version-0 data.
+        # An existing v1 database already has its genuine v1 timestamp.
+        for version in (1, 2):
+            db.execute(
+                "INSERT OR IGNORE INTO greengrapeme_schema_migrations "
+                "(version, applied_at) VALUES (?,?)",
+                (version, store._now()))
         db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
 

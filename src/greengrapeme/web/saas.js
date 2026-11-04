@@ -287,17 +287,21 @@ async function crmWorklist() {
   // Never retain a different pilot's cases after a failed request.
   $("crm-case-list").replaceChildren();
   $("crm-followup-list").replaceChildren();
+  $("crm-appointments-list").replaceChildren();
   $("crm-case-count").textContent = "";
   $("crm-followup-count").textContent = "";
+  $("crm-appointments-count").textContent = "";
   // The API checks the current OIDC subject and tenant membership on each read.
   // Neither a queued follow-up nor a reported case grants contact authority.
-  const [cases, due] = await Promise.all([
+  const [cases, due, appointments] = await Promise.all([
     api("/api/pilot-cases" + filter),
     api("/api/pilot-followups" + filter),
+    api("/api/pilot-appointments" + filter),
   ]);
   const casesBody = $("crm-case-list");
   const dueBody = $("crm-followup-list");
-  // Publish both lists only after both tenant-scoped requests succeed.
+  const appointmentBody = $("crm-appointments-list");
+  // Publish only after every tenant-scoped request succeeds.
   const caseRows = document.createDocumentFragment();
   for (const item of cases.items || []) {
     const row = document.createElement("tr");
@@ -313,21 +317,37 @@ async function crmWorklist() {
       item.next_followup_at || "–", item.review_state]) td(row, field);
     dueRows.appendChild(row);
   }
+  const appointmentRows = document.createDocumentFragment();
+  for (const item of appointments.items || []) {
+    const row = document.createElement("tr");
+    for (const field of [item.case_id, item.slot_start_at,
+      item.slot_end_at, item.state, item.calendar_ref]) td(row, field);
+    appointmentRows.appendChild(row);
+  }
   casesBody.replaceChildren(caseRows);
   dueBody.replaceChildren(dueRows);
+  appointmentBody.replaceChildren(appointmentRows);
   if (!cases.items?.length) emptyRow(casesBody, 5, "Keine CRM-Vorgänge.");
   if (!due.items?.length) emptyRow(dueBody, 4, "Keine fälligen Wiedervorlagen.");
+  if (!appointments.items?.length) emptyRow(appointmentBody, 5, "Keine Kalendertermine erfasst.");
   $("crm-case-count").textContent =
     String(cases.total ?? 0) + " Vorgänge (maximal 100 angezeigt)";
   $("crm-followup-count").textContent =
     String(due.total ?? 0) + " fällige Wiedervorlagen (maximal 100 angezeigt; kein Kontaktauftrag)";
+  $("crm-appointments-count").textContent =
+    String(appointments.total ?? 0) + " Kalendertermine (maximal 100 angezeigt; Buchung nur nach unabhängiger Providerbestätigung)";
 }
 function clearCrmWorklist() {
   $("crm-pilot-id").value = "";
   $("crm-case-list").replaceChildren();
   $("crm-followup-list").replaceChildren();
+  $("crm-appointments-list").replaceChildren();
   $("crm-case-count").textContent = "";
   $("crm-followup-count").textContent = "";
+  $("crm-appointments-count").textContent = "";
+  for (const id of ["appointment-pilot", "appointment-case",
+                    "appointment-id", "appointment-calendar",
+                    "appointment-start", "appointment-end"]) $(id).value = "";
 }
 
 async function openTenant(event) {
@@ -354,6 +374,7 @@ async function openTenant(event) {
     $("discovery-form").hidden = !operates;
     $("inbound-form").hidden = !operates;
     $("source-case-form").hidden = !operates;
+    $("appointment-form").hidden = !operates;
     $("sales-step-form").hidden = !operates;
     $("pilot-form").hidden = !finance;
     $("payment-form").hidden = !finance;
@@ -491,6 +512,21 @@ async function main() {
     });
     await discovery();
     return "Discovery-Auftrag in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
+  });
+  onForm("appointment-form", async () => {
+    const result = await api("/api/pilot-appointment-prepare", {
+      method: "POST", body: {
+        pilot_id: value("appointment-pilot"),
+        case_id: value("appointment-case"),
+        booking_id: value("appointment-id"),
+        calendar_ref: value("appointment-calendar"),
+        slot_start_at: value("appointment-start"),
+        slot_end_at: value("appointment-end"),
+      },
+    });
+    if (value("crm-pilot-id") === value("appointment-pilot")) await crmWorklist();
+    return "Lokale Terminabsicht: " + result.state +
+      " (kein Kalendertermin erstellt, keine Einladung versandt).";
   });
   onForm("source-case-form", async () => {
     const result = await api("/api/pilot-discovery", {

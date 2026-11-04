@@ -22,6 +22,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .reply_effects import ReplyEffects
+from .calendar_bookings import CalendarBookings
 from .tenant_access import TenantMemberships
 
 
@@ -218,6 +219,9 @@ def create_saas_app(
                     data = PilotLedger(store).summary(tenant, arg("id"))
                 elif path == "/api/pilot-cases":
                     data = PilotSalesFlow(store).list(tenant, arg("pilot"))
+                elif path == "/api/pilot-appointments":
+                    data = CalendarBookings(store).list(
+                        tenant, arg("pilot"),limit=int(arg("limit","100")))
                 elif path == "/api/pilot-followups":
                     data = PilotSalesFlow(store).due_followups(
                         tenant, arg("pilot"),
@@ -248,6 +252,17 @@ def create_saas_app(
                     values["label"],
                     monthly_fee_cents=values["monthly_fee_cents"],
                     setup_fee_cents=values["setup_fee_cents"])
+            elif path == "/api/pilot-appointment-prepare":
+                values = _request_json(environ, frozenset({
+                    "pilot_id", "case_id", "booking_id", "calendar_ref",
+                    "slot_start_at", "slot_end_at",
+                }))
+                result = CalendarBookings(store).prepare(
+                    tenant, values["pilot_id"], values["case_id"],
+                    values["booking_id"], calendar_ref=values["calendar_ref"],
+                    slot_start_at=values["slot_start_at"],
+                    slot_end_at=values["slot_end_at"],
+                    reporter_ref=_reporter_ref(principal))
             elif path == "/api/pilot-inbound":
                 values = _request_json(environ, frozenset({
                     "pilot_id", "case_id", "company_name", "channel",

@@ -133,6 +133,25 @@
             <tbody id="crm-followup-list"></tbody>
           </table>
         </div>
+        <h3>Kalendertermine und unabhängige Buchungsnachweise</h3>
+        <p>Eine vorbereitete Terminabsicht ist keine Buchung; ein bestätigter Kalendereintrag ist noch kein Nachweis, dass ein Gespräch stattgefunden hat.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>CRM-Vorgang</th><th>Terminbeginn</th><th>Terminende</th><th>Buchungsstatus</th><th>Kalender</th></tr></thead>
+            <tbody id="crm-appointments-list"></tbody>
+          </table>
+        </div>
+        <p id="crm-appointments-count" aria-live="polite"></p>
+        <form id="appointment-form" class="discovery-form" hidden>
+          <h3>Terminabsicht ohne externe Buchung erfassen</h3>
+          <div><label for="appointment-pilot">Pilot-ID</label><input id="appointment-pilot" required maxlength="120"></div>
+          <div><label for="appointment-case">CRM-Vorgangs-ID</label><input id="appointment-case" required maxlength="120"></div>
+          <div><label for="appointment-id">Buchungsabsichts-ID</label><input id="appointment-id" required maxlength="120"></div>
+          <div><label for="appointment-calendar">Kalender-Referenz (URN/HTTPS)</label><input id="appointment-calendar" required maxlength="1024"></div>
+          <div><label for="appointment-start">Beginn (ISO mit Zeitzone)</label><input id="appointment-start" required placeholder="2026-11-12T10:00:00+01:00"></div>
+          <div><label for="appointment-end">Ende (ISO mit Zeitzone)</label><input id="appointment-end" required placeholder="2026-11-12T10:45:00+01:00"></div>
+          <button type="submit">Nur Terminabsicht speichern</button>
+        </form>
         <form id="source-case-form" class="discovery-form" hidden>
           <h3>Discovery-Unternehmen ins CRM übernehmen</h3>
           <p>Ein gefundener Prospect ist keine eingegangene Anfrage. Der Vorgang erhält keine Kontaktbefugnis.</p>
