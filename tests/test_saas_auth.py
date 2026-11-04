@@ -252,6 +252,24 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(code.startswith("200"), detail)
         self.assertEqual(detail["total"], 1)
 
+    def test_domain_contact_permission_refusal_is_forbidden_not_server_error(self):
+        self.members.grant("tenant-a", self.alice, "operator")
+        payload = {
+            "pilot_id": "pilot-0001", "case_id": "case-0001",
+            "reply_id": "reply-0001",
+            "recipient_ref": "urn:contact:recipient:0001",
+            "content_ref": "urn:content:reply:0001",
+            "content_sha256": "a" * 64,
+        }
+        with patch("greengrapeme.saas_webapp.ReplyEffects.prepare",
+                   side_effect=PermissionError("account is suppressed")):
+            code, body, _ = self.request(
+                path="/api/pilot-reply-prepare", method="POST",
+                payload=payload, origin=ORIGIN)
+        self.assertTrue(code.startswith("403"), (code, body))
+        self.assertEqual(body, {"error": "forbidden"})
+        self.assertNotIn("suppressed", json.dumps(body))
+
     def test_post_malformed_payload_and_origin_fail_closed(self):
         self.members.grant("tenant-a", self.alice, "operator")
         for bad in ([], None, {"pilot_id":"x"}, {"unexpected":1}):
