@@ -282,9 +282,10 @@ async function openTenant(event) {
     state.tenant = proposed;
     const me = await api("/api/me");
     state.role = me.role || "";
-    $("login").hidden = true;
-    $("workspace").hidden = false;
-    $("auth-status").textContent = "Mandant: " + proposed;
+    // Do not expose the workspace until initial tenant-scoped queries pass.
+    // An authorization failure must leave the previous tenant's view closed.
+    $("workspace").hidden = true;
+    $("auth-status").textContent = "Mandant wird geprüft: " + proposed;
     $("workspace-info").textContent =
       "Mandant: " + proposed + " | Rolle: " + state.role +
       " | Geschützte API mit aktuellen Berechtigungen";
@@ -297,9 +298,17 @@ async function openTenant(event) {
     $("payment-form").hidden = !finance;
     renderView("companies-view");
     await Promise.all([overview(), companies()]);
+    $("login").hidden = true;
+    $("workspace").hidden = false;
+    $("auth-status").textContent = "Mandant: " + proposed;
     say("");
   } catch (error) {
     state.tenant = "";
+    state.role = "";
+    $("workspace").hidden = true;
+    $("login").hidden = false;
+    $("company-details").hidden = true;
+    $("auth-status").textContent = "Mandant nicht geöffnet";
     say(error.message, true);
   }
 }
