@@ -14,7 +14,7 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _initialize_operational_schema(staging: Path) -> None:

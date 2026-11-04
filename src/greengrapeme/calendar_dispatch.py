@@ -293,3 +293,159 @@ class GoogleCalendarBookingDispatcher:
         return {**self.get_attempt(tenant, pilot_id, case_id, booking_id),
                 "http_post_attempted_now": True,
                 "booking_confirmed": False}
+
+    def get_cancellation_attempt(self, tenant: str, pilot_id: str,
+                                 case_id: str, booking_id: str) -> dict | None:
+        if tenant != self.tenant:
+            raise PermissionError("cross-tenant cancellation forbidden")
+        with self.store._db() as db:
+            row = db.execute("""
+                SELECT * FROM sales_calendar_cancellation_attempts
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+            """, (tenant, pilot_id, case_id, booking_id)).fetchone()
+        return dict(row) if row else None
+
+    def cancel(self, tenant: str, pilot_id: str, case_id: str, booking_id: str,
+               *, permission_ref: str) -> dict:
+        """Once-only Google events.delete, followed by independent GET recovery.
+
+        A received HTTP 204 is not independent evidence that the calendar
+        event was removed, nor that Google delivered the cancellation notice.
+        A timeout or HTTP error must never cause an automatic second DELETE.
+        """
+        permission_ref = _reference(permission_ref)
+        booking, frozen, event_id, provider_id = self._intent(
+            tenant, pilot_id, case_id, booking_id,
+        )
+        fingerprint = _fingerprint(frozen)
+        prior = self.get_cancellation_attempt(
+            tenant, pilot_id, case_id, booking_id,
+        )
+        if prior:
+            if (prior["intent_sha256"] != fingerprint
+                    or prior["event_id"] != event_id
+                    or prior["provider_event_id"] != provider_id
+                    or prior["permission_ref"] != permission_ref):
+                raise PermissionError("calendar cancellation binding changed")
+            return {**prior, "http_delete_attempted_now": False}
+
+        original = self.get_attempt(tenant, pilot_id, case_id, booking_id)
+        if (original is None
+                or original["intent_sha256"] != fingerprint
+                or original["provider_event_id"] != provider_id
+                or original["event_id"] != event_id
+                or original["state"] != "BOOKED_CONFIRMED"
+                or booking["state"] != "BOOKED_CONFIRMED"
+                or booking["provider_kind"] != "GOOGLE_CALENDAR"
+                or booking["provider_event_id"] != provider_id):
+            raise PermissionError("independently confirmed owned booking required")
+        if datetime.fromisoformat(booking["slot_start_at"]) <= datetime.now(timezone.utc):
+            raise ValueError("meeting has already started")
+
+        permission_request = {
+            **frozen,
+            "permission_ref": permission_ref,
+            "action": "CANCEL_AND_NOTIFY",
+            "provider_kind": "GOOGLE_CALENDAR",
+            "send_updates": "all",
+            "previous_provider_receipt_id": booking["provider_receipt_id"],
+        }
+        if self._permission.allow(dict(permission_request)) is not True:
+            raise PermissionError("current independent cancellation permission denied")
+
+        with self.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute("""
+                SELECT * FROM sales_pilot_appointments
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+            """, (tenant, pilot_id, case_id, booking_id)).fetchone()
+            if old is None:
+                raise LookupError("appointment deleted before cancellation")
+            if (any(old[k] != booking[k] for k in (
+                    "tenant", "pilot_id", "case_id", "booking_id",
+                    "opportunity_id", "case_source_sha256", "calendar_ref",
+                    "slot_start_at", "slot_end_at", "reporter_ref",
+                    "state", "provider_kind", "provider_event_id",
+                    "provider_receipt_id", "provider_updated_at"))
+                    or old["state"] != "BOOKED_CONFIRMED"):
+                raise PermissionError("provider booking changed before cancellation")
+
+            existing = db.execute("""
+                SELECT * FROM sales_calendar_cancellation_attempts
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+            """, (tenant, pilot_id, case_id, booking_id)).fetchone()
+            if existing:
+                if (existing["intent_sha256"] != fingerprint
+                        or existing["provider_event_id"] != provider_id
+                        or existing["event_id"] != event_id
+                        or existing["permission_ref"] != permission_ref):
+                    raise PermissionError("calendar cancellation claim changed")
+                return {**dict(existing), "http_delete_attempted_now": False}
+
+            original_locked = db.execute("""
+                SELECT intent_sha256,event_id,provider_event_id,state
+                FROM sales_calendar_dispatch_attempts
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+            """, (tenant, pilot_id, case_id, booking_id)).fetchone()
+            if (original_locked is None
+                    or original_locked["state"] != "BOOKED_CONFIRMED"
+                    or original_locked["intent_sha256"] != fingerprint
+                    or original_locked["event_id"] != event_id
+                    or original_locked["provider_event_id"] != provider_id):
+                raise PermissionError("previous booking confirmation changed")
+
+            pilot = db.execute(
+                "SELECT offer_id FROM sales_pilots WHERE tenant=? AND pilot_id=?",
+                (tenant, pilot_id),
+            ).fetchone()
+            if pilot is None or not CalendarBookings._case_source_current(
+                    db, dict(old), pilot["offer_id"]):
+                raise PermissionError("calendar account source changed before cancellation")
+            if datetime.fromisoformat(old["slot_start_at"]) <= datetime.now(timezone.utc):
+                raise ValueError("meeting start elapsed during cancellation")
+            stamp = self.store._now()
+            db.execute("""
+                INSERT INTO sales_calendar_cancellation_attempts (
+                  tenant,pilot_id,case_id,booking_id,provider_event_id,event_id,
+                  intent_sha256,original_receipt_id,permission_ref,state,
+                  created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,'DISPATCH_UNCERTAIN',?,?)
+            """, (tenant,pilot_id,case_id,booking_id,provider_id,event_id,
+                  fingerprint,booking["provider_receipt_id"],permission_ref,
+                  stamp,stamp))
+            self.store._audit(db,tenant,booking["opportunity_id"],
+                              "CALENDAR_CANCELLATION_ATTEMPT_FENCED",
+                              {"booking_id":booking_id,
+                               "provider_kind":"GOOGLE_CALENDAR",
+                               "provider_event_id":provider_id,
+                               "exactly_one_delete":True,
+                               "cancellation_not_yet_verified":True})
+
+        # The irreversible DELETE fence is committed BEFORE network I/O.
+        url = (_ENDPOINT + quote(self.calendar_id, safe="")
+               + "/events/" + quote(event_id, safe="")
+               + "?sendUpdates=all")
+        request = Request(
+            url, method="DELETE",
+            headers={"Authorization": "Bearer " + self._access_token,
+                     "Accept": "application/json"},
+        )
+        try:
+            with self._transport.open(request, timeout=self.timeout_seconds) as resp:
+                if resp.status != 204:
+                    raise RuntimeError("Google cancellation outcome uncertain")
+        except (HTTPError, URLError, OSError, TimeoutError):
+            raise RuntimeError(
+                "Google cancellation outcome uncertain; GET recovery only"
+            ) from None
+        with self.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""
+                UPDATE sales_calendar_cancellation_attempts
+                SET state='HTTP_ACCEPTED_UNVERIFIED',updated_at=?
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+                  AND state='DISPATCH_UNCERTAIN'
+            """, (self.store._now(),tenant,pilot_id,case_id,booking_id))
+        return {**self.get_cancellation_attempt(tenant,pilot_id,case_id,booking_id),
+                "http_delete_attempted_now":True,
+                "cancellation_confirmed":False}

@@ -1,4 +1,4 @@
-# Calendar booking evidence and one-shot dispatch (GreenGrapeMe, schema v3)
+# Calendar booking evidence and one-shot dispatch (GreenGrapeMe, schema v4)
 
 This feature implements durable appointment intent, **independent provider
 verification** and cancellation reconciliation in the existing pilot CRM.
@@ -41,7 +41,9 @@ Schema v2 adds `sales_pilot_appointments` with a compound tenant/case/booking
 primary key and unique provider event/receipt fences. Schema v3 additionally
 introduces `sales_calendar_dispatch_attempts`: an immutable one-shot
 invitation attempt fence that prevents duplicate Google event creation after
-timeouts or process restarts. The new schema does not discard v1/v2 CRM,
+timeouts or process restarts. Schema v4 adds a separate
+`sales_calendar_cancellation_attempts` ledger to fence notification-bearing
+Google event deletions. The new schema does not discard v1/v2/v3 CRM,
 accounting, booking or irreversible effect data. Existing databases are only
 upgraded through explicit copy-forward migration; live DDL is not allowed.
 
@@ -155,14 +157,55 @@ calendar availability negotiation, or general-purpose user-initiated
 consent bypass. Its tests intercept HTTP and exercise the real SQLite
 ledger; no invitations are sent during CI.
 
+## Authorized Google Calendar cancellation with no duplicate DELETE
+
+For a booking that has already been independently confirmed, the same trusted
+host adapter supports:
+
+```python
+cancel_result = dispatcher.cancel(
+    tenant_id, pilot_id, case_id, booking_id,
+    permission_ref=host_approved_cancellation_evidence_ref,
+)
+# Even HTTP 204 is not yet independently confirmed cancellation:
+confirmed = dispatcher.reconcile(
+    tenant_id, pilot_id, case_id, booking_id,
+)
+```
+
+Cancellation requires the original locally persisted Google booking,
+a matching independent provider event receipt, a still-owned tenant/case
+identity, and a fresh host policy approval specifically for
+`CANCEL_AND_NOTIFY`. The host cannot cancel arbitrary external events,
+cannot change the provider event ID, and cannot reuse a different permission
+receipt to repeat an already-dispatched cancellation. The verified original
+event and permission are rechecked under a SQLite write transaction.
+
+`events.delete?sendUpdates=all` is called **only once per booking** after
+the transaction commits a cancellation fence. Timeouts, HTTP errors and
+process restarts are always uncertain and never trigger a second DELETE.
+A successful 204 remains `HTTP_ACCEPTED_UNVERIFIED`. The read-only
+`events.get` adapter must independently confirm the same cancelled event
+before the CRM appointment and cancellation fence can both transition to
+`CANCELLED_CONFIRMED` atomically. Where Google returns a minimal deletion
+tombstone without verifiable organizer/attendee/slot, the system deliberately
+leaves the cancellation **uncertain**, requiring authorized investigation
+rather than inventing an independent provider receipt.
+
+A customer opting out of marketing does not erase the host's responsibility
+to cancel an already-invited appointment. Cancellation still requires a
+specific host-side authority and the original verified booking binding; it
+does not reuse promotional outreach permission.
+
 ## Remaining G3 production blocker
 
-Both concrete Google Calendar **write** and **read** adapters now exist,
-with a durable single-attempt fence and independent recovery. Remaining
-development/integration work includes connecting the host's real OAuth
-onboarding and refresh, customer authorization policy and booking approval,
-calendar availability/slot selection, a controlled cancellation dispatcher,
-calendar-invitation acknowledgement and retryable provider read recovery in
-the deployed FruitStack runtime. CalDAV and Microsoft Graph provider
-adapters are not bundled. CI uses intercepted HTTP and must not be described
-as live customer/provider acceptance. `release-audit` remains NO-GO.
+Google Calendar event creation, confirmation and cancellation now
+have concrete host-side provider operations, a durable one-shot attempt fence
+per irreversible operation and independent read recovery. Remaining
+development/integration work includes the host's real OAuth onboarding and
+refresh, customer/contact authorization and approval, availability/slot
+selection, delegated host scheduling and recovery execution, provider
+notification visibility and Google tombstones lacking sufficient evidence.
+CalDAV and Microsoft Graph adapters are not bundled. CI uses intercepted
+HTTP and must not be described as live provider acceptance.
+`release-audit` remains NO-GO.

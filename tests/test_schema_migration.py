@@ -57,7 +57,7 @@ class MigrationTests(unittest.TestCase):
             self.legacy)["uninitialized_optional_tables"])
         result = migrate_database(self.legacy, self.upgraded)
         self.assertEqual(result["from_schema_version"], 0)
-        self.assertEqual(result["to_schema_version"], 3)
+        self.assertEqual(result["to_schema_version"], 4)
         self.assertTrue(result["source_unchanged"])
         self.assertFalse(result["overwrote_existing_database"])
         self.assertEqual(result["schema_integrity"], "ok")
@@ -65,9 +65,9 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(result["production_ready"])
         self.assertEqual(self.legacy.read_bytes(), before)
         self.assertEqual(verify_database(self.legacy)["user_version"], 0)
-        self.assertEqual(verify_database(self.upgraded)["user_version"], 3)
+        self.assertEqual(verify_database(self.upgraded)["user_version"], 4)
         self.assertEqual(self._scalar(self.upgraded,
-            "SELECT max(version) FROM greengrapeme_schema_migrations"), 3)
+            "SELECT max(version) FROM greengrapeme_schema_migrations"), 4)
         upgraded = SalesWorkspace(self.upgraded, bootstrap=False,
                                  require_operational=True)
         self.assertEqual(upgraded.overview("tenant-a")["opportunities"], 1)
@@ -135,10 +135,10 @@ class MigrationTests(unittest.TestCase):
             "operation"], "COPY_FORWARD_SCHEMA_MIGRATION")
         next_path = self.root / "saas-v1-second.sqlite"
         result = migrate_database(self.upgraded, next_path)
-        self.assertEqual(result["from_schema_version"], 3)
-        self.assertEqual(result["to_schema_version"], 3)
+        self.assertEqual(result["from_schema_version"], 4)
+        self.assertEqual(result["to_schema_version"], 4)
         self.assertEqual(self._scalar(next_path,
-            "SELECT max(version) FROM greengrapeme_schema_migrations"), 3)
+            "SELECT max(version) FROM greengrapeme_schema_migrations"), 4)
         self.assertEqual(self._scalar(next_path,
             "SELECT count(*) FROM dittofeed_provider_attempts"), 1)
 
@@ -156,12 +156,12 @@ class MigrationTests(unittest.TestCase):
             self.legacy,"SELECT count(*) FROM dittofeed_provider_attempts")
         upgraded = migrate_database(self.legacy,self.upgraded)
         self.assertEqual(upgraded["from_schema_version"],1)
-        self.assertEqual(upgraded["to_schema_version"],3)
+        self.assertEqual(upgraded["to_schema_version"],4)
         self.assertEqual(verify_database(self.legacy)["user_version"],1)
         self.assertIn("sales_pilot_appointments",
                       verify_database(self.legacy)["uninitialized_optional_tables"])
         self.assertEqual(self._scalar(self.upgraded,
-            "SELECT count(*) FROM greengrapeme_schema_migrations"),3)
+            "SELECT count(*) FROM greengrapeme_schema_migrations"),4)
         self.assertEqual(self._scalar(self.upgraded,
             "SELECT version FROM greengrapeme_schema_migrations "
             "WHERE applied_at='2026-11-04T08:00:00+00:00'"),1)
@@ -171,6 +171,70 @@ class MigrationTests(unittest.TestCase):
                                    require_operational=True)
         self.assertEqual(CalendarBookings(operational).list(
             "tenant-a","pilot-0001")["total"],0)
+
+    def test_v3_calendar_dispatch_fences_survive_v4_copy_forward(self):
+        from datetime import datetime, timedelta, timezone
+        from greengrapeme.calendar_bookings import CalendarBookings
+        from greengrapeme.pilot_sales_flow import PilotSalesFlow
+        from greengrapeme.production_database import bootstrap_operational_database
+        old_path = self.root / "calendar-v3.sqlite"
+        new_path = self.root / "calendar-v4.sqlite"
+        bootstrap_operational_database(old_path)
+        store = SalesWorkspace(old_path, bootstrap=False, require_operational=True)
+        PilotLedger(store).create(
+            "tenant-a", "pilot-0002", "offer", "Calendar migration",
+            monthly_fee_cents=10000)
+        flow = PilotSalesFlow(store)
+        flow.open_inbound(
+            "tenant-a", "pilot-0002", "case-0002",
+            company_name="Example GmbH", channel="CRM_INBOUND",
+            evidence_ref="urn:crm:calendar:migrate:001",
+            reporter_ref="operator-001")
+        flow.step(
+            "tenant-a", "pilot-0002", "case-0002",
+            step_id="qualified-0002", expected_state="INBOUND_REVIEW",
+            to_state="QUALIFIED_REPORTED", evidence_ref="urn:crm:qualified:002",
+            reporter_ref="operator-001")
+        start = datetime.now(timezone.utc) + timedelta(days=8)
+        booking = CalendarBookings(store).prepare(
+            "tenant-a", "pilot-0002", "case-0002", "booking-0002",
+            calendar_ref="urn:calendar:owned:migration:002",
+            slot_start_at=start.isoformat(),
+            slot_end_at=(start+timedelta(minutes=45)).isoformat(),
+            reporter_ref="operator-001")
+        with store._db() as db:
+            db.execute("INSERT INTO sales_calendar_dispatch_attempts "
+                       "(tenant,pilot_id,case_id,booking_id,provider_event_id,"
+                       "event_id,intent_sha256,permission_ref,state,created_at,updated_at)"
+                       " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
+                           "tenant-a", "pilot-0002", "case-0002", "booking-0002",
+                           "gcal-event-immutable",
+                           "ggbookingimmutable",
+                           "a"*64, "urn:policy:valid:calendar",
+                           "DISPATCH_UNCERTAIN",
+                           store._now(), store._now()))
+            db.execute("DROP TABLE sales_calendar_cancellation_attempts")
+            db.execute("DELETE FROM greengrapeme_schema_migrations WHERE version=4")
+            db.execute("PRAGMA user_version=3")
+        self.assertEqual(verify_database(old_path)["user_version"], 3)
+        before = old_path.read_bytes()
+        result = migrate_database(old_path, new_path)
+        self.assertEqual(result["from_schema_version"], 3)
+        self.assertEqual(result["to_schema_version"], 4)
+        self.assertEqual(old_path.read_bytes(), before)
+        self.assertEqual(verify_database(new_path)["user_version"], 4)
+        with sqlite3.connect(new_path) as db:
+            row = db.execute("SELECT provider_event_id,event_id,intent_sha256,"
+                             "permission_ref,state FROM sales_calendar_dispatch_attempts "
+                             "WHERE booking_id='booking-0002'").fetchone()
+            self.assertEqual(row, (
+                "gcal-event-immutable", "ggbookingimmutable", "a"*64,
+                "urn:policy:valid:calendar", "DISPATCH_UNCERTAIN"))
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM sales_calendar_cancellation_attempts"
+            ).fetchone()[0], 0)
+        self.assertEqual(release_audit(new_path)[
+            "uncertain_external_effect_counts"]["sales_calendar_dispatch_attempts"], 1)
 
     def test_migration_keeps_source_wal_commits(self):
         with sqlite3.connect(self.legacy) as writer:
@@ -184,7 +248,7 @@ class MigrationTests(unittest.TestCase):
             writer.commit()
             self.assertTrue(Path(str(self.legacy)+"-wal").exists())
             result = migrate_database(self.legacy, self.upgraded)
-        self.assertEqual(result["to_schema_version"], 3)
+        self.assertEqual(result["to_schema_version"], 4)
         self.assertEqual(self._scalar(self.upgraded,
             "SELECT count(*) FROM audit WHERE event='WAL_COMMITTED'"), 1)
 
