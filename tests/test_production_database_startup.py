@@ -132,6 +132,60 @@ class ProductionDatabaseStartupTests(unittest.TestCase):
         self.assertFalse(self.target.exists())
         self.assertEqual(list(self.root.glob(".operational.sqlite.*.sqlite-tmp")), [])
 
+    def test_cli_serve_does_not_create_missing_database_before_web_guard(self):
+        with patch.dict(os.environ, {"GG_VIEWER_TOKEN": TOKEN}):
+            with patch("greengrapeme.webapp.make_server") as server:
+                with self.assertRaises(FileNotFoundError):
+                    cli_main(["--db", str(self.target), "--tenant",
+                              "tenant-A", "serve"])
+                server.assert_not_called()
+        self.assertFalse(self.target.exists())
+
+    def test_cli_worker_fails_closed_before_any_donor_on_missing_database(self):
+        with patch.dict(os.environ, {
+                "GG_ALLOW_EXTERNAL_DISCOVERY": "1",
+                "STARFRUITME_RIGHTS_CONFIRMED": "1"}):
+            with patch("greengrapeme.cli.InstalledStarFruitSource") as source:
+                with self.assertRaises(FileNotFoundError):
+                    cli_main(["--db", str(self.target), "--tenant",
+                              "tenant-A", "discover-worker", "--once"])
+                source.assert_not_called()
+        self.assertFalse(self.target.exists())
+
+    def test_cli_worker_requires_complete_operational_schema(self):
+        SalesWorkspace(self.target)
+        original = self.target.read_bytes()
+        with patch("greengrapeme.cli.InstalledStarFruitSource") as source:
+            with self.assertRaisesRegex(
+                    ValueError, "operational database schema incomplete"):
+                cli_main(["--db", str(self.target), "--tenant", "tenant-A",
+                          "discover-worker", "--once"])
+            source.assert_not_called()
+        self.assertEqual(self.target.read_bytes(), original)
+
+    def test_cli_worker_accepts_initialized_db_and_no_external_request(self):
+        bootstrap_operational_database(self.target)
+        original = self.target.read_bytes()
+        with patch.dict(os.environ, {
+                "GG_ALLOW_EXTERNAL_DISCOVERY": "",
+                "STARFRUITME_RIGHTS_CONFIRMED": "",
+                "GG_HOST_AUTHORIZATION_GRANTED": "",
+                "GG_HOST_ACTOR": "",
+                "GG_HOST_WORKSPACE": "",
+                "GG_HOST_CURRENT_USER_REQUEST": "",
+                "GG_ENABLE_BLACKBERRY_RESEARCH": ""}):
+            with patch("greengrapeme.cli.InstalledStarFruitSource") as source:
+                with patch("greengrapeme.cli.DiscoveryJobQueue.run_next",
+                           new_callable=__import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock) as runner:
+                    runner.return_value = None
+                    self.assertEqual(cli_main([
+                        "--db", str(self.target), "--tenant", "tenant-A",
+                        "discover-worker", "--once"]), 0)
+                    runner.assert_awaited_once()
+                    self.assertFalse(runner.await_args.kwargs["allow_external_source"])
+                source.assert_called_once()
+        self.assertEqual(self.target.read_bytes(), original)
+
     def test_operator_cli_requires_explicit_bootstrap_command(self):
         with redirect_stdout(StringIO()) as output:
             self.assertEqual(cli_main([
