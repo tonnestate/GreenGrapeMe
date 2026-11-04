@@ -82,6 +82,11 @@ _SCHEMA = {
         "amount_cents currency evidence_ref provider_kind provider_receipt_id "
         "occurred_at ledger_event_id created_at",
         ("tenant", "pilot_id", "case_id", "invoice_id", "movement_id")),
+    "sales_customer_credit_notes": (
+        "tenant pilot_id case_id invoice_id credit_id invoice_receipt_id "
+        "credit_note_ref reason_ref amount_cents currency reporter_ref state "
+        "provider_kind provider_receipt_id issued_at created_at updated_at",
+        ("tenant","pilot_id","case_id","invoice_id","credit_id")),
     "sales_pilot_reply_effects": ("tenant pilot_id case_id reply_id opportunity_id "
                                   "recipient_ref content_ref content_sha256 "
                                   "case_source_sha256 effect_id state permission_receipt_ref "
@@ -137,6 +142,10 @@ _UNIQUE_BINDINGS = {
     "sales_customer_movements": (
         ("tenant", "provider_kind", "provider_receipt_id"),
         ("tenant", "pilot_id", "ledger_event_id"),
+    ),
+    "sales_customer_credit_notes": (
+        ("tenant", "provider_kind", "provider_receipt_id"),
+        ("tenant", "credit_note_ref"),
     ),
     "sales_pilot_reply_effects": (("tenant", "effect_id"),),
     "dittofeed_sync_outbox": (("tenant", "workspace_id", "message_id"),),
@@ -231,7 +240,7 @@ def _check_open_database(db: sqlite3.Connection) -> dict:
                         else "WHERE " + required_unique[-1].upper() + " IS NOT NULL"
                         if table in (
                             "sales_pilot_appointments", "sales_pilot_contracts",
-                            "sales_customer_invoices"
+                            "sales_customer_invoices", "sales_customer_credit_notes"
                         )
                         else None
                     )
