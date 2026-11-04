@@ -258,6 +258,86 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual([x[0] for x in researcher.client.calls],
                          ["blackberry_plan_company"])
 
+    def test_malformed_source_snapshots_never_import_any_account(self):
+        # All malformed return types/records must be rejected BEFORE ingest.
+        simple = Opportunity("candidate", "Example GmbH", "offer", ())
+        adversarial = (
+            ("tuple", (simple,), "SOURCE_SNAPSHOT_INVALID"),
+            ("dict", {"items": [simple]}, "SOURCE_SNAPSHOT_INVALID"),
+            ("non-record", [{"opportunity_id": "candidate"}],
+             "SOURCE_RECORDS_INVALID"),
+            ("wrong-offer",
+             [Opportunity("candidate", "Example GmbH", "other-offer", ())],
+             "SOURCE_RECORDS_INVALID"),
+            ("invalid-verification",
+             [Opportunity("candidate", "Example GmbH", "offer", (),
+                          verified_company="verified")],
+             "SOURCE_RECORDS_INVALID"),
+            ("invalid-evidence",
+             [Opportunity("candidate", "Example GmbH", "offer",
+                          [Evidence("register","https://example.org",
+                                    "Observed", "COMPANY_IDENTITY")])],
+             "SOURCE_RECORDS_INVALID"),
+            ("invalid-kind",
+             [Opportunity("candidate", "Example GmbH", "offer",
+                          (Evidence("register","https://example.org",
+                                    "Observed", 123),))],
+             "SOURCE_RECORDS_INVALID"),
+            ("duplicate",
+             [simple, simple],
+             "SOURCE_DUPLICATE_ACCOUNT_IDS"),
+        )
+        for i, (label, returned, expected_error) in enumerate(adversarial):
+            with self.subTest(label=label):
+                request_id = f"invalid-source-{i:04d}"
+                self.jobs.create("A", request_id, old_spec())
+                class Adversarial(StubSource):
+                    async def read(self, job_id, offer_id, limit):
+                        self.calls.append("read")
+                        return returned
+                provider = Adversarial()
+                result = asyncio.run(self.jobs.advance(
+                    "A", request_id, provider,
+                    allowed_existing_jobs=frozenset({JOB})))
+                self.assertEqual(result["state"], "BLOCKED_SOURCE_REVISION")
+                self.assertEqual(result["error_kind"], expected_error)
+                self.assertEqual(self.store.overview("A")["opportunities"], 0)
+                self.assertEqual(provider.calls, ["status", "read"])
+                with self.store._db() as db:
+                    self.assertEqual(db.execute(
+                        "SELECT count(*) FROM sales_missions WHERE tenant='A'"
+                    ).fetchone()[0], 0)
+
+    def test_source_exceeding_admitted_limit_is_never_imported(self):
+        self.jobs.create("A", "job-00000001", old_spec())
+        class Overrun(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                self.calls.append("read")
+                return [Opportunity(f"candidate-{i}", "Example GmbH",
+                                    "offer", ()) for i in range(limit + 1)]
+        provider = Overrun()
+        result = asyncio.run(self.jobs.advance(
+            "A", "job-00000001", provider,
+            allowed_existing_jobs=frozenset({JOB})))
+        self.assertEqual(result["state"], "BLOCKED_SOURCE_CAPACITY")
+        self.assertEqual(result["error_kind"], "SOURCE_EXCEEDS_ADMITTED_ACCOUNT_LIMIT")
+        self.assertEqual(result["result"]["admitted_limit"], 50)
+        self.assertEqual(result["result"]["total_matching"], 51)
+        self.assertEqual(result["result"]["imported"], 0)
+        self.assertEqual(self.store.overview("A")["opportunities"], 0)
+        self.assertEqual(provider.calls, ["status", "read"])
+
+    def test_corrupted_durable_source_job_id_never_reaches_donor(self):
+        self.jobs.create("A", "job-00000001", old_spec())
+        self.assertTrue(self.jobs._transition(
+            "A", "job-00000001", "QUEUED", "SOURCE_DONE",
+            external_job_id="bad-persisted-id"))
+        result = self.runjob()
+        self.assertEqual(result["state"], "BLOCKED_SOURCE_REVISION")
+        self.assertEqual(result["error_kind"], "SOURCE_JOB_ID_INVALID")
+        self.assertEqual(self.source.calls, [])
+        self.assertEqual(self.store.overview("A")["opportunities"], 0)
+
     def test_zero_discovery_explicitly_blocks(self):
         class EmptySource(StubSource):
             async def read(self, job_id, offer_id, limit):

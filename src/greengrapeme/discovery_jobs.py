@@ -23,6 +23,7 @@ from .discovery_batches import DiscoveryBatches
 from .batch_runner import advance_batch
 from .missions import SalesMissionEngine, NeuronRunner
 from .operations import SalesWorkspace
+from .sales import Opportunity, Evidence
 
 
 _ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{7,79}$")
@@ -408,6 +409,12 @@ class DiscoveryJobQueue:
             entry = self.get(tenant, request_id)
             state = entry["state"]
         if state == "SOURCE_DONE":
+            if (not isinstance(job_id, str)
+                    or not _STAR_ID.fullmatch(job_id)):
+                self._transition(tenant, request_id, state,
+                                 "BLOCKED_SOURCE_REVISION",
+                                 error_kind="SOURCE_JOB_ID_INVALID")
+                return self.get(tenant, request_id)
             if spec.mode == "existing" and job_id not in allowed_existing_jobs:
                 self._transition(tenant, request_id, state, "BLOCKED_SOURCE_POLICY",
                                  error_kind="EXISTING_SOURCE_JOB_ACCESS_REVOKED")
@@ -428,6 +435,49 @@ class DiscoveryJobQueue:
                 return self.get(tenant, request_id)
             except Exception:
                 # Unknown read failure: retryable, but cannot claim completeness.
+                return self.get(tenant, request_id)
+            # A donor adapter is an untrusted boundary even when the
+            # upstream MCP reader normally enforces pagination. Reject the
+            # entire snapshot before any SQLite import or work creation.
+            if not isinstance(records, list):
+                self._transition(tenant, request_id, state,
+                                 "BLOCKED_SOURCE_REVISION",
+                                 error_kind="SOURCE_SNAPSHOT_INVALID")
+                return self.get(tenant, request_id)
+            if len(records) > spec.max_accounts:
+                self._transition(
+                    tenant, request_id, state, "BLOCKED_SOURCE_CAPACITY",
+                    result={"total_matching": len(records),
+                            "admitted_limit": spec.max_accounts,
+                            "imported": 0},
+                    error_kind="SOURCE_EXCEEDS_ADMITTED_ACCOUNT_LIMIT")
+                return self.get(tenant, request_id)
+            if any(
+                not isinstance(record, Opportunity)
+                or not isinstance(record.opportunity_id, str)
+                or not record.opportunity_id.strip()
+                or not isinstance(record.company_name, str)
+                or not record.company_name.strip()
+                or record.offer_id != spec.offer_id
+                or not isinstance(record.evidence, tuple)
+                or type(record.verified_company) is not bool
+                or type(record.suppressed) is not bool
+                or any(
+                    not isinstance(e, Evidence)
+                    or not all(isinstance(getattr(e, attr), str)
+                               for attr in ("source", "reference",
+                                            "claim", "kind"))
+                    for e in record.evidence)
+                for record in records
+            ):
+                self._transition(tenant, request_id, state,
+                                 "BLOCKED_SOURCE_REVISION",
+                                 error_kind="SOURCE_RECORDS_INVALID")
+                return self.get(tenant, request_id)
+            if len({record.opportunity_id for record in records}) != len(records):
+                self._transition(tenant, request_id, state,
+                                 "BLOCKED_SOURCE_REVISION",
+                                 error_kind="SOURCE_DUPLICATE_ACCOUNT_IDS")
                 return self.get(tenant, request_id)
             outcome = self.store.ingest(tenant, records)
             if outcome["conflict"]:
