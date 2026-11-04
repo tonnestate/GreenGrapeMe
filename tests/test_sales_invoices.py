@@ -685,7 +685,7 @@ class SalesInvoiceTests(unittest.TestCase):
                        "invoice_ref":"urn:accounting:invoice-0002"})
         self.invoices.confirm_issued(
             *second,source=IssuedInvoice("accounting-invoice-0002"))
-        with self.assertRaisesRegex(ValueError,"already allocated"):
+        with self.assertRaisesRegex(ValueError,"already claimed as settled"):
             self.invoices.settlement(
                 *second,"movement-0012",direction="PAYMENT",
                 amount_cents=1000,evidence_ref="urn:bank:duplicate-0012",
