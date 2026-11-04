@@ -7,6 +7,7 @@ NEVER establishes a lawful basis for marketing/customer contact.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 
 from .operations import SalesWorkspace
@@ -28,6 +29,29 @@ def _opaque_id(*parts: str) -> str:
     """Namespace a stable pseudonymous ID across tenants, never disclose a name."""
     value = _SCOPE + ":".join(f"{len(p)}:{p}" for p in parts)
     return str(uuid.uuid5(uuid.NAMESPACE_URL, value))
+
+
+def _valid_source_link(source_json: object, opportunity_id: str, offer_id: str) -> bool:
+    """Validate the stored opportunity against its independently linked row.
+
+    The importer freezes a structured Opportunity. A truthy BLOB, broken JSON,
+    renamed account, incorrect offer or an upstream-suppressed original is not
+    an admissible lifecycle event, even when someone later deletes its opt-out.
+    """
+    if not isinstance(source_json, str) or not source_json:
+        return False
+    try:
+        source = json.loads(source_json)
+    except (ValueError, TypeError):
+        return False
+    return (isinstance(source, dict) and
+            source.get("opportunity_id") == opportunity_id and
+            source.get("offer_id") == offer_id and
+            isinstance(source.get("company_name"), str) and
+            bool(source["company_name"].strip()) and
+            isinstance(source.get("evidence"), list) and
+            source.get("suppressed") is False)
+
 
 
 class DittofeedLifecycleProjection:
@@ -86,7 +110,9 @@ class DittofeedLifecycleProjection:
                 continue
             # Independent receipt doesn't repair incorrect source/account links.
             if (not row["opportunity_id"] or row["offer_id"] != pilot["offer_id"]
-                    or not row["source_json"]):
+                    or not _valid_source_link(row["source_json"],
+                                               row["opportunity_id"],
+                                               pilot["offer_id"])):
                 withheld_source += 1
                 continue
             batch.append({
