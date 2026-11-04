@@ -18,6 +18,7 @@ _REQUIRED_OPERATIONS_TABLES = frozenset({
     "saas_tenants", "saas_memberships",
     "sales_pilots", "sales_pilot_events", "sales_pilot_cases",
     "sales_pilot_case_steps", "sales_pilot_reply_effects",
+    "sales_pilot_contracts",
     "sales_pilot_appointments", "sales_calendar_dispatch_attempts",
     "sales_calendar_cancellation_attempts",
     "sales_missions", "sales_mission_steps", "sales_mission_accounts",
@@ -90,6 +91,8 @@ def release_audit(path: str | Path) -> dict:
         "unconfirmed_appointment_intent_count": 0,
         "source_confirmed_booking_count": 0,
         "source_confirmed_cancellation_count": 0,
+        "prepared_or_unsigned_contract_count": 0,
+        "independently_signed_contract_count": 0,
         "orphaned_provider_attempt_count": 0,
         "live_release_gates": {name: "UNVERIFIED" for name in _EXTERNAL_GATES},
         "blockers": list(_EXTERNAL_GATES),
@@ -122,6 +125,16 @@ def release_audit(path: str | Path) -> dict:
             report["uncertain_external_effect_counts"] = uncertain
             if any(uncertain.values()):
                 report["blockers"].insert(0, "UNRECONCILED_EXECUTION_OR_EFFECTS")
+            if "sales_pilot_contracts" in verified:
+                contract_counts = dict(db.execute(
+                    "SELECT state,count(*) FROM sales_pilot_contracts GROUP BY state"
+                ).fetchall())
+                report["prepared_or_unsigned_contract_count"] = (
+                    contract_counts.get("PREPARED",0)+contract_counts.get("APPROVED",0)
+                )
+                report["independently_signed_contract_count"] = (
+                    contract_counts.get("SIGNED_CONFIRMED",0)
+                )
             if "sales_pilot_appointments" in verified:
                 counts = dict(db.execute(
                     "SELECT state,count(*) FROM sales_pilot_appointments "

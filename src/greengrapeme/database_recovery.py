@@ -65,6 +65,12 @@ _SCHEMA = {
         "tenant pilot_id case_id booking_id provider_event_id event_id "
         "intent_sha256 original_receipt_id permission_ref state created_at updated_at",
         ("tenant", "pilot_id", "case_id", "booking_id")),
+    "sales_pilot_contracts": (
+        "tenant pilot_id case_id contract_id opportunity_id case_source_sha256 "
+        "offer_id catalog_ref proposal_ref terms_sha256 monthly_fee_cents "
+        "setup_fee_cents currency reporter_ref state approval_ref approval_receipt_id "
+        "signer_ref signature_provider signature_receipt_id signed_at created_at updated_at",
+        ("tenant", "pilot_id", "case_id", "contract_id")),
     "sales_pilot_reply_effects": ("tenant pilot_id case_id reply_id opportunity_id "
                                   "recipient_ref content_ref content_sha256 "
                                   "case_source_sha256 effect_id state permission_receipt_ref "
@@ -108,6 +114,11 @@ _UNIQUE_BINDINGS = {
         ("tenant", "provider_kind", "provider_receipt_id")),
     "sales_calendar_dispatch_attempts": (("tenant", "provider_event_id"),),
     "sales_calendar_cancellation_attempts": (("tenant", "provider_event_id"),),
+    "sales_pilot_contracts": (
+        ("tenant", "pilot_id", "case_id"),
+        ("tenant", "approval_receipt_id"),
+        ("tenant", "signature_provider", "signature_receipt_id"),
+    ),
     "sales_pilot_reply_effects": (("tenant", "effect_id"),),
     "dittofeed_sync_outbox": (("tenant", "workspace_id", "message_id"),),
     "dittofeed_pomelo_effects": (("tenant", "effect_id"),),
@@ -199,7 +210,7 @@ def _check_open_database(db: sqlite3.Connection) -> dict:
                         "WHERE PROVIDER_RECEIPT_ID IS NOT NULL"
                         if table == "sales_pilot_events"
                         else "WHERE " + required_unique[-1].upper() + " IS NOT NULL"
-                        if table == "sales_pilot_appointments"
+                        if table in ("sales_pilot_appointments", "sales_pilot_contracts")
                         else None
                     )
                     if allowed_where is None or allowed_where not in " ".join(sql.split()):
