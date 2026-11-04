@@ -317,6 +317,75 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
         self.assertEqual(host.calls,0)
 
+    def test_existing_source_revocation_blocks_single_account_research(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.assertEqual(self.runjob()["state"],"AWAITING_BLACKBERRY")
+        researcher=StubResearcher()
+        result=self.runjob(
+            allowed_existing_jobs=frozenset(), researcher=researcher)
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(result["error_kind"],"EXISTING_SOURCE_JOB_ACCESS_REVOKED")
+        self.assertEqual(researcher.calls,[])
+        self.assertEqual(self.source.calls,["status","read"])
+
+    def test_existing_source_revocation_blocks_single_account_mango(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher()
+        self.assertEqual(self.runjob(researcher=researcher)["state"],
+                         "AWAITING_BLACKBERRY")
+        self.assertEqual(self.runjob(researcher=researcher)["state"],
+                         "AWAITING_CANONICAL_WORK")
+        host=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(
+            actor_id="authorized-user",workspace=self.temp.name,
+            current_user_request="Find source-grounded B2B customers",
+            backend=host)
+        neuron=StubNeuron()
+        result=self.runjob(
+            allowed_existing_jobs=frozenset(), researcher=researcher,
+            admission=admission, neuron=neuron)
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(host.calls,0)
+        self.assertEqual(neuron.calls,[])
+        self.assertEqual(len(researcher.calls),1)
+
+    def test_existing_source_revocation_blocks_single_account_neuron(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.runjob()
+        researcher=StubResearcher()
+        self.runjob(researcher=researcher)
+        self.assertEqual(self.runjob(researcher=researcher)["state"],
+                         "AWAITING_CANONICAL_WORK")
+        host=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(
+            actor_id="authorized-user",workspace=self.temp.name,
+            current_user_request="Find source-grounded B2B customers",
+            backend=host)
+        self.assertEqual(self.runjob(admission=admission)["state"],"ADMITTED")
+        self.assertEqual(host.calls,1)
+        neuron=StubNeuron()
+        result=self.runjob(
+            allowed_existing_jobs=frozenset(), admission=admission,
+            neuron=neuron)
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(host.calls,1)
+        self.assertEqual(neuron.calls,[])
+
+    def test_nontext_source_during_single_account_research_is_blocked(self):
+        self.jobs.create("A","job-00000001",old_spec())
+        self.assertEqual(self.runjob()["state"],"AWAITING_BLACKBERRY")
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET source_json=X'000102'
+                          WHERE tenant=? AND opportunity_id=?""",
+                       ("A","starfruitme:"+JOB+":candidate1"))
+        researcher=StubResearcher()
+        result=self.runjob(researcher=researcher)
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(result["error_kind"],"ACCOUNT_CHANGED_OR_SUPPRESSED")
+        self.assertEqual(researcher.calls,[])
+        self.assertEqual(self.source.calls,["status","read"])
+
     def test_new_source_denied_without_host_rights_and_ack(self):
         self.jobs.create("A","job-00000001",new_spec(ack=True))
         result=self.runjob(allow_external_source=False)
