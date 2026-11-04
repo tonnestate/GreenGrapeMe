@@ -100,6 +100,66 @@ class PilotLedgerTests(unittest.TestCase):
             self.assertEqual(self.ledger.event("tenant-A","pilot-001",
                                                 "payment-001")["state"],"REPORTED")
 
+    def test_mutated_financial_event_during_external_verification_is_not_confirmed(self):
+        # The source verified the OLD amount. The row changed before the
+        # reconciliation write lock: the old receipt is now invalid.
+        self.report()
+        workspace=self.workspace
+        class MutatingAmountProvider(Provider):
+            def verify(self, event):
+                receipt=super().verify(event)
+                with workspace._db() as db:
+                    db.execute("""UPDATE sales_pilot_events SET amount_cents=99999
+                                  WHERE tenant='tenant-A'
+                                    AND pilot_id='pilot-001'
+                                    AND event_id='payment-001'""")
+                return receipt
+        with self.assertRaisesRegex(ValueError, "changed during source verification"):
+            self.ledger.reconcile("tenant-A","pilot-001","payment-001",
+                                  source=MutatingAmountProvider())
+        self.assertEqual(self.ledger.event("tenant-A","pilot-001","payment-001")[
+            "state"],"REPORTED")
+        self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
+            "platform_payment_confirmed_cents"],0)
+
+    def test_changed_evidence_reference_during_verification_is_not_confirmed(self):
+        self.report(event_id="payment-evidence-change")
+        workspace=self.workspace
+        class MutatingEvidenceProvider(Provider):
+            def verify(self, event):
+                receipt=super().verify(event)
+                with workspace._db() as db:
+                    db.execute("""UPDATE sales_pilot_events
+                                  SET evidence_ref='urn:external:different'
+                                  WHERE tenant='tenant-A'
+                                    AND pilot_id='pilot-001'
+                                    AND event_id='payment-evidence-change'""")
+                return receipt
+        with self.assertRaisesRegex(ValueError, "changed during source verification"):
+            self.ledger.reconcile(
+                "tenant-A","pilot-001","payment-evidence-change",
+                source=MutatingEvidenceProvider())
+        self.assertEqual(self.ledger.event(
+            "tenant-A","pilot-001","payment-evidence-change")["state"],"REPORTED")
+
+    def test_deleted_event_during_external_verification_is_not_resurrected(self):
+        self.report(event_id="payment-deleted")
+        workspace=self.workspace
+        class DeletingProvider(Provider):
+            def verify(self, event):
+                receipt=super().verify(event)
+                with workspace._db() as db:
+                    db.execute("""DELETE FROM sales_pilot_events
+                                  WHERE tenant='tenant-A'
+                                    AND pilot_id='pilot-001'
+                                    AND event_id='payment-deleted'""")
+                return receipt
+        with self.assertRaisesRegex(LookupError, "disappeared during"):
+            self.ledger.reconcile("tenant-A","pilot-001","payment-deleted",
+                                  source=DeletingProvider())
+        self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
+            "platform_payment_confirmed_cents"],0)
+
     def test_external_receipt_cannot_confirm_two_distinct_payments(self):
         self.report()
         self.report(event_id="payment-002")
