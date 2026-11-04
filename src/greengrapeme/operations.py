@@ -98,7 +98,11 @@ class SalesWorkspace:
             for record in records:
                 payload = json.dumps(asdict(record), sort_keys=True)
                 oid = record.opportunity_id
-                if oid in incoming and incoming[oid] != payload:
+                # Two rows with the same source identity are an ambiguous
+                # snapshot even if their serialized content is identical.
+                # Never count one as a newly imported account and the
+                # other as a valid idempotent re-import in the SAME batch.
+                if oid in incoming:
                     conflict_ids.add(oid)
                 incoming[oid] = payload
                 old = db.execute("""SELECT source_json FROM opportunities

@@ -313,3 +313,19 @@ source job by itself; the installed CLI remains subject to the
 explicit `GG_ALLOWED_EXISTING_STARFRUIT_JOBS` allowlist and any
 external donor-side permissions. Production release is still
 blocked by actual SaaS authentication and live integration proofs.
+
+## Atomic source import: identical duplicate IDs (2026-11-04)
+
+The shared SalesWorkspace importer previously treated repeated account IDs
+in the **same** source batch as conflicts only when their payloads differed.
+For two **identical** records, it imported one and counted the second as
+`unchanged`, masking a faulty upstream snapshot and allowing unrelated
+rows in the same batch to be imported.
+
+Every second occurrence of an ID within one batch is now a source
+identity conflict, regardless of serialized payload equality. The
+existing `BEGIN IMMEDIATE` admission rejects the **entire** mixed batch
+before any new account/work item is written, while recording one
+non-contact review/audit per conflicting ID. A single ID repeated in
+**separate** valid source batches remains normally idempotent. This is
+tested for both fresh and already imported account IDs.

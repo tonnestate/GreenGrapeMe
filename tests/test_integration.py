@@ -127,6 +127,48 @@ class IntegrationTests(unittest.TestCase):
                     "SELECT count(*) FROM work_items WHERE tenant=?",
                     ("tenant",)).fetchone()[0],0)
 
+    def test_identical_duplicate_ids_block_entire_import_batch(self):
+        with TemporaryDirectory() as tmp:
+            store = SalesWorkspace(Path(tmp) / "state.db")
+            repeated = Opportunity("account-a", "Alpha GmbH", "offer", ())
+            independent = Opportunity("account-b", "Beta GmbH", "offer", ())
+            result = store.ingest("tenant-a", [
+                repeated, independent, repeated])
+            self.assertEqual(result, {
+                "new": 0, "unchanged": 0, "conflict": 1})
+            self.assertEqual(store.overview("tenant-a")["opportunities"], 0)
+            self.assertEqual(store.queue("tenant-a"), [])
+            with store._db() as db:
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM audit WHERE tenant=? "
+                    "AND event='SOURCE_REVISION_CONFLICT'",
+                    ("tenant-a",)).fetchone()[0], 1)
+            # Idempotency is still supported ACROSS separately committed
+            # batches that each contain only one account identity.
+            self.assertEqual(store.ingest("tenant-a", [repeated])["new"], 1)
+            self.assertEqual(store.ingest("tenant-a", [repeated])["unchanged"], 1)
+
+    def test_existing_account_duplicate_batch_cannot_import_new_accounts(self):
+        with TemporaryDirectory() as tmp:
+            store = SalesWorkspace(Path(tmp) / "state.db")
+            existing = Opportunity("old", "Original GmbH", "offer", ())
+            additional = Opportunity("new", "New GmbH", "offer", ())
+            store.ingest("tenant-a", [existing])
+            result = store.ingest("tenant-a", [
+                existing, additional, existing])
+            self.assertEqual(result, {
+                "new": 0, "unchanged": 0, "conflict": 1})
+            self.assertEqual(store.overview("tenant-a")["opportunities"], 1)
+            with store._db() as db:
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM opportunities "
+                    "WHERE tenant=? AND opportunity_id='new'",
+                    ("tenant-a",)).fetchone()[0], 0)
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM work_items "
+                    "WHERE tenant=? AND opportunity_id='new'",
+                    ("tenant-a",)).fetchone()[0], 0)
+
     def test_changed_source_does_not_overwrite(self):
         with TemporaryDirectory() as tmp:
             s = SalesWorkspace(Path(tmp)/"s.db")
