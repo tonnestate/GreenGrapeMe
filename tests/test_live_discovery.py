@@ -147,6 +147,19 @@ class LiveDiscoveryContractTests(unittest.TestCase):
         with self.assertRaisesRegex(SourceSnapshotError, "incomplete"):
             self.read(FakeSource(total=250, short_page=True), limit=300)
 
+    def test_invalid_source_observations_block_complete_snapshot(self):
+        for malformed in (None, {}, "not-a-list", [None], [42]):
+            class MalformedSource(FakeSource):
+                async def call_tool(self, name, arguments):
+                    response_item=await super().call_tool(name, arguments)
+                    if name=="get_company":
+                        response_item.structured_content["observations"]=malformed
+                    return response_item
+            with self.subTest(observations=malformed):
+                with self.assertRaisesRegex(
+                        SourceSnapshotError, "observation"):
+                    self.read(MalformedSource())
+
     def test_missing_company_name_not_silently_dropped(self):
         with self.assertRaisesRegex(SourceSnapshotError, "unnamed"):
             self.read(FakeSource(blank_name=True))
