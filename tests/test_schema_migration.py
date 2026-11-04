@@ -135,12 +135,42 @@ class MigrationTests(unittest.TestCase):
             "operation"], "COPY_FORWARD_SCHEMA_MIGRATION")
         next_path = self.root / "saas-v1-second.sqlite"
         result = migrate_database(self.upgraded, next_path)
-        self.assertEqual(result["from_schema_version"], 1)
-        self.assertEqual(result["to_schema_version"], 1)
+        self.assertEqual(result["from_schema_version"], 2)
+        self.assertEqual(result["to_schema_version"], 2)
         self.assertEqual(self._scalar(next_path,
-            "SELECT version FROM greengrapeme_schema_migrations"), 1)
+            "SELECT max(version) FROM greengrapeme_schema_migrations"), 2)
         self.assertEqual(self._scalar(next_path,
             "SELECT count(*) FROM dittofeed_provider_attempts"), 1)
+
+    def test_existing_v1_ledger_copy_forward_preserves_history(self):
+        from greengrapeme.calendar_bookings import CalendarBookings
+        with self.store._db() as db:
+            db.execute("""
+                CREATE TABLE greengrapeme_schema_migrations (
+                    version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)
+            """)
+            db.execute("INSERT INTO greengrapeme_schema_migrations VALUES(1,?)",
+                       ("2026-11-04T08:00:00+00:00",))
+            db.execute("PRAGMA user_version=1")
+        source_rows = self._scalar(
+            self.legacy,"SELECT count(*) FROM dittofeed_provider_attempts")
+        upgraded = migrate_database(self.legacy,self.upgraded)
+        self.assertEqual(upgraded["from_schema_version"],1)
+        self.assertEqual(upgraded["to_schema_version"],2)
+        self.assertEqual(verify_database(self.legacy)["user_version"],1)
+        self.assertIn("sales_pilot_appointments",
+                      verify_database(self.legacy)["uninitialized_optional_tables"])
+        self.assertEqual(self._scalar(self.upgraded,
+            "SELECT count(*) FROM greengrapeme_schema_migrations"),2)
+        self.assertEqual(self._scalar(self.upgraded,
+            "SELECT version FROM greengrapeme_schema_migrations "
+            "WHERE applied_at='2026-11-04T08:00:00+00:00'"),1)
+        self.assertEqual(self._scalar(self.upgraded,
+            "SELECT count(*) FROM dittofeed_provider_attempts"),source_rows)
+        operational=SalesWorkspace(self.upgraded,bootstrap=False,
+                                   require_operational=True)
+        self.assertEqual(CalendarBookings(operational).list(
+            "tenant-a","pilot-0001")["total"],0)
 
     def test_migration_keeps_source_wal_commits(self):
         with sqlite3.connect(self.legacy) as writer:
@@ -154,7 +184,7 @@ class MigrationTests(unittest.TestCase):
             writer.commit()
             self.assertTrue(Path(str(self.legacy)+"-wal").exists())
             result = migrate_database(self.legacy, self.upgraded)
-        self.assertEqual(result["to_schema_version"], 1)
+        self.assertEqual(result["to_schema_version"], 2)
         self.assertEqual(self._scalar(self.upgraded,
             "SELECT count(*) FROM audit WHERE event='WAL_COMMITTED'"), 1)
 
