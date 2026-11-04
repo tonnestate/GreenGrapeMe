@@ -189,6 +189,10 @@ class PilotLedger:
         reporter_ref = _id(reporter_ref, "reporter_ref")
         if not isinstance(kind, str) or kind not in _KINDS:
             raise ValueError("unknown pilot event kind")
+        # Refunds must never be fabricated as standalone reported CRM facts.
+        # SalesInvoices is the single verified invoice/cash allocation path.
+        if kind == "CUSTOMER_REFUND_PAID":
+            raise PermissionError("customer refunds require verified invoice settlement")
         if (not isinstance(evidence_ref, str) or
                 not (evidence_ref.startswith("https://") or evidence_ref.startswith("urn:")) or
                 not 12 <= len(evidence_ref) <= 1024 or any(c.isspace() for c in evidence_ref)):
