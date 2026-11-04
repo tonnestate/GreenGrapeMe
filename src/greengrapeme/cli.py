@@ -160,6 +160,18 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--once", action="store_true", help="Process one queued item and exit")
     worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
+    # Direct CLI import/sales-run are independent entry points from the
+    # Discovery worker. Enforce the same explicit existing-job allowlist
+    # BEFORE opening the database or contacting StarFruitMe.
+    if a.command in {"discover-starfruit", "sales-run"}:
+        authorized_jobs = frozenset(
+            job.strip() for job in environ.get(
+                "GG_ALLOWED_EXISTING_STARFRUIT_JOBS", "").split(",")
+            if job.strip())
+        if (a.job_id not in authorized_jobs or
+                len(a.job_id) != 24 or
+                any(ch not in "0123456789abcdef" for ch in a.job_id)):
+            p.error("existing StarFruitMe job is not authorized by this host")
     store = SalesWorkspace(a.db)
     if a.command == "discover-worker":
         if not 1 <= a.interval <= 300:
