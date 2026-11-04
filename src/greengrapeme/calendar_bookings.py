@@ -198,6 +198,25 @@ class CalendarBookings:
                  "contact_authority":"NONE"})
         return self.get(tenant,pilot_id,case_id,booking_id)
 
+    @staticmethod
+    def _case_source_current(db, row: dict, offer_id: str) -> bool:
+        """Prevent a changed CRM/source link inheriting an old calendar proof."""
+        case = db.execute("""
+            SELECT opportunity_id,source_sha256 FROM sales_pilot_cases
+            WHERE tenant=? AND pilot_id=? AND case_id=?
+        """, (row["tenant"],row["pilot_id"],row["case_id"])).fetchone()
+        source = db.execute("""
+            SELECT offer_id,source_json FROM opportunities
+            WHERE tenant=? AND opportunity_id=?
+        """, (row["tenant"],row["opportunity_id"])).fetchone()
+        return bool(case and source
+            and case["opportunity_id"] == row["opportunity_id"]
+            and case["source_sha256"] == row["case_source_sha256"]
+            and source["offer_id"] == offer_id
+            and isinstance(source["source_json"],str)
+            and hashlib.sha256(source["source_json"].encode()).hexdigest()
+                == row["case_source_sha256"])
+
     def reconcile(self, tenant: str, pilot_id: str, case_id: str,
                   booking_id: str, *, source: IndependentCalendarSource) -> dict:
         """Independently confirm booking/cancellation; safe to retry a read.
@@ -206,6 +225,11 @@ class CalendarBookings:
         trusted host supplying an actual authenticated calendar lookup.
         """
         row = self.get(tenant,pilot_id,case_id,booking_id)
+        pilot = PilotLedger(self.store).get(tenant,pilot_id)
+        # Check local identity before passing any customer metadata to a provider.
+        with self.store._db() as db:
+            if not self._case_source_current(db,row,pilot["offer_id"]):
+                raise ValueError("appointment CRM/source identity is inconsistent")
         if source is None or not callable(getattr(source,"verify",None)):
             raise PermissionError("independent calendar provider required")
         request = {
@@ -237,6 +261,8 @@ class CalendarBookings:
             """, (tenant,pilot_id,case_id,booking_id)).fetchone()
             if old is None:
                 raise LookupError("appointment vanished during verification")
+            if not self._case_source_current(db,row,pilot["offer_id"]):
+                raise ValueError("appointment CRM/source changed during verification")
             if any(old[key] != row[key] for key in (
                     "tenant","pilot_id","case_id","booking_id",
                     "opportunity_id","case_source_sha256","calendar_ref",
