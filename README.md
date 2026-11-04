@@ -141,3 +141,16 @@ operator steps, protection of backup copies, the no-automatic-retry
 rule for irreversible effect fences, and remaining production gates.
 A backup feature alone does **not** imply recovery after external
 provider actions or justify a SaaS production release.
+
+## Production go/no-go (2026-11-04)
+
+The read-only `release-audit` operator command checks the existing SQLite
+schema, state of irreversible provider attempts, uncertain communication
+effects, source/model job uncertainties and whether all operational feature
+tables have been initialized. It returns **NO_GO / exit 2** until actual
+external release acceptance is independently established. It deliberately
+does not treat a successful local test suite or a pinned PomeloMe gateway
+integration as permission to launch a public SaaS. Run
+`PYTHONPATH=src python -m greengrapeme.cli --db /path/to/existing.sqlite release-audit`.
+See [docs/PRODUCTION_RELEASE_GATES.md](docs/PRODUCTION_RELEASE_GATES.md)
+for G1–G5 and security/operations acceptance requirements.
