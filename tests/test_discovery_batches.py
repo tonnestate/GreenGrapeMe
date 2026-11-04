@@ -209,7 +209,7 @@ class BatchesTests(unittest.TestCase):
         self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
         self.assertEqual(self.researcher.calls,[])
         self.assertEqual(self.host.calls,[])
-        self.assertEqual(result["result"]["contact_authority"],"NONE")
+        self.assertEqual(self.neuron.contexts,[])
 
     def test_suppression_blocks_entire_batch_before_next_donor_call(self):
         self.advance()
