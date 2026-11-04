@@ -7,7 +7,7 @@ existing invoices remain eligible for independent credit and cash settlement.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import sqlite3
 from typing import Protocol
 
@@ -146,8 +146,7 @@ class SalesTerminations:
         effective_date=datetime.fromisoformat(effective_at)
         if effective_date<signed_at:
             raise ValueError("contract cannot terminate before it was signed")
-        if effective_date>datetime.now(timezone.utc).replace(year=(
-                datetime.now(timezone.utc).year+20)):
+        if effective_date>datetime.now(timezone.utc)+timedelta(days=365*20):
             raise ValueError("contract termination effective date unreasonably distant")
         binding={
             "tenant":tenant,"pilot_id":pilot_id,"case_id":case_id,
@@ -207,7 +206,7 @@ class SalesTerminations:
             try:
                 db.execute("""
                     INSERT INTO sales_contract_terminations VALUES
-                        (?,?,?,?,?,?,?,?,?,?,?,?,?,'CONTRACT',?,?,?)
+                        (?,?,?,?,?,?,?,?,?,?,?,?,'CONTRACT',?,?,?)
                 """,(
                     tenant,pilot_id,case_id,contract_id,cancellation_id,
                     contract["opportunity_id"],contract["terms_sha256"],
