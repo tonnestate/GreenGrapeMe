@@ -22,6 +22,9 @@ import tempfile
 # The column list is a minimum: additive, backward-compatible columns are
 # permitted, but a broken primary key or missing source/fence field is not.
 _SCHEMA = {
+    "saas_tenants": ("tenant active created_at", ("tenant",)),
+    "saas_memberships": ("tenant issuer subject role active updated_at",
+                         ("tenant", "issuer", "subject")),
     "opportunities": ("tenant opportunity_id offer_id company_name source_json status reason updated_at",
                        ("tenant", "opportunity_id")),
     "work_items": ("tenant work_id opportunity_id role action state details_json created_at",
