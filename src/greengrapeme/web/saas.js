@@ -525,7 +525,7 @@ async function queueDiscovery(spec) {
 // Reject missing offsets and impossible dates before calling the durable API.
 function appointmentInstant(id) {
   const raw = value(id);
-  const match = /^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2})(?::(\\d{2})(?:\\.(\\d{1,3}))?)?(Z|[+-]\\d{2}:\\d{2})$/.exec(raw);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/.exec(raw);
   if (!match) throw new Error("Terminzeit benötigt ISO-Datum und Zeitzone (z. B. +01:00).");
   const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw, milliRaw, zone] = match;
   const year = Number(yearRaw), month = Number(monthRaw), day = Number(dayRaw);
