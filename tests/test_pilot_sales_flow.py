@@ -41,6 +41,100 @@ class PilotSalesFlowTests(unittest.TestCase):
         params.update(kwargs)
         return self.flow.step("tenant-01","pilot-0001",self.case,**params)
 
+    def test_discovery_account_handoff_preserves_source_and_never_claims_inbound(self):
+        from greengrapeme.sales import Opportunity, Evidence
+        from greengrapeme.reply_effects import ReplyEffects
+
+        opportunity = Opportunity(
+            "discovered-account-001", "Discovered GmbH", "offer-01",
+            (Evidence("starfruitme", "https://source.example/companies/001",
+                      "Observed company profile", "OTHER"),),
+            verified_company=False)
+        self.store.ingest("tenant-01", [opportunity])
+        kwargs = dict(
+            opportunity_id="discovered-account-001",
+            evidence_ref="https://source.example/companies/001",
+            reporter_ref=self.actor)
+        case = self.flow.adopt_sourced_case(
+            "tenant-01", "pilot-0001", "prospect-0001", **kwargs)
+        self.assertEqual(case["state"], "PROSPECT_REVIEW")
+        self.assertEqual(case["reported_channel"], "DISCOVERY")
+        self.assertEqual(case["contact_authority"], "NONE")
+        self.assertFalse(case["identity_verified"])
+        self.assertEqual(case["external_actions_executed"], 0)
+        self.assertEqual(self.store.overview("tenant-01")["opportunities"], 1)
+        self.assertEqual(
+            self.flow.adopt_sourced_case(
+                "tenant-01", "pilot-0001", "prospect-0001", **kwargs)["case_id"],
+            "prospect-0001")
+        self.assertEqual(self.pilots.summary("tenant-01", "pilot-0001")[
+            "reported_event_count"], 0)
+        self.assertEqual(self.flow.list("tenant-02", "pilot-0001")["total"], 0)
+        with self.assertRaises(LookupError):
+            self.flow.adopt_sourced_case(
+                "tenant-02", "pilot-0001", "prospect-0002", **kwargs)
+        with self.assertRaises(ValueError):
+            self.flow.adopt_sourced_case(
+                "tenant-01", "pilot-0001", "prospect-0001",
+                **{**kwargs, "evidence_ref": "urn:unrelated:source:001"})
+        with self.assertRaises(ValueError):
+            self.flow.adopt_sourced_case(
+                "tenant-01", "pilot-0001", "prospect-0002", **kwargs)
+        self.flow.step(
+            "tenant-01", "pilot-0001", "prospect-0001",
+            step_id="qualify-0001", expected_state="PROSPECT_REVIEW",
+            to_state="QUALIFIED_REPORTED", reporter_ref=self.actor,
+            evidence_ref="urn:crm:review:qualified-001")
+        self.assertEqual(self.pilots.summary("tenant-01", "pilot-0001")[
+            "stages"]["LEAD_ACCEPTED"]["reported_opportunities"], 1)
+        with self.assertRaises(PermissionError):
+            ReplyEffects(self.store).prepare(
+                "tenant-01", "pilot-0001", "prospect-0001", "reply-0001",
+                recipient_ref="urn:crm:recipient:001",
+                content_ref="urn:content:prospect:001",
+                content_sha256="a" * 64)
+        with self.store._db() as db:
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM sales_pilot_reply_effects "
+                "WHERE tenant=? AND case_id=?",
+                ("tenant-01", "prospect-0001")).fetchone()[0], 0)
+
+    def test_discovery_case_denies_suppressed_or_changed_sources(self):
+        from greengrapeme.sales import Opportunity, Evidence
+
+        original = Opportunity(
+            "discovered-account-002", "Blocked GmbH", "offer-01",
+            (Evidence("starfruitme", "https://source.example/companies/002",
+                      "Company observation", "OTHER"),),
+            verified_company=False)
+        self.store.ingest("tenant-01", [original])
+        kwargs = dict(
+            opportunity_id=original.opportunity_id,
+            evidence_ref="https://source.example/companies/002",
+            reporter_ref=self.actor)
+        with self.assertRaises(ValueError):
+            self.flow.adopt_sourced_case(
+                "tenant-01", "pilot-0001", "prospect-0002",
+                **{**kwargs, "evidence_ref": "urn:unrelated:source:002"})
+        with self.store._db() as db:
+            db.execute("INSERT INTO suppressions VALUES (?,?,?,?)",
+                       ("tenant-01", original.opportunity_id, "OPT_OUT",
+                        self.store._now()))
+        with self.assertRaises(PermissionError):
+            self.flow.adopt_sourced_case(
+                "tenant-01", "pilot-0001", "prospect-0002", **kwargs)
+        with self.store._db() as db:
+            db.execute("DELETE FROM suppressions WHERE tenant=? AND opportunity_id=?",
+                       ("tenant-01", original.opportunity_id))
+            db.execute(
+                "UPDATE opportunities SET source_json='{}' "
+                "WHERE tenant=? AND opportunity_id=?",
+                ("tenant-01", original.opportunity_id))
+        with self.assertRaises(ValueError):
+            self.flow.adopt_sourced_case(
+                "tenant-01", "pilot-0001", "prospect-0002", **kwargs)
+        self.assertEqual(self.flow.list("tenant-01", "pilot-0001")["total"], 0)
+
     def test_open_inbound_is_observation_not_consent_or_verified_identity(self):
         created=self.open()
         self.assertEqual(created["state"],"INBOUND_REVIEW")
