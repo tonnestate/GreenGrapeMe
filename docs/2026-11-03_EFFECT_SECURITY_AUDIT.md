@@ -287,3 +287,29 @@ authenticated multi-tenant authorization system. The host must protect
 the process environment and enforce tenant permissions independently.
 A publicly exposed SaaS still requires a distinct authenticated API,
 tenant-bound permissions and external host integration acceptance.
+
+## Direct sales-run source admission before tenant state mutation (2026-11-04)
+
+The older `run_sales_pipeline` function imported source records
+**before** comparing the incoming account cohort with an already
+persistent and immutable `SalesMission`. If StarFruitMe returned an
+extra new account for an existing mission, GreenGrapeMe later returned
+`BLOCKED_CHANGED_MISSION_INPUT` but the new account had already been
+inserted into the tenant database and sales work queue.
+
+The pipeline now requires a concrete list of typed `Opportunity`
+records with a matching offer, typed evidence and Boolean safety
+flags, no duplicate identities, and a bounded account count **before**
+starting ingestion. For an existing mission the cohort is compared
+against `sales_mission_accounts` **before** importing newly discovered
+accounts. A changed cohort fails with zero new accounts, zero model
+calls and no new review tasks. An invalid source response fails as
+`BLOCKED_SOURCE_REVISION` with a reason, also without writes.
+Boolean max_accounts/max_steps values are no longer valid numeric
+limits. New regression tests cover all these cases.
+
+This local preflight does not establish host authorization for the
+source job by itself; the installed CLI remains subject to the
+explicit `GG_ALLOWED_EXISTING_STARFRUIT_JOBS` allowlist and any
+external donor-side permissions. Production release is still
+blocked by actual SaaS authentication and live integration proofs.
