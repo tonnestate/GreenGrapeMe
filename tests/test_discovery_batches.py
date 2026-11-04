@@ -274,6 +274,40 @@ class BatchesTests(unittest.TestCase):
         self.assertEqual(len({
             x["mission_id"] for x in batch_data}), 40)
 
+    def test_new_source_revocation_stops_batch_before_research(self):
+        class NewManySource(ManySource):
+            async def create(self, spec):
+                self.calls.append("create")
+                return {"job_id":JOB,"status":"PLANNED_NOT_EXECUTED"}
+
+            async def run(self, job_id, *, max_searches):
+                self.calls.append("run")
+                return {"summary":{
+                    "job_id":job_id,
+                    "job_state":"COMPLETED_NO_KNOWN_GAPS",
+                    "searches":max_searches,
+                }}
+        source=NewManySource(26)
+        rid="batch-newsource-revoked"
+        self.queue.create("tenant-A",rid,DiscoverySpec(
+            mode="new",offer_id="offer",objective="Find B2B companies",
+            icp="German B2B companies",nace="68.12",
+            south=53.0,west=9.0,north=53.2,east=9.3,
+            max_accounts=30,source_rights_acknowledged=True))
+        first=asyncio.run(self.queue.advance(
+            "tenant-A",rid,source,allow_external_source=True))
+        self.assertEqual(first["state"],"BATCH_AWAITING_BLACKBERRY")
+        self.assertEqual(source.calls,["create","run","read"])
+        blocked=asyncio.run(self.queue.advance(
+            "tenant-A",rid,source,allow_external_source=False,
+            researcher=self.researcher,admission=self.admission,
+            neuron=self.neuron))
+        self.assertEqual(blocked["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(blocked["error_kind"],"NEW_SOURCE_RIGHTS_REVOKED")
+        self.assertEqual(self.researcher.calls,[])
+        self.assertEqual(self.host.calls,[])
+        self.assertEqual(self.neuron.contexts,[])
+
     def test_revocation_stops_batch_before_new_research(self):
         self.advance()
         result=asyncio.run(self.queue.advance(

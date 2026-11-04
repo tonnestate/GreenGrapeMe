@@ -396,6 +396,59 @@ class DiscoveryJobTests(unittest.TestCase):
         self.assertEqual(other["state"],"BLOCKED_SOURCE_POLICY")
         self.assertEqual(self.source.calls,[])
 
+    def test_new_source_revocation_after_run_blocks_later_source_read(self):
+        class FirstReadUnavailable(StubSource):
+            async def read(self, job_id, offer_id, limit):
+                self.calls.append("read")
+                raise TimeoutError("transient source read failed")
+        source=FirstReadUnavailable()
+        self.jobs.create("A","job-00000001",new_spec())
+        first=asyncio.run(self.jobs.advance(
+            "A","job-00000001",source,allow_external_source=True))
+        self.assertEqual(first["state"],"SOURCE_DONE")
+        self.assertEqual(source.calls,["create","run","read"])
+        recovered_source=StubSource()
+        blocked=asyncio.run(self.jobs.advance(
+            "A","job-00000001",recovered_source,
+            allow_external_source=False))
+        self.assertEqual(blocked["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(blocked["error_kind"],"NEW_SOURCE_RIGHTS_REVOKED")
+        self.assertEqual(recovered_source.calls,[])
+        self.assertEqual(self.store.overview("A")["opportunities"],0)
+
+    def test_new_source_revocation_blocks_downstream_research(self):
+        self.jobs.create("A","job-00000001",new_spec())
+        allowed=self.runjob(allow_external_source=True)
+        self.assertEqual(allowed["state"],"AWAITING_BLACKBERRY")
+        researcher=StubResearcher()
+        blocked=self.runjob(
+            allow_external_source=False,researcher=researcher)
+        self.assertEqual(blocked["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(blocked["error_kind"],"NEW_SOURCE_RIGHTS_REVOKED")
+        self.assertEqual(researcher.calls,[])
+        self.assertEqual(self.source.calls,["create","run","read"])
+
+    def test_new_source_revocation_blocks_canonical_mango(self):
+        self.jobs.create("A","job-00000001",new_spec())
+        self.runjob(allow_external_source=True)
+        researcher=StubResearcher()
+        self.runjob(allow_external_source=True,researcher=researcher)
+        self.assertEqual(self.runjob(
+            allow_external_source=True,researcher=researcher)["state"],
+            "AWAITING_CANONICAL_WORK")
+        host=StubMango(self.temp.name)
+        admission=TrustedWorkAdmission(
+            actor_id="authorized-user",workspace=self.temp.name,
+            current_user_request="Find source-grounded customers",
+            backend=host)
+        neuron=StubNeuron()
+        blocked=self.runjob(
+            allow_external_source=False,admission=admission,neuron=neuron)
+        self.assertEqual(blocked["state"],"BLOCKED_SOURCE_POLICY")
+        self.assertEqual(host.calls,0)
+        self.assertEqual(neuron.calls,[])
+        self.assertEqual(len(researcher.calls),1)
+
     def test_new_source_bounded_create_run_and_import(self):
         self.jobs.create("A","job-00000001",new_spec())
         result=self.runjob(allow_external_source=True)
