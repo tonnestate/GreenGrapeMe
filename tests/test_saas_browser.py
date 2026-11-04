@@ -140,6 +140,16 @@ class BrowserTests(unittest.TestCase):
         ):
             self.assertIn(required, failure)
 
+    def test_financial_display_does_not_fabricate_zero_for_missing_values(self):
+        js = self.get("/saas.js")["body"].decode()
+        formatting = js[js.index("function euro(cents) {"):
+                        js.index("function renderView(", js.index("function euro(cents) {"))]
+        self.assertIn('typeof cents !== "number"', formatting)
+        self.assertIn("Number.isSafeInteger(cents)", formatting)
+        self.assertIn('return "–";', formatting)
+        self.assertIn(".format(cents / 100)", formatting)
+        self.assertNotIn("Number(cents)", formatting)
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),
