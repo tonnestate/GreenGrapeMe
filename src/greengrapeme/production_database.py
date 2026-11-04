@@ -14,7 +14,7 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _initialize_operational_schema(staging: Path) -> None:
@@ -30,6 +30,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     from .calendar_bookings import CalendarBookings
     from .sales_contracts import SalesContracts
     from .sales_invoices import SalesInvoices
+    from .sales_credit_notes import SalesCreditNotes
     from .missions import SalesMissionEngine
     from .discovery_jobs import DiscoveryJobQueue
     from .dittofeed_effects import DittofeedPomeloEffects
@@ -42,6 +43,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     CalendarBookings(store, initialize=True)
     SalesContracts(store, initialize=True)
     SalesInvoices(store, initialize=True)
+    SalesCreditNotes(store, initialize=True)
     SalesMissionEngine(store)
     DiscoveryJobQueue(store)
     DittofeedPomeloEffects(store)
