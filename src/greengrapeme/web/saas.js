@@ -472,7 +472,7 @@ async function main() {
             Number.isSafeInteger(max_searches) && max_searches >= 1 && max_searches <= 10)) {
         throw new Error("Discovery-Grenzen sind ungültig.");
       }
-      const search_terms = value("disc-terms").split(/\\r?\\n/)
+      const search_terms = value("disc-terms").split(/\r?\n/)
         .map((term) => term.trim()).filter(Boolean);
       if (search_terms.length > 8 || search_terms.some((term) => term.length > 100)) {
         throw new Error("Maximal acht Suchbegriffe mit jeweils höchstens 100 Zeichen.");
