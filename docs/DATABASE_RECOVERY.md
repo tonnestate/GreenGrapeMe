@@ -20,10 +20,21 @@ python -m greengrapeme.cli db-restore --backup /backups/gg-20261104-0645.sqlite 
 python -m greengrapeme.cli --db /srv/gg/sales-restored.sqlite db-verify
 ```
 
-`db-verify` checks the SQLite structural integrity, foreign-key integrity
-and required GreenGrapeMe base tables without making any application
-state changes. It does not validate third-party permissions or guarantee
-business data correctness.
+`db-verify` checks the SQLite structural integrity, foreign-key integrity,
+all mandatory GreenGrapeMe base columns/primary keys, and the schema of every
+**initialized** commercial, CRM, Discovery, mission or effect table. It also
+checks uniqueness fences for independently confirmed financial receipts and
+irreversible provider/effect identities. The JSON result reports
+`schema_integrity`, `schema_tables_verified`, and
+`uninitialized_optional_tables`: optional feature tables are created lazily
+and their absence is **not** treated as proof of feature readiness. A file
+whose ordinary SQLite `integrity_check` passes but whose account columns,
+composite keys or receipt/send fences are missing now fails validation and
+cannot be published by `db-backup` or `db-restore`.
+
+This is **structural** inspection, not online schema migration, complete
+business-data reconciliation, third-party permission validation or an
+application production-readiness certificate.
 
 `db-backup` uses SQLite's online backup API, rather than copying a live
 database file. It captures a consistent set of **committed** transactions,

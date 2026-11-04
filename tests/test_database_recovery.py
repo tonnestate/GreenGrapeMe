@@ -138,6 +138,86 @@ class DatabaseRecoveryTests(unittest.TestCase):
                 self.assertEqual(list(self.folder.glob(
                     ".should-not-exist.sqlite.*.sqlite-tmp")), [])
 
+    def test_schema_preflight_rejects_valid_sqlite_with_missing_business_columns(self):
+        corrupt = self.folder / "wrong-layout.sqlite"
+        backup_database(self.primary, corrupt)
+        with sqlite3.connect(corrupt) as db:
+            db.execute("DROP TABLE opportunities")
+            db.execute("""CREATE TABLE opportunities (
+                tenant TEXT NOT NULL, opportunity_id TEXT NOT NULL,
+                PRIMARY KEY (tenant,opportunity_id))""")
+            self.assertEqual(db.execute(
+                "PRAGMA integrity_check").fetchone()[0], "ok")
+        with self.assertRaisesRegex(ValueError, "missing required columns: opportunities"):
+            verify_database(corrupt)
+        with self.assertRaisesRegex(ValueError, "missing required columns"):
+            backup_database(corrupt, self.folder / "invalid-backup.sqlite")
+        with self.assertRaisesRegex(ValueError, "missing required columns"):
+            restore_database(corrupt, self.folder / "invalid-restored.sqlite")
+        self.assertFalse((self.folder / "invalid-backup.sqlite").exists())
+        self.assertFalse((self.folder / "invalid-restored.sqlite").exists())
+
+    def test_schema_preflight_rejects_missing_account_primary_key(self):
+        corrupt = self.folder / "missing-pk.sqlite"
+        backup_database(self.primary, corrupt)
+        with sqlite3.connect(corrupt) as db:
+            db.execute("ALTER TABLE opportunities RENAME TO source_opportunities")
+            db.execute("CREATE TABLE opportunities AS SELECT * FROM source_opportunities")
+            db.execute("DROP TABLE source_opportunities")
+            self.assertEqual(db.execute(
+                "PRAGMA integrity_check").fetchone()[0], "ok")
+        with self.assertRaisesRegex(ValueError, "missing primary key: opportunities"):
+            verify_database(corrupt)
+        with self.assertRaisesRegex(ValueError, "missing primary key"):
+            restore_database(corrupt, self.folder / "not-restored.sqlite")
+        self.assertFalse((self.folder / "not-restored.sqlite").exists())
+
+    def test_schema_preflight_requires_unique_financial_receipt_identity(self):
+        corrupt = self.folder / "no-receipt-uniqueness.sqlite"
+        backup_database(self.primary, corrupt)
+        with sqlite3.connect(corrupt) as db:
+            db.execute("DROP INDEX u_pilot_provider_receipt")
+            self.assertEqual(db.execute(
+                "PRAGMA integrity_check").fetchone()[0], "ok")
+        with self.assertRaisesRegex(ValueError, "unique identity fence: sales_pilot_events"):
+            verify_database(corrupt)
+        with self.assertRaisesRegex(ValueError, "unique identity fence"):
+            backup_database(corrupt, self.folder / "not-saved.sqlite")
+        self.assertFalse((self.folder / "not-saved.sqlite").exists())
+
+    def test_schema_preflight_requires_provider_send_effect_uniqueness(self):
+        corrupt = self.folder / "missing-send-fence.sqlite"
+        backup_database(self.primary, corrupt)
+        with sqlite3.connect(corrupt) as db:
+            db.execute("ALTER TABLE dittofeed_provider_attempts RENAME TO old_attempts")
+            db.execute("""CREATE TABLE dittofeed_provider_attempts (
+                tenant TEXT NOT NULL, pilot_id TEXT NOT NULL,
+                event_id TEXT NOT NULL, effect_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL, started_at TEXT NOT NULL,
+                PRIMARY KEY(tenant,pilot_id,event_id))""")
+            db.execute("""INSERT INTO dittofeed_provider_attempts
+                SELECT * FROM old_attempts""")
+            db.execute("DROP TABLE old_attempts")
+            self.assertEqual(db.execute(
+                "PRAGMA integrity_check").fetchone()[0], "ok")
+        with self.assertRaisesRegex(ValueError, "unique identity fence: dittofeed_provider_attempts"):
+            verify_database(corrupt)
+        with self.assertRaisesRegex(ValueError, "unique identity fence"):
+            restore_database(corrupt, self.folder / "unsafe-resume.sqlite")
+        self.assertFalse((self.folder / "unsafe-resume.sqlite").exists())
+
+    def test_verified_schema_reports_checked_capabilities_without_claiming_readiness(self):
+        result = verify_database(self.primary)
+        self.assertEqual(result["schema_integrity"], "ok")
+        self.assertIn("opportunities", result["schema_tables_verified"])
+        self.assertIn("sales_pilot_events", result["schema_tables_verified"])
+        self.assertIn("dittofeed_provider_attempts",
+                      result["schema_tables_verified"])
+        self.assertIn("sales_pilot_cases",
+                      result["uninitialized_optional_tables"])
+        self.assertNotIn("production_ready", result)
+
     def test_missing_source_is_not_created_and_symlink_denied(self):
         missing = self.folder / "missing.sqlite"
         with self.assertRaises(FileNotFoundError):
