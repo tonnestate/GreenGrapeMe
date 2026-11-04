@@ -15,6 +15,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import _id, _instant
 from .pilot_sales_flow import _reference
 from .sales_contracts import SalesContracts
+from .provider_receipts import assert_unclaimed_receipt
 
 
 class IndependentTerminationSource(Protocol):
@@ -196,12 +197,7 @@ class SalesTerminations:
             """,(tenant,pilot_id,case_id,contract_id)).fetchone()
             if existing:
                 raise ValueError("concurrent cancellation requires canonical reconciliation")
-            if db.execute("""
-                SELECT 1 FROM sales_pilot_contracts
-                WHERE tenant=? AND signature_provider='CONTRACT'
-                  AND signature_receipt_id=?
-            """,(tenant,receipt_id)).fetchone():
-                raise ValueError("cancellation receipt already belongs to a signature")
+            assert_unclaimed_receipt(db,tenant,"CONTRACT",receipt_id)
             stamp=self.store._now()
             try:
                 db.execute("""

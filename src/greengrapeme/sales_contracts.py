@@ -17,6 +17,7 @@ from typing import Protocol
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger, _id, _instant
 from .pilot_sales_flow import _reference
+from .provider_receipts import assert_unclaimed_receipt
 
 
 class IndependentOfferApproval(Protocol):
@@ -332,6 +333,7 @@ class SalesContracts:
             """, (tenant,pilot_id,case_id)).fetchone()
             if case is None or case["state"] != "PROPOSAL_DELIVERED_REPORTED":
                 raise PermissionError("CRM case changed before verified signing")
+            assert_unclaimed_receipt(db,tenant,"CONTRACT",receipt_id)
             # Ledger/case/contract all commit or roll back together. A local
             # operator cannot mark this event SOURCE_CONFIRMED through the UI.
             stamp = self.store._now()

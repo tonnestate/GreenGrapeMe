@@ -17,6 +17,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger, _id, _instant
 from .pilot_sales_flow import _reference
 from .sales_contracts import SalesContracts
+from .provider_receipts import assert_unclaimed_receipt
 
 
 _MONTH = re.compile(r"^20[0-9]{2}-(0[1-9]|1[0-2])$")
@@ -243,6 +244,7 @@ class SalesInvoices:
             self._current_contract(db,invoice)
             from .sales_terminations import SalesTerminations
             SalesTerminations._billing_allowed(db, invoice)
+            assert_unclaimed_receipt(db,tenant,"ACCOUNTING",receipt_id)
             try:
                 db.execute("""
                     UPDATE sales_customer_invoices
@@ -352,6 +354,7 @@ class SalesInvoices:
                 raise ValueError("payment would exceed credited invoice balance")
             if direction=="REFUND" and amount_cents>net:
                 raise ValueError("refund would exceed independently paid balance")
+            assert_unclaimed_receipt(db,tenant,provider,receipt_id)
             # This is a financial observation, not new contact permission.
             stamp=self.store._now()
             try:

@@ -89,6 +89,14 @@ class IssuedCredit:
         return result
 
 
+class AccountingCash(SettledCash):
+    """Bank-observed cash is independently receipted by accounting provider."""
+    def verify(self, binding):
+        result=super().verify(binding)
+        result["provider_kind"]="ACCOUNTING"
+        return result
+
+
 class TerminationSource:
     """Intercepting trusted-host contract lookup; no external cancellation."""
     def __init__(self, receipt="termination-receipt-001", mutation=None):
@@ -321,7 +329,7 @@ class SalesInvoiceTests(unittest.TestCase):
         self.credit_prepare("credit-0002",amount=1000,
                             credit_note_ref="urn:credit:invoice:other-0002")
         # A prepared credit's receipt cannot reuse the invoice receipt.
-        with self.assertRaisesRegex(ValueError,"already belongs to an invoice"):
+        with self.assertRaisesRegex(ValueError,"already claimed as issued invoice"):
             self.credits.confirm_issued(
                 *self.invoice_key,"credit-0002",
                 source=IssuedCredit("accounting-invoice-0001"))
@@ -506,6 +514,52 @@ class SalesInvoiceTests(unittest.TestCase):
         self.assertIsNone(self.terminations.get(
             "tenant-01","pilot-0001","case-0001","contract-0001"))
 
+    def test_accounting_invoice_cannot_claim_prior_credit_receipt(self):
+        self.prepare();self.confirm()
+        self.credit_prepare(amount=10000)
+        self.credit_confirm(source=IssuedCredit("accounting-credit-011"))
+        second=("tenant-01","pilot-0001","case-0001","invoice-after-credit-011")
+        self.invoices.prepare(
+            *second,**{**self.prepared_args,"period_key":"2026-12",
+                       "invoice_ref":"urn:invoice:after-credit-011"})
+        with self.assertRaisesRegex(ValueError,"already claimed as issued credit"):
+            self.invoices.confirm_issued(
+                *second,source=IssuedInvoice("accounting-credit-011"))
+        self.assertEqual(self.invoices.get(*second)["state"],"PREPARED")
+        self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
+            "client_net_payment_confirmed_cents"],0)
+
+    def test_accounting_cash_cannot_use_invoice_or_credit_receipt(self):
+        self.prepare();self.confirm()
+        self.credit_prepare(amount=10000)
+        self.credit_confirm(source=IssuedCredit("accounting-credit-012"))
+        with self.assertRaisesRegex(ValueError,"already claimed as issued invoice"):
+            self.cash("movement-4101","PAYMENT",1000,"accounting-invoice-0001",
+                      AccountingCash("accounting-invoice-0001"))
+        with self.assertRaisesRegex(ValueError,"already claimed as issued credit"):
+            self.cash("movement-4102","PAYMENT",1000,"accounting-credit-012",
+                      AccountingCash("accounting-credit-012"))
+        self.assertEqual(self.invoices.summary(*self.invoice_key)[
+            "net_settled_cents"],0)
+        self.cash("movement-4103","PAYMENT",1000,"accounting-cash-012",
+                  AccountingCash("accounting-cash-012"))
+        second=("tenant-01","pilot-0001","case-0001","invoice-after-cash-012")
+        self.invoices.prepare(
+            *second,**{**self.prepared_args,"period_key":"2026-12",
+                       "invoice_ref":"urn:invoice:after-cash-012"})
+        with self.assertRaisesRegex(ValueError,"already claimed as settled"):
+            self.invoices.confirm_issued(
+                *second,source=IssuedInvoice("accounting-cash-012"))
+        self.credit_prepare("credit-second-012",amount=1000,
+                            credit_note_ref="urn:credit:second:012")
+        with self.assertRaisesRegex(ValueError,"already claimed as settled"):
+            self.credit_confirm(
+                "credit-second-012",source=IssuedCredit("accounting-cash-012"))
+        self.assertEqual(self.invoices.summary(*self.invoice_key)[
+            "net_settled_cents"],1000)
+        self.assertEqual(self.credits.get(
+            *self.invoice_key,"credit-second-012")["state"],"PREPARED")
+
     def test_end_to_end_partial_settlement_refund_and_repayment(self):
         draft=self.prepare()
         self.assertEqual(draft["amount_cents"],89000)
@@ -631,7 +685,7 @@ class SalesInvoiceTests(unittest.TestCase):
                        "invoice_ref":"urn:accounting:invoice-0002"})
         self.invoices.confirm_issued(
             *second,source=IssuedInvoice("accounting-invoice-0002"))
-        with self.assertRaisesRegex(ValueError,"already allocated"):
+        with self.assertRaisesRegex(ValueError,"already claimed as settled"):
             self.invoices.settlement(
                 *second,"movement-0012",direction="PAYMENT",
                 amount_cents=1000,evidence_ref="urn:bank:duplicate-0012",
