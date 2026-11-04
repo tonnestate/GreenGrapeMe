@@ -7,8 +7,8 @@ HTTPS reverse proxy / WSGI server with externally managed OIDC login.
 """
 from __future__ import annotations
 
-from importlib import resources
 from os import environ
+import hashlib
 import json
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
@@ -24,6 +24,12 @@ from .tenant_access import TenantMemberships
 
 
 _MAX_JSON = 8192
+
+
+def _reporter_ref(principal) -> str:
+    """A stable safe operator ID, without exposing OIDC subject syntax/PII."""
+    raw = (principal.issuer + "\\0" + principal.subject).encode("utf-8")
+    return "oidc-" + hashlib.sha256(raw).hexdigest()[:40]
 
 
 def _reply(start_response: Callable, status: str, data: object) -> list[bytes]:
@@ -193,7 +199,7 @@ def create_saas_app(
                     company_name=values["company_name"],
                     channel=values["channel"],
                     evidence_ref=values["evidence_ref"],
-                    reporter_ref=principal.subject)
+                    reporter_ref=_reporter_ref(principal))
             elif path == "/api/pilot-step":
                 values = _request_json(environ, frozenset({
                     "pilot_id", "case_id", "step_id", "expected_state",
@@ -206,7 +212,7 @@ def create_saas_app(
                     to_state=values["to_state"],
                     evidence_ref=values["evidence_ref"],
                     followup_at=values["followup_at"],
-                    reporter_ref=principal.subject)
+                    reporter_ref=_reporter_ref(principal))
             elif path == "/api/pilot-record":
                 values = _request_json(environ, frozenset({
                     "pilot_id", "event_id", "kind", "opportunity_id",
@@ -219,7 +225,7 @@ def create_saas_app(
                     amount_cents=values["amount_cents"],
                     evidence_ref=values["evidence_ref"],
                     occurred_at=values["occurred_at"],
-                    reporter_ref=principal.subject)
+                    reporter_ref=_reporter_ref(principal))
             elif path == "/api/pilot-reply-prepare":
                 values = _request_json(environ, frozenset({
                     "pilot_id", "case_id", "reply_id", "recipient_ref",
