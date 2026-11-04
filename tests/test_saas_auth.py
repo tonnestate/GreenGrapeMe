@@ -310,6 +310,60 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(code.startswith("200"), listing)
         self.assertEqual(listing["total"], 1)
 
+    def test_calendar_intent_is_operator_only_and_never_confirms_booking(self):
+        from greengrapeme.pilot_metrics import PilotLedger
+        from greengrapeme.pilot_sales_flow import PilotSalesFlow
+
+        PilotLedger(self.store).create(
+            "tenant-a","pilot-0011","offer","Booked meeting pipeline",
+            monthly_fee_cents=10000)
+        self.members.grant("tenant-a",self.alice,"operator")
+        flow=PilotSalesFlow(self.store)
+        flow.open_inbound(
+            "tenant-a","pilot-0011","case-0011",
+            company_name="Alpha GmbH",channel="CRM_INBOUND",
+            evidence_ref="urn:crm:inbound:real-0011",
+            reporter_ref="operator-0011")
+        flow.step(
+            "tenant-a","pilot-0011","case-0011",
+            step_id="stage-0011",expected_state="INBOUND_REVIEW",
+            to_state="QUALIFIED_REPORTED",
+            evidence_ref="urn:crm:qualified:case-0011",
+            reporter_ref="operator-0011")
+        start=(datetime.now(timezone.utc)+timedelta(days=3)).isoformat()
+        end=(datetime.fromisoformat(start)+timedelta(minutes=30)).isoformat()
+        body={
+            "pilot_id":"pilot-0011","case_id":"case-0011",
+            "booking_id":"booking-0011",
+            "calendar_ref":"urn:calendar:workspace:0011",
+            "slot_start_at":start,"slot_end_at":end,
+        }
+        self.members.grant("tenant-a",self.alice,"viewer")
+        code,_,_=self.request(path="/api/pilot-appointment-prepare",
+                              method="POST",payload=body)
+        self.assertTrue(code.startswith("403"))
+        self.members.grant("tenant-a",self.alice,"operator")
+        code,result,_=self.request(
+            path="/api/pilot-appointment-prepare",
+            method="POST",payload=body,origin=ORIGIN)
+        self.assertTrue(code.startswith("202"),(code,result))
+        self.assertEqual(result["state"],"REQUESTED")
+        self.assertIsNone(result["provider_event_id"])
+        code,listing,_=self.request(
+            path="/api/pilot-appointments",params={"pilot":"pilot-0011"})
+        self.assertTrue(code.startswith("200"),(code,listing))
+        self.assertEqual(listing["total"],1)
+        self.assertEqual(listing["items"][0]["state"],"REQUESTED")
+        code,_,_=self.request(
+            path="/api/pilot-appointments",
+            tenant="tenant-b",params={"pilot":"pilot-0011"})
+        self.assertTrue(code.startswith("403"))
+        # Confirmation is host-only. Never expose arbitrary provider receipts.
+        code,_,_=self.request(
+            path="/api/pilot-appointment-reconcile",
+            method="POST",payload=body)
+        self.assertTrue(code.startswith("404"))
+
     def test_post_malformed_payload_and_origin_fail_closed(self):
         self.members.grant("tenant-a", self.alice, "operator")
         for bad in ([], None, {"pilot_id":"x"}, {"unexpected":1}):
