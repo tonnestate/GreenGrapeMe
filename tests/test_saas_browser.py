@@ -150,6 +150,20 @@ class BrowserTests(unittest.TestCase):
         self.assertIn(".format(cents / 100)", formatting)
         self.assertNotIn("Number(cents)", formatting)
 
+    def test_oidc_callback_rejects_duplicate_conflicting_parameters(self):
+        js = self.get("/saas.js")["body"].decode()
+        callback = js[js.index("async function receiveAuthorizationCode() {"):
+                      js.index("function td(", js.index("async function receiveAuthorizationCode() {"))]
+        self.assertIn('target.searchParams.getAll(name).length', callback)
+        self.assertIn('["code", "state", "error"]', callback)
+        self.assertIn('counts.some((count) => count > 1)', callback)
+        self.assertIn('(code && failure)', callback)
+        self.assertIn('!returnedState', callback)
+        self.assertLess(callback.index("window.history.replaceState"),
+                        callback.index("sessionStorage.getItem(LOGIN_TRANSACTION)"))
+        self.assertLess(callback.index("sessionStorage.removeItem(LOGIN_TRANSACTION)"),
+                        callback.index("counts.some((count) => count > 1)"))
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),
