@@ -368,3 +368,34 @@ rankings projection.
 Neither scored intent nor an inbound reply is proof of current outreach
 authorization. The production consent source and independent contact
 suppression provider remain mandatory release gates.
+
+## Inbound reply ID replay: cannot discard a later safety request (2026-11-04)
+
+A separate **functional** customer-contact bug was found in
+`SalesWorkspace.ingest_reply`. For an existing `message_id` associated
+with the same account, it always returned the old `inbox.result`
+without considering the newly observed response category. If a previous
+copy had been classified as `NEEDS_CLASSIFICATION`, `SECURITY_REVIEW`
+or `AUTOMATED` and a later copy with the same provider ID contained a
+clear “stop contacting me” or personal-data erasure request, the old
+classification remained and no contact suppression was created.
+
+The handler now makes duplicate-ID processing *monotone in contact
+safety*: `BOUNCE` (1), `OPT_OUT` (2), `PRIVACY_REVIEW` (3). When a
+higher-priority safety category is encountered for the same tenant,
+account and provider message ID, the original inbox classification is
+updated, suppression is inserted if not already present, queued/review
+sales work is blocked, and an audit event
+`REPLAYED_REPLY_SAFETY_ESCALATED` records the prior and new categories.
+The entire change happens in one SQLite write transaction. Normal
+replays can never remove or downgrade a safety instruction; replays
+crossing accounts still fail with an idempotency error. Body text is
+not stored, and no outbound message is sent.
+
+Tests cover ordinary reply -> opt-out, opt-out -> privacy request,
+bounce -> opt-out, benign later replays, cross-account ID reuse and
+idempotence of repeated safety replays. This safety-prioritized
+reclassification is intentionally conservative: if a transport corrupts
+an existing message's text, the system prefers a possible unnecessary
+suppression over further unrequested contact. The host must still
+authenticate the inbound provider to prevent forged unsubscribe events.
