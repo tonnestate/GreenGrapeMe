@@ -6,7 +6,8 @@
 const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
-                companyQueryRevision: 0, crmQueryRevision: 0 };
+                companyQueryRevision: 0, crmQueryRevision: 0,
+                companyDetailRevision: 0 };
 const LOGIN_TRANSACTION = "gg-oidc-pkce-transaction";
 const PAGE_SIZE = 40;
 
@@ -223,6 +224,10 @@ async function overview() {
 async function companies() {
   const generation = state.generation;
   const revision = ++state.companyQueryRevision;
+  // Detail view must represent the currently visible company result set.
+  state.companyDetailRevision += 1;
+  $("company-details").replaceChildren();
+  $("company-details").hidden = true;
   const query = value("company-query");
   const params = new URLSearchParams({
     q: query, limit: String(PAGE_SIZE),
@@ -245,10 +250,13 @@ async function companies() {
     button.type = "button";
     button.textContent = "Öffnen";
     button.addEventListener("click", async () => {
+      const detailRevision = ++state.companyDetailRevision;
       try {
         assertGeneration(generation);
         const detail = await api("/api/company?id=" + encodeURIComponent(item.opportunity_id));
         assertGeneration(generation);
+        if (detailRevision !== state.companyDetailRevision ||
+            revision !== state.companyQueryRevision) return;
         const target = $("company-details");
         target.replaceChildren();
         const heading = document.createElement("h3");
@@ -395,6 +403,7 @@ function clearTenantWorkspace() {
   state.companyOffset = 0;
   state.companyTotal = 0;
   state.companyQueryRevision += 1;
+  state.companyDetailRevision += 1;
   for (const id of ["metric-companies", "metric-work",
                     "metric-missions", "metric-pilots"]) $(id).textContent = "–";
   for (const id of ["companies-list", "discovery-list", "pilots-list"]) {
@@ -408,6 +417,15 @@ function clearTenantWorkspace() {
   $("company-details").hidden = true;
   clearCrmWorklist();
   for (const form of document.querySelectorAll("#workspace form")) form.reset();
+  // A reset() does not fire "change". Restore the dependent Discovery fields.
+  const creating = value("disc-mode") === "new";
+  $("disc-existing-fields").hidden = creating;
+  $("disc-new-fields").hidden = !creating;
+  $("disc-job").required = !creating;
+  $("disc-nace").required = creating;
+  for (const id of ["disc-south", "disc-west", "disc-north", "disc-east"]) {
+    $(id).required = creating;
+  }
   $("app-feedback").textContent = "";
   $("workspace-info").textContent = "";
 }
@@ -491,6 +509,7 @@ function integers(id) {
 }
 function logout() {
   state.generation += 1;
+  sessionStorage.removeItem(LOGIN_TRANSACTION);
   state.token = null;
   state.expiresAt = 0;
   state.tenant = "";
