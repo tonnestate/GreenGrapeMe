@@ -207,7 +207,19 @@ def main(argv: list[str] | None = None) -> int:
                 len(a.job_id) != 24 or
                 any(ch not in "0123456789abcdef" for ch in a.job_id)):
             p.error("existing StarFruitMe job is not authorized by this host")
-    store = SalesWorkspace(a.db)
+    # The CLI must not create an empty database BEFORE calling the
+    # already strict WSGI serve() path. This was a separate accidental
+    # creation route even after the web server's runtime gate was fixed.
+    if a.command == "serve":
+        serve(db=a.db, tenant=a.tenant, port=a.port, token_env=a.token_env)
+        return 0
+    # Discovery worker can execute donor and model actions. A wrong DB path
+    # must fail without making a new empty queue or split effect ledger.
+    if a.command == "discover-worker":
+        store = SalesWorkspace(a.db, bootstrap=False,
+                               require_operational=True)
+    else:
+        store = SalesWorkspace(a.db)
     if a.command == "discover-worker":
         if not 1 <= a.interval <= 300:
             p.error("interval must be 1..300 seconds")
@@ -243,9 +255,6 @@ def main(argv: list[str] | None = None) -> int:
             if a.once:
                 return 0
             time.sleep(a.interval)
-    elif a.command == "serve":
-        serve(db=a.db, tenant=a.tenant, port=a.port, token_env=a.token_env)
-        return 0
     elif a.command in {"import", "autopilot"}:
         rows = starfruit_records(a.path, a.offer_id) if a.source == "starfruitme" else kigor_records(a.path, a.offer_id)
         result = store.ingest(a.tenant, rows)
