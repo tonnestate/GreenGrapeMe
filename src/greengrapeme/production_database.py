@@ -14,7 +14,7 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _initialize_operational_schema(staging: Path) -> None:
@@ -58,7 +58,7 @@ def _initialize_operational_schema(staging: Path) -> None:
             raise ValueError("unsupported existing schema migration version")
         # Preserve v1 provenance when upgrading legacy version-0 data.
         # An existing v1 database already has its genuine v1 timestamp.
-        for version in (1, 2):
+        for version in range(1, SCHEMA_VERSION + 1):
             db.execute(
                 "INSERT OR IGNORE INTO greengrapeme_schema_migrations "
                 "(version, applied_at) VALUES (?,?)",

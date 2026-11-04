@@ -1,4 +1,4 @@
-# Calendar booking evidence (GreenGrapeMe, schema v2)
+# Calendar booking evidence and one-shot dispatch (GreenGrapeMe, schema v3)
 
 This feature implements durable appointment intent, **independent provider
 verification** and cancellation reconciliation in the existing pilot CRM.
@@ -38,9 +38,12 @@ provider lookup. Ledger state survives restart.
 ## Database and production upgrade
 
 Schema v2 adds `sales_pilot_appointments` with a compound tenant/case/booking
-primary key and unique, nullable provider event/receipt fences. It does not
-alter or discard v1 CRM, accounting or irreversible effect data. A running
-v1 database cannot initialize the new schema implicitly.
+primary key and unique provider event/receipt fences. Schema v3 additionally
+introduces `sales_calendar_dispatch_attempts`: an immutable one-shot
+invitation attempt fence that prevents duplicate Google event creation after
+timeouts or process restarts. The new schema does not discard v1/v2 CRM,
+accounting, booking or irreversible effect data. Existing databases are only
+upgraded through explicit copy-forward migration; live DDL is not allowed.
 
 Use the existing explicit **copy-forward** operator migration:
 `python -m greengrapeme.cli --db OLD.sqlite db-migrate --output NEW.sqlite`.
@@ -96,14 +99,70 @@ confirmed cancellation. Incomplete Google cancellation tombstones remain
 unverified. Unit/integration tests exercise the actual adapter plus the
 operational SQLite ledger with intercepted network calls.
 
+## Google Calendar event creation with one irreversible attempt (host-side)
+
+The host can now create a calendar event and send its attendee invitation via
+`greengrapeme.calendar_dispatch.GoogleCalendarBookingDispatcher` after
+preparing a qualified CRM appointment. This concrete Google Calendar
+`events.insert` implementation is not a browser endpoint.
+
+The trusted host provides the tenant binding, explicitly approved calendar
+ID, organizer and customer attendee addresses, OAuth token with
+`calendar.events` write scope, and an injected independent
+`FinalCalendarPermission.allow(request)` policy. The policy must authorize
+the exact recipient, calendar, meeting, jurisdiction, contact purpose and
+outbound invitation at dispatch time. User-supplied calendar references,
+discovery records and email addresses alone are never contact permission.
+
+```python
+dispatcher = GoogleCalendarBookingDispatcher(
+    workspace, tenant=tenant_id,
+    calendar_ref=host_approved_calendar_ref,
+    calendar_id=host_verified_google_calendar_id,
+    organizer_email=host_verified_organizer,
+    attendee_email=host_verified_customer_attendee,
+    access_token=host_secret_google_oauth_access_token,
+    final_permission=host_contact_and_invitation_policy,
+)
+dispatch = dispatcher.book(
+    tenant_id, pilot_id, case_id, booking_id,
+    permission_ref=host_approved_permission_evidence_ref,
+)
+# A successful POST is NOT a confirmed booking. Independently GET it:
+verified = dispatcher.reconcile(tenant_id, pilot_id, case_id, booking_id)
+```
+
+The host binds immutable prepared appointment data to a deterministic Google
+event ID composed only of allowed Google ID characters. After independent
+permission evaluation, the system rechecks the stored tenant, CRM source,
+offer, case state, suppression, slot and booking intent under one SQLite
+`BEGIN IMMEDIATE` transaction. It commits an attempt row **before**
+crossing the network boundary. Only then may it invoke the pinned Google
+Calendar `events.insert?sendUpdates=all` endpoint, inviting the attendee.
+
+A missing/timeout/ambiguous response is **DISPATCH_UNCERTAIN**. HTTP 201
+means **HTTP_ACCEPTED_UNVERIFIED**, not a booked appointment or a delivered
+invitation. Neither state ever authorizes an automatic second POST. After
+restart, `reconcile` performs read-only `events.get` with the precommitted
+event ID and the independent evidence source, then changes both the CRM
+booking and dispatch states in one SQLite transaction on an exact match.
+The local release audit reports unresolved dispatch attempts, which do not
+count as completed bookings. Booking creation never marks a meeting attended
+or asserts that the guest opened/accepted the notification.
+
+This module has no live Google credentials, automatic OAuth onboarding,
+calendar availability negotiation, or general-purpose user-initiated
+consent bypass. Its tests intercept HTTP and exercise the real SQLite
+ledger; no invitations are sent during CI.
+
 ## Remaining G3 production blocker
 
-The adapter provides an actual Google Calendar **read-only verification
-implementation**, but there is no bundled consent-controlled live event
-creation/invitation adapter, host OAuth account onboarding or refresh system,
-appointment dispatch/recovery integration, or real provider acceptance run.
-Provider credentials and host authorization must be supplied by the
-integrating service. CalDAV and Graph adapters are also not yet bundled.
-These are development/integration requirements; a passing intercepted HTTP
-test does not prove a live customer invitation or acceptance.
-`release-audit` remains NO-GO.
+Both concrete Google Calendar **write** and **read** adapters now exist,
+with a durable single-attempt fence and independent recovery. Remaining
+development/integration work includes connecting the host's real OAuth
+onboarding and refresh, customer authorization policy and booking approval,
+calendar availability/slot selection, a controlled cancellation dispatcher,
+calendar-invitation acknowledgement and retryable provider read recovery in
+the deployed FruitStack runtime. CalDAV and Microsoft Graph provider
+adapters are not bundled. CI uses intercepted HTTP and must not be described
+as live customer/provider acceptance. `release-audit` remains NO-GO.

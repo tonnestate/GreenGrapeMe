@@ -86,6 +86,23 @@ class CalendarBookings:
                     ON sales_pilot_appointments
                     (tenant,provider_kind,provider_receipt_id)
                     WHERE provider_receipt_id IS NOT NULL;
+                    CREATE TABLE IF NOT EXISTS sales_calendar_dispatch_attempts (
+                        tenant TEXT NOT NULL, pilot_id TEXT NOT NULL,
+                        case_id TEXT NOT NULL, booking_id TEXT NOT NULL,
+                        provider_event_id TEXT NOT NULL,
+                        event_id TEXT NOT NULL, intent_sha256 TEXT NOT NULL,
+                        permission_ref TEXT NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN (
+                            'DISPATCH_UNCERTAIN','HTTP_ACCEPTED_UNVERIFIED',
+                            'BOOKED_CONFIRMED','CANCELLED_CONFIRMED')),
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                        PRIMARY KEY(tenant,pilot_id,case_id,booking_id),
+                        FOREIGN KEY(tenant,pilot_id,case_id,booking_id)
+                          REFERENCES sales_pilot_appointments
+                          (tenant,pilot_id,case_id,booking_id)
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS u_calendar_dispatch_event
+                    ON sales_calendar_dispatch_attempts(tenant,provider_event_id);
                 """)
             elif db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -268,6 +285,13 @@ class CalendarBookings:
                     "opportunity_id","case_source_sha256","calendar_ref",
                     "slot_start_at","slot_end_at","reporter_ref")):
                 raise ValueError("booking intent changed during calendar verification")
+            dispatched = db.execute("""
+                SELECT provider_event_id FROM sales_calendar_dispatch_attempts
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+            """, (tenant,pilot_id,case_id,booking_id)).fetchone()
+            if dispatched and (provider != "GOOGLE_CALENDAR"
+                               or dispatched["provider_event_id"] != event_id):
+                raise ValueError("provider event differs from committed dispatch")
             if old["provider_kind"] is not None and (
                 old["provider_kind"] != provider or
                 old["provider_event_id"] != event_id):
@@ -293,6 +317,12 @@ class CalendarBookings:
                       tenant,pilot_id,case_id,booking_id))
             except sqlite3.IntegrityError as exc:
                 raise ValueError("provider event or receipt already claimed") from exc
+            if dispatched:
+                db.execute("""
+                    UPDATE sales_calendar_dispatch_attempts
+                    SET state=?,updated_at=?
+                    WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+                """, (state,self.store._now(),tenant,pilot_id,case_id,booking_id))
             self.store._audit(
                 db,tenant,old["opportunity_id"],"APPOINTMENT_PROVIDER_VERIFIED",
                 {"pilot_id":pilot_id,"case_id":case_id,"booking_id":booking_id,

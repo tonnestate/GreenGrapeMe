@@ -113,6 +113,7 @@ class ProductionReleaseAuditTests(unittest.TestCase):
         self.assertEqual(report["local_operational_state"], "BLOCKED")
         self.assertEqual(report["orphaned_provider_attempt_count"], 1)
         self.assertEqual(report["uncertain_external_effect_counts"], {
+            "sales_calendar_dispatch_attempts": 0,
             "dittofeed_pomelo_effects": 1,
             "discovery_product_jobs": 1,
             "sales_mission_steps": 1,
