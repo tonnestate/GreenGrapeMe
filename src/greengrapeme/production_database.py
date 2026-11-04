@@ -14,6 +14,53 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
+SCHEMA_VERSION = 1
+
+
+def _initialize_operational_schema(staging: Path) -> None:
+    """Idempotent additive application of the v1 local business schemas.
+
+    Applied only to an explicitly provisioned NEW database or an offline
+    copy-forward migration candidate, never to a running tenant database.
+    """
+    from .operations import SalesWorkspace
+    from .pilot_metrics import PilotLedger
+    from .pilot_sales_flow import PilotSalesFlow
+    from .reply_effects import ReplyEffects
+    from .missions import SalesMissionEngine
+    from .discovery_jobs import DiscoveryJobQueue
+    from .dittofeed_effects import DittofeedPomeloEffects
+    from .tenant_access import TenantMemberships
+
+    store = SalesWorkspace(staging)
+    PilotLedger(store)
+    PilotSalesFlow(store)
+    ReplyEffects(store)
+    SalesMissionEngine(store)
+    DiscoveryJobQueue(store)
+    DittofeedPomeloEffects(store)
+    TenantMemberships(store, initialize=True)
+
+    with store._db() as db:
+        current = db.execute("PRAGMA user_version").fetchone()[0]
+        if current > SCHEMA_VERSION:
+            raise ValueError("database uses a newer unsupported schema")
+        db.execute("""CREATE TABLE IF NOT EXISTS greengrapeme_schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )""")
+        versions = [row[0] for row in db.execute(
+            "SELECT version FROM greengrapeme_schema_migrations")]
+        if any(version > SCHEMA_VERSION or version <= 0
+               for version in versions):
+            raise ValueError("unsupported existing schema migration version")
+        db.execute(
+            "INSERT OR IGNORE INTO greengrapeme_schema_migrations "
+            "(version, applied_at) VALUES (?,?)",
+            (SCHEMA_VERSION, store._now()))
+        db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+
 def bootstrap_operational_database(destination: str | Path) -> dict:
     if not isinstance(destination, (str, Path)) or not str(destination).strip():
         raise ValueError("invalid database destination")
@@ -30,26 +77,8 @@ def bootstrap_operational_database(destination: str | Path) -> dict:
     os.close(fd)
     staging = Path(name)
     try:
-        # Do not import any provider or execute an effect. This only creates
-        # the audited durable SQLite schema for each local product module.
-        from .operations import SalesWorkspace
-        from .pilot_metrics import PilotLedger
-        from .pilot_sales_flow import PilotSalesFlow
-        from .reply_effects import ReplyEffects
-        from .missions import SalesMissionEngine
-        from .discovery_jobs import DiscoveryJobQueue
-        from .dittofeed_effects import DittofeedPomeloEffects
-        from .tenant_access import TenantMemberships
-
-        store = SalesWorkspace(staging)
-        PilotLedger(store)
-        PilotSalesFlow(store)
-        ReplyEffects(store)
-        SalesMissionEngine(store)
-        DiscoveryJobQueue(store)
-        DittofeedPomeloEffects(store)
-        TenantMemberships(store, initialize=True)
-
+        # No external provider, model, or messaging effect is invoked.
+        _initialize_operational_schema(staging)
         details = verify_database(staging)
         missing = _REQUIRED_OPERATIONS_TABLES.difference(
             details["schema_tables_verified"])
