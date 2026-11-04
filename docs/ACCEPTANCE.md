@@ -221,3 +221,25 @@ must independently authenticate the provider and bind receipts to its
 real financial account, payer/invoice and tenant. Minimal legacy
 receipts do not prove recipient or contractual attribution. This
 change cannot by itself deliver production-ready accounting.
+
+## Production regression gate: pinned PomeloMe integration on every change (2026-11-04)
+
+The CI previously ran the *actual pinned PomeloMe* EffectGateway integration
+suite only when Dittofeed-related files changed. Ordinary changes to the
+underlying sales store, pilot ledger, deployment recovery, or other shared
+state could bypass the 12-suite real-PomeloMe contract checks.
+
+The existing `Dittofeed + real PomeloMe integration` GitHub Actions
+workflow now runs on **every pull request and every push to main**, without
+path filtering. It continues to install the pinned public PomeloMe donor
+revision `7593f70167fbefb7c0215d514fe0f55d35f02b1c`, exercises its
+actual EffectGateway with locally intercepted Dittofeed HTTP, and retains
+the existing independent regular-unit-test workflow. Local regression
+tests ensure neither workflow is silently restricted to narrow paths.
+
+**What this certifies:** the integrated, pinned in-process gateway contract
+continues passing after ordinary repository changes. **Not certified:**
+a running Dittofeed Community server, real email sending/delivery, valid
+host-specific identity/consent, provider credential rotation, live
+StarFruitMe/MangoMe/BlackberryMe/PlumMe, or customer-visible production
+behavior. Those still require real-host end-to-end acceptance before release.
