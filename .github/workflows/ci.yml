@@ -14,3 +14,5 @@ jobs:
       - run: PYTHONPATH=src python -m unittest discover -s tests -v
       - name: Validate production SaaS browser JavaScript syntax
         run: node --check src/greengrapeme/web/saas.js
+      - name: Exercise SaaS tenant isolation in JavaScript runtime
+        run: node tests/saas_tenant_isolation.test.js
