@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
@@ -10,6 +11,7 @@ from urllib.parse import urlencode
 from wsgiref.util import setup_testing_defaults
 
 from greengrapeme.discovery_catalog import DiscoveryCatalog
+from greengrapeme.intelligence import Signal
 from greengrapeme.missions import SalesMissionEngine
 from greengrapeme.operations import SalesWorkspace
 from greengrapeme.sales import Evidence, Opportunity
@@ -123,6 +125,82 @@ class DiscoveryProductTests(unittest.TestCase):
         self.assertNotIn(b"Traceback",body)
         code,body,_=get(self.app,"/api/no-such-route",token=TOKEN)
         self.assertTrue(code.startswith("404"))
+
+    def test_corrupt_blackberry_review_is_visible_as_invalid_not_http_500(self):
+        with self.store._db() as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS sales_blackberry_reviews
+                (tenant TEXT NOT NULL,opportunity_id TEXT NOT NULL,
+                 review_json TEXT NOT NULL)""")
+            db.execute("""INSERT INTO sales_blackberry_reviews
+                (tenant,opportunity_id,review_json) VALUES(?,?,?)""",
+                ("tenant-one", "account-1", "{}"))
+        for raw in ("{}", "{not-json", "[]", '{"donor_status":"VERIFIED","role_reviews":null}'):
+            with self.subTest(raw=raw):
+                with self.store._db() as db:
+                    db.execute("""UPDATE sales_blackberry_reviews
+                        SET review_json=? WHERE tenant=? AND opportunity_id=?""",
+                        (raw, "tenant-one", "account-1"))
+                info = self.catalog.company("tenant-one", "account-1")
+                self.assertEqual(info["blackberry_research"]["donor_status"],
+                                 "SOURCE_DATA_INVALID")
+                self.assertEqual(info["blackberry_research"]["role_reviews"], [])
+                self.assertEqual(info["blackberry_research"]["contact_authority"],"NONE")
+                code, body, _ = get(self.app, "/api/company", token=TOKEN,
+                                    params={"id":"account-1"})
+                self.assertTrue(code.startswith("200"), (code, body))
+                self.assertEqual(json.loads(body)["blackberry_research"][
+                    "donor_status"], "SOURCE_DATA_INVALID")
+
+    def test_corrupt_signals_cannot_inflate_lead_priority_or_crash_dossier(self):
+        self.store.record_signal("tenant-one", "account-1", Signal(
+            "public_procurement", "https://example.org/tender",
+            datetime.now(timezone.utc), 1.0, "Published tender"))
+        healthy = self.catalog.company("tenant-one", "account-1")
+        self.assertGreater(healthy["intent_score"], 0)
+        self.assertEqual(healthy["signal_integrity"], "VALID")
+        with self.store._db() as db:
+            db.execute("""UPDATE signals SET observed_at='not-iso'
+                WHERE tenant=? AND opportunity_id=?""",
+                ("tenant-one", "account-1"))
+        info = self.catalog.company("tenant-one", "account-1")
+        self.assertEqual(info["intent_score"], 0)
+        self.assertEqual(info["signal_breakdown"], {})
+        self.assertEqual(info["invalid_signal_count"], 1)
+        self.assertEqual(info["signal_integrity"], "SIGNAL_DATA_INVALID")
+        ranking = self.store.rankings("tenant-one")
+        self.assertEqual(len(ranking), 1)
+        self.assertEqual(ranking[0]["intent_score"], 0)
+        code, body, _ = get(self.app, "/api/company", token=TOKEN,
+                            params={"id":"account-1"})
+        self.assertTrue(code.startswith("200"), (code, body))
+        self.assertEqual(json.loads(body)["intent_score"], 0)
+
+    def test_imported_suppression_and_invalid_source_never_make_rankings(self):
+        upstream = Opportunity(
+            "upstream-blocked", "Source Blocked GmbH", "offer-1",
+            (Evidence("registry","https://example.org/blocked",
+                      "Reported source identity","COMPANY_IDENTITY"),),
+            suppressed=True)
+        self.store.ingest("tenant-one", [upstream])
+        ids = {x["opportunity_id"] for x in self.store.rankings("tenant-one")}
+        self.assertNotIn("upstream-blocked", ids)
+        listed = self.catalog.list_companies(
+            "tenant-one", query="Source Blocked")
+        self.assertTrue(listed["items"][0]["suppressed"])
+        self.assertEqual(listed["items"][0]["suppression_reason"],
+                         "UPSTREAM_SUPPRESSION")
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET source_json='{}'
+                WHERE tenant=? AND opportunity_id=?""",
+                ("tenant-one","account-1"))
+        self.assertEqual(self.store.rankings("tenant-one"), [])
+        info = self.catalog.company("tenant-one","account-1")
+        self.assertEqual(info["intent_score"], 0)
+        self.assertEqual(info["source_integrity"], "INVALID")
+        self.assertEqual(info["signal_integrity"], "SOURCE_DATA_INVALID")
+        self.assertTrue(info["suppressed"])
+        self.assertEqual(info["contact_authority"], "NONE")
+        self.assertEqual(len(self.store.rankings("tenant-two")), 1)
 
     def test_no_insecure_default_token_or_network_server(self):
         with self.assertRaises(ValueError):
