@@ -180,6 +180,21 @@ class SalesInvoiceTests(unittest.TestCase):
         self.assertIn("sales_customer_movements",verify_database(self.path)[
             "schema_tables_verified"])
 
+    def test_generic_pilot_ledger_cannot_fabricate_refund_without_invoice(self):
+        opportunity=self.contracts.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"
+        )["opportunity_id"]
+        with self.assertRaisesRegex(PermissionError,
+                                    "require verified invoice settlement"):
+            self.ledger.record(
+                "tenant-01","pilot-0001","refund-rogue-001",
+                "CUSTOMER_REFUND_PAID",opportunity_id=opportunity,
+                amount_cents=1000,evidence_ref="urn:bank:rogue-refund-0001",
+                reporter_ref="operator-001",
+            )
+        self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
+            "client_refund_confirmed_cents"],0)
+
     def test_cannot_count_cash_before_provider_issued_invoice(self):
         self.prepare()
         source=SettledCash("bank-payment-unissued-001")
