@@ -157,7 +157,7 @@ class DiscoveryCatalog:
             raise ValueError("invalid search query")
         if not isinstance(offer_id, str) or len(offer_id) > 160:
             raise ValueError("invalid offer filter")
-        if status and status not in _STATUSES:
+        if not isinstance(status, str) or (status and status not in _STATUSES):
             raise ValueError("invalid qualification status")
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
@@ -173,20 +173,44 @@ class DiscoveryCatalog:
         if offer_id.strip():
             filters.append("o.offer_id=?")
             params.append(offer_id.strip())
-        if status:
+        # Qualification shown to operators is a DERIVED business status.
+        # A malformed source is always shown as NEEDS_REVIEW regardless
+        # of the persisted status. Status filters and total counts must
+        # use that same displayed status, not a stale SQL-only value.
+        if status in ("QUALIFIED", "REJECTED"):
+            # Invalid rows cannot qualify for either of these categories,
+            # so this persisted-state restriction reduces scanned records.
             filters.append("o.status=?")
             params.append(status)
         where = " AND ".join(filters)
         with self.store._db() as db:
-            n = db.execute("SELECT count(*) FROM opportunities o WHERE " + where,
-                           params).fetchone()[0]
             sql = ("""SELECT o.opportunity_id,o.company_name,o.offer_id,o.status,o.reason,
                              o.updated_at,o.source_json,s.reason AS suppression_reason
                       FROM opportunities o LEFT JOIN suppressions s
                       ON s.tenant=o.tenant AND s.opportunity_id=o.opportunity_id
                       WHERE """ + where +
-                   " ORDER BY o.company_name COLLATE NOCASE,o.opportunity_id LIMIT ? OFFSET ?")
-            rows = db.execute(sql, (*params, limit, offset)).fetchall()
+                   " ORDER BY o.company_name COLLATE NOCASE,o.opportunity_id")
+            if status:
+                rows = []
+                n = 0
+                # Streaming scan ensures limit, offset and count use the
+                # same effective qualification contract. Do not expose a
+                # projected NEEDS_REVIEW row under a QUALIFIED filter.
+                for row in db.execute(sql, params):
+                    _, _, valid = _source_state(row)
+                    effective = row["status"] if valid else "NEEDS_REVIEW"
+                    if effective != status:
+                        continue
+                    if offset <= n < offset + limit:
+                        rows.append(row)
+                    n += 1
+            else:
+                n = db.execute(
+                    "SELECT count(*) FROM opportunities o WHERE " + where,
+                    params).fetchone()[0]
+                rows = db.execute(
+                    sql + " LIMIT ? OFFSET ?",
+                    (*params, limit, offset)).fetchall()
         data = []
         for row in rows:
             evidence, upstream_suppressed, source_valid = _source_state(row)
