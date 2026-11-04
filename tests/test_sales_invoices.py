@@ -15,6 +15,7 @@ from greengrapeme.pilot_metrics import PilotLedger
 from greengrapeme.pilot_sales_flow import PilotSalesFlow
 from greengrapeme.sales_contracts import SalesContracts
 from greengrapeme.sales_invoices import SalesInvoices
+from greengrapeme.sales_credit_notes import SalesCreditNotes
 from greengrapeme.production_database import bootstrap_operational_database
 from greengrapeme.database_recovery import verify_database
 from greengrapeme.release_audit import release_audit
@@ -69,6 +70,24 @@ class SettledCash:
         return result
 
 
+class IssuedCredit:
+    def __init__(self, receipt="accounting-credit-001", mutate=None):
+        self.receipt=receipt
+        self.mutate=mutate
+        self.calls=[]
+
+    def verify(self, binding):
+        self.calls.append(dict(binding))
+        result={**binding,"confirmed":True,"status":"CREDIT_ISSUED",
+                "provider_kind":"ACCOUNTING",
+                "provider_receipt_id":self.receipt,
+                "issued_at":(datetime.now(timezone.utc)
+                             - timedelta(minutes=1)).isoformat()}
+        if self.mutate is not None:
+            self.mutate(result)
+        return result
+
+
 class SalesInvoiceTests(unittest.TestCase):
     def setUp(self):
         temp=TemporaryDirectory()
@@ -113,6 +132,7 @@ class SalesInvoiceTests(unittest.TestCase):
             signer_ref="urn:identity:signatory-0001",
             source=SignedAgreement())
         self.invoices=SalesInvoices(self.store)
+        self.credits=SalesCreditNotes(self.store)
         self.invoice_key=("tenant-01","pilot-0001","case-0001","invoice-0001")
         self.prepared_args=dict(
             contract_id="contract-0001",invoice_kind="MONTHLY",
@@ -132,6 +152,178 @@ class SalesInvoiceTests(unittest.TestCase):
             *self.invoice_key,movement_id,direction=direction,
             amount_cents=amount,evidence_ref="urn:bank:movement:"+movement_id,
             source=source or SettledCash(receipt))
+
+    def credit_prepare(self, credit_id="credit-0001", amount=30000,
+                       credit_note_ref=None):
+        return self.credits.prepare(
+            *self.invoice_key,credit_id,
+            credit_note_ref=(credit_note_ref or "urn:credit:invoice:"+credit_id),
+            reason_ref="urn:reason:invoice-correction-001",
+            amount_cents=amount,reporter_ref="operator-001")
+
+    def credit_confirm(self, credit_id="credit-0001", source=None):
+        return self.credits.confirm_issued(
+            *self.invoice_key,credit_id,
+            source=source or IssuedCredit())
+
+    def test_full_credit_never_fabricates_cash_or_refund(self):
+        self.prepare();self.confirm()
+        draft=self.credit_prepare(amount=89000)
+        self.assertEqual(draft["state"],"PREPARED")
+        self.assertEqual(self.credit_prepare(amount=89000),draft)
+        self.assertEqual(self.invoices.summary(*self.invoice_key)[
+            "effective_invoice_amount_cents"],89000)
+        self.assertEqual(self.invoices.summary(*self.invoice_key)[
+            "pending_credit_note_count"],1)
+        issued=self.credit_confirm()
+        self.assertEqual(issued["state"],"CREDITED_CONFIRMED")
+        self.assertEqual(self.credit_confirm(),issued)
+        outcome=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(outcome["state"],"CREDITED")
+        self.assertEqual(outcome["confirmed_credit_cents"],89000)
+        self.assertEqual(outcome["effective_invoice_amount_cents"],0)
+        self.assertEqual(outcome["outstanding_cents"],0)
+        self.assertEqual(outcome["refund_due_cents"],0)
+        self.assertEqual(outcome["net_settled_cents"],0)
+        with self.assertRaisesRegex(ValueError,"exceed credited invoice"):
+            self.cash("movement-2001","PAYMENT",1000,"bank-payment-2001")
+        with self.assertRaisesRegex(ValueError,"refund would exceed"):
+            self.cash("movement-2002","REFUND",1000,"bank-refund-2002")
+        ledger=self.ledger.summary("tenant-01","pilot-0001")
+        self.assertEqual(ledger["client_net_payment_confirmed_cents"],0)
+        audit=release_audit(self.path)
+        self.assertEqual(audit["confirmed_customer_credit_note_count"],1)
+        self.assertEqual(audit["unconfirmed_customer_credit_note_count"],0)
+        self.assertEqual(audit["status"],"NO_GO")
+
+    def test_paid_invoice_credit_creates_refund_due_until_bank_confirms(self):
+        self.prepare();self.confirm()
+        self.cash("movement-2100","PAYMENT",89000,"bank-payment-2100")
+        self.credit_prepare(amount=30000)
+        self.credit_confirm()
+        due=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(due["state"],"REFUND_DUE")
+        self.assertEqual(due["refund_due_cents"],30000)
+        self.assertEqual(due["outstanding_cents"],0)
+        self.assertEqual(due["net_settled_cents"],89000)
+        with self.assertRaisesRegex(ValueError,"exceed credited invoice"):
+            self.cash("movement-2101","PAYMENT",1000,"bank-payment-2101")
+        self.cash("movement-2102","REFUND",30000,"bank-refund-2102")
+        result=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(result["state"],"PAID")
+        self.assertEqual(result["effective_invoice_amount_cents"],59000)
+        self.assertEqual(result["net_settled_cents"],59000)
+        self.assertEqual(result["refund_due_cents"],0)
+        self.assertEqual(result["outstanding_cents"],0)
+        ledger=self.ledger.summary("tenant-01","pilot-0001")
+        self.assertEqual(ledger["client_payment_confirmed_cents"],89000)
+        self.assertEqual(ledger["client_refund_confirmed_cents"],30000)
+        self.assertEqual(ledger["client_net_payment_confirmed_cents"],59000)
+        self.assertEqual(ledger["platform_payment_confirmed_cents"],0)
+
+    def test_partial_credit_adjusts_payment_cap_and_remaining_balance(self):
+        self.prepare();self.confirm()
+        self.cash("movement-2200","PAYMENT",40000,"bank-payment-2200")
+        self.credit_prepare(amount=30000)
+        before=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(before["effective_invoice_amount_cents"],89000)
+        self.credit_confirm()
+        adjusted=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(adjusted["effective_invoice_amount_cents"],59000)
+        self.assertEqual(adjusted["outstanding_cents"],19000)
+        with self.assertRaisesRegex(ValueError,"exceed credited invoice"):
+            self.cash("movement-2201","PAYMENT",19001,"bank-payment-2201")
+        self.cash("movement-2202","PAYMENT",19000,"bank-payment-2202")
+        self.assertEqual(self.invoices.summary(*self.invoice_key)["state"],"PAID")
+
+    def test_unissued_invoice_and_untrusted_source_cannot_reduce_receivable(self):
+        self.prepare()
+        with self.assertRaisesRegex(PermissionError,"independently issued invoice"):
+            self.credit_prepare()
+        self.confirm()
+        self.credit_prepare()
+        for mutate in (
+            lambda x:x.update(confirmed=False),
+            lambda x:x.update(tenant="tenant-foreign"),
+            lambda x:x.update(invoice_receipt_id="invoice-different-111"),
+            lambda x:x.update(amount_cents=500),
+            lambda x:x.update(status="DRAFT"),
+            lambda x:x.update(provider_kind="BANK"),
+            lambda x:x.update(provider_receipt_id="x"),
+            lambda x:x.update(issued_at="2026-11-04T15:00:00"),
+        ):
+            with self.subTest(mutate=mutate),self.assertRaises(
+                (ValueError,TypeError)):
+                self.credit_confirm(source=IssuedCredit(mutate=mutate))
+            self.assertEqual(self.invoices.summary(*self.invoice_key)[
+                "confirmed_credit_cents"],0)
+        self.assertEqual(self.credits.get(*self.invoice_key,"credit-0001")[
+            "state"],"PREPARED")
+
+    def test_cumulative_credits_and_reused_receipts_cannot_overcredit(self):
+        self.prepare();self.confirm()
+        self.credit_prepare("credit-0001",amount=70000)
+        self.credit_prepare("credit-0002",amount=30000)
+        self.credit_confirm("credit-0001",IssuedCredit("credit-receipt-0001"))
+        with self.assertRaisesRegex(ValueError,"cumulative credits exceed"):
+            self.credit_confirm("credit-0002",IssuedCredit("credit-receipt-0002"))
+        self.assertEqual(self.credits.get(*self.invoice_key,"credit-0002")[
+            "state"],"PREPARED")
+        self.credit_prepare("credit-0003",amount=19000)
+        with self.assertRaisesRegex(ValueError,"already claimed"):
+            self.credit_confirm("credit-0003",IssuedCredit("credit-receipt-0001"))
+        self.credit_confirm("credit-0003",IssuedCredit("credit-receipt-0003"))
+        self.assertEqual(self.invoices.summary(*self.invoice_key)["state"],
+                         "CREDITED")
+        with self.assertRaisesRegex(ValueError,"exceeds independently issued"):
+            self.credit_prepare("credit-0004",amount=1)
+
+    def test_credit_replay_and_document_reference_are_bound_to_tenant(self):
+        self.prepare();self.confirm()
+        first=self.credit_prepare(amount=10000)
+        with self.assertRaisesRegex(ValueError,"reused"):
+            self.credit_prepare(amount=10001)
+        with self.assertRaisesRegex(ValueError,"reference already belongs"):
+            self.credit_prepare("credit-0002",amount=10000,
+                               credit_note_ref=first["credit_note_ref"])
+        with self.assertRaises(LookupError):
+            self.credits.get("tenant-other",*self.invoice_key[1:],"credit-0001")
+        issued=self.credit_confirm(source=IssuedCredit("credit-receipt-0009"))
+        restarted=SalesCreditNotes(SalesWorkspace(
+            self.path,bootstrap=False,require_operational=True))
+        untrusted=IssuedCredit("fake-receipt-0010")
+        self.assertEqual(restarted.confirm_issued(
+            *self.invoice_key,"credit-0001",source=untrusted),issued)
+        self.assertEqual(untrusted.calls,[])
+        self.credit_prepare("credit-0002",amount=1000,
+                            credit_note_ref="urn:credit:invoice:other-0002")
+        # A prepared credit's receipt cannot reuse the invoice receipt.
+        with self.assertRaisesRegex(ValueError,"already belongs to an invoice"):
+            self.credits.confirm_issued(
+                *self.invoice_key,"credit-0002",
+                source=IssuedCredit("accounting-invoice-0001"))
+
+    def test_source_change_during_external_credit_verification_rolls_back(self):
+        self.prepare();self.confirm();self.credit_prepare()
+        def mutate(proof):
+            with self.store._db() as db:
+                db.execute("UPDATE opportunities SET source_json='{}' "
+                           "WHERE tenant='tenant-01'")
+        with self.assertRaises(ValueError):
+            self.credit_confirm(source=IssuedCredit("credit-receipt-0010",mutate))
+        self.assertEqual(self.credits.get(*self.invoice_key,"credit-0001")[
+            "state"],"PREPARED")
+        self.assertEqual(self.invoices.summary(*self.invoice_key)[
+            "effective_invoice_amount_cents"],89000)
+
+    def test_credit_schema_is_checked_on_backup_verification(self):
+        self.prepare();self.confirm();self.credit_prepare();self.credit_confirm()
+        verified=verify_database(self.path)
+        self.assertEqual(verified["user_version"],7)
+        self.assertIn("sales_customer_credit_notes",
+                      verified["schema_tables_verified"])
+        self.assertEqual(release_audit(self.path)[
+            "confirmed_customer_credit_note_count"],1)
 
     def test_end_to_end_partial_settlement_refund_and_repayment(self):
         draft=self.prepare()
