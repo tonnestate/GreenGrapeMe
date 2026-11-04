@@ -202,6 +202,44 @@ class DiscoveryProductTests(unittest.TestCase):
         self.assertEqual(info["contact_authority"], "NONE")
         self.assertEqual(len(self.store.rankings("tenant-two")), 1)
 
+    def test_qualification_filter_matches_displayed_status_and_pagination(self):
+        # The persisted status may remain QUALIFIED after an invalid
+        # revision to the original source. Status search must follow the
+        # displayed effective state, not the old SQL column.
+        self.store.ingest("tenant-one", [
+            Opportunity("healthy-02", "B Healthy GmbH", "offer-1", ()),
+            Opportunity("stale-03", "C Stale GmbH", "offer-1", ()),
+        ])
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET status='QUALIFIED'
+                WHERE tenant=?""", ("tenant-one",))
+            db.execute("""UPDATE opportunities SET source_json='{}'
+                WHERE tenant=? AND opportunity_id IN ('account-1','stale-03')""",
+                ("tenant-one",))
+        qualified = self.catalog.list_companies(
+            "tenant-one", status="QUALIFIED")
+        self.assertEqual(qualified["total"], 1)
+        self.assertEqual(qualified["items"][0]["opportunity_id"], "healthy-02")
+        self.assertEqual(qualified["items"][0]["qualification"], "QUALIFIED")
+        needs_review = self.catalog.list_companies(
+            "tenant-one", status="NEEDS_REVIEW", limit=1, offset=0)
+        self.assertEqual(needs_review["total"], 2)
+        self.assertEqual(len(needs_review["items"]), 1)
+        self.assertEqual(needs_review["items"][0]["qualification"], "NEEDS_REVIEW")
+        second = self.catalog.list_companies(
+            "tenant-one", status="NEEDS_REVIEW", limit=1, offset=1)
+        self.assertEqual(second["total"], 2)
+        self.assertEqual(len(second["items"]), 1)
+        self.assertNotEqual(second["items"][0]["opportunity_id"],
+                            needs_review["items"][0]["opportunity_id"])
+        code, payload, _ = get(
+            self.app, "/api/companies", token=TOKEN,
+            params={"status": "QUALIFIED"})
+        self.assertTrue(code.startswith("200"), (code, payload))
+        self.assertEqual(json.loads(payload)["total"], 1)
+        with self.assertRaises(ValueError):
+            self.catalog.list_companies("tenant-one", status={"invalid": True})
+
     def test_no_insecure_default_token_or_network_server(self):
         with self.assertRaises(ValueError):
             create_app(self.catalog,tenant="tenant-one",token="short")
