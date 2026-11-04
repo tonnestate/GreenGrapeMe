@@ -98,11 +98,41 @@ class DittofeedOutboxTests(unittest.TestCase):
         with self.store._db() as db:
             db.execute("""UPDATE opportunities SET source_json='{}'
                           WHERE tenant='tenant-a' AND opportunity_id='account-001'""")
-        with self.assertRaisesRegex(ValueError,"changed"):
+        # A malformed replacement source is denied at the source-integrity
+        # gate, before the immutable-intent comparison can run.
+        with self.assertRaisesRegex(PermissionError,"source/account"):
             self.prepare()
         after=self.outbox.get("tenant-a","pilot-001","event-001")
         self.assertEqual(after["state"],"BLOCKED_SOURCE_REVISION")
         self.assertEqual(after["workspace_id"],"workspace-1234")
+
+    def test_prepare_rejects_nontext_and_invalid_account_source_cleanly(self):
+        self.verified()
+        for corrupted in ("{}", "{invalid", "[]", b"binary-invalid", 123):
+            with self.subTest(source=corrupted):
+                with self.store._db() as db:
+                    db.execute("""UPDATE opportunities SET source_json=?
+                                  WHERE tenant='tenant-a' AND opportunity_id='account-001'""",
+                               (corrupted,))
+                with self.assertRaisesRegex(PermissionError, "source/account"):
+                    self.prepare()
+                self.assertEqual(self.outbox.list("tenant-a", "pilot-001")["total"],0)
+
+    def test_prepare_rejects_upstream_suppression_even_without_optout_row(self):
+        self.verified()
+        with self.store._db() as db:
+            raw=db.execute("""SELECT source_json FROM opportunities
+                              WHERE tenant='tenant-a' AND opportunity_id='account-001'""").fetchone()[0]
+            modified=json.loads(raw)
+            modified["suppressed"]=True
+            db.execute("""UPDATE opportunities SET source_json=?
+                          WHERE tenant='tenant-a' AND opportunity_id='account-001'""",
+                       (json.dumps(modified),))
+            db.execute("""DELETE FROM suppressions
+                          WHERE tenant='tenant-a' AND opportunity_id='account-001'""")
+        with self.assertRaisesRegex(PermissionError, "source/account"):
+            self.prepare()
+        self.assertEqual(self.outbox.list("tenant-a", "pilot-001")["total"],0)
 
     def test_changed_confirmed_event_kind_blocks_existing_intent(self):
         self.verified()
