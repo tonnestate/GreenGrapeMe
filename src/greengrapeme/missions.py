@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from typing import Any, Protocol
 
 from .operations import SalesWorkspace
@@ -103,6 +104,37 @@ class SalesMissionEngine:
               PRIMARY KEY(tenant,mission_id,opportunity_id));
             """)
 
+    @staticmethod
+    def _validated_source_record(row) -> dict | None:
+        """Check the complete source-bound account before using model input.
+
+        SQLite TEXT affinity does not prevent corrupt BLOBs; a valid JSON
+        document can also refer to the wrong account, offer or original
+        suppression status. None of these is admissible as model evidence.
+        """
+        if row is None or not isinstance(row["source_json"], str):
+            return None
+        try:
+            data = json.loads(row["source_json"])
+        except (TypeError, ValueError):
+            return None
+        if (not isinstance(data, dict)
+                or data.get("opportunity_id") != row["opportunity_id"]
+                or data.get("offer_id") != row["offer_id"]
+                or data.get("company_name") != row["company_name"]
+                or not isinstance(data.get("company_name"), str)
+                or not data["company_name"].strip()
+                or data.get("suppressed") is not False
+                or not isinstance(data.get("evidence"), list)
+                or any(
+                    not isinstance(e, dict)
+                    or not isinstance(e.get("kind"), str)
+                    or not isinstance(e.get("reference"), str)
+                    or not isinstance(e.get("claim"), str)
+                    for e in data["evidence"])):
+            return None
+        return data
+
     def create(self, tenant: str, mission_id: str, offer_id: str,
                objective: str, icp: str,
                account_ids: tuple[str, ...] | None = None) -> dict:
@@ -123,19 +155,24 @@ class SalesMissionEngine:
                           (tenant, mission_id)).fetchone():
                 raise ValueError("mission id already exists; read its status to continue")
             if account_ids is None:
-                source_rows = db.execute("""SELECT opportunity_id,source_json FROM opportunities
+                source_rows = db.execute("""SELECT opportunity_id,offer_id,company_name,source_json
+                       FROM opportunities
                        WHERE tenant=? AND offer_id=? ORDER BY opportunity_id LIMIT 25""",
                        (tenant, offer_id)).fetchall()
             elif account_ids:
                 placeholders = ",".join("?" for _ in account_ids)
                 source_rows = db.execute(
-                    "SELECT opportunity_id,source_json FROM opportunities WHERE tenant=? "
+                    "SELECT opportunity_id,offer_id,company_name,source_json
+                    FROM opportunities WHERE tenant=? "
                     "AND offer_id=? AND opportunity_id IN (" + placeholders + ")",
                     (tenant, offer_id, *account_ids)).fetchall()
                 if len(source_rows) != len(account_ids):
                     raise ValueError("cohort contains an unknown or wrong-offer account")
             else:
                 source_rows = []
+            if any(self._validated_source_record(source) is None
+                   for source in source_rows):
+                raise ValueError("mission source record invalid")
             db.execute("INSERT INTO sales_missions VALUES (?,?,?,?,?,?,?,?,?)",
                        (tenant, mission_id, offer_id, objective, _json({"icp": icp}),
                         "QUEUED", 0, now, now))
@@ -189,7 +226,8 @@ class SalesMissionEngine:
             if row["stage_index"] >= len(STAGES):
                 return None
             membership = db.execute("""SELECT m.opportunity_id,m.source_sha256,
-                          o.source_json,s.reason AS suppressed
+                          o.offer_id,o.company_name,o.source_json,
+                          s.reason AS suppressed
                     FROM sales_mission_accounts m
                     LEFT JOIN opportunities o ON o.tenant=m.tenant
                          AND o.opportunity_id=m.opportunity_id
@@ -197,8 +235,10 @@ class SalesMissionEngine:
                          AND s.opportunity_id=m.opportunity_id
                     WHERE m.tenant=? AND m.mission_id=?
                     ORDER BY m.opportunity_id""", (tenant, mission_id)).fetchall()
-            if any(r["source_json"] is None or r["suppressed"] is not None or
-                   hashlib.sha256(r["source_json"].encode("utf-8")).hexdigest() != r["source_sha256"]
+            if any(self._validated_source_record(r) is None
+                   or r["suppressed"] is not None
+                   or hashlib.sha256(r["source_json"].encode("utf-8")).hexdigest()
+                       != r["source_sha256"]
                    for r in membership):
                 db.execute("""UPDATE sales_missions SET status='BLOCKED_SOURCE_REVISION',
                          updated_at=? WHERE tenant=? AND mission_id=?""",
@@ -209,7 +249,7 @@ class SalesMissionEngine:
             records = membership
             accounts = []
             for record in records:
-                source = json.loads(record["source_json"])
+                source = self._validated_source_record(record)
                 accounts.append({"opportunity_id": source["opportunity_id"],
                                  "company_name": source["company_name"],
                                  "source_identity_status": "UNVERIFIED",
@@ -271,7 +311,7 @@ class SalesMissionEngine:
         """Execute bounded internal steps, never call a communication/external effect."""
         tenant = self.store._required(tenant, "tenant")
         mission_id = _require(mission_id, "mission_id", 160)
-        if not isinstance(max_steps, int) or not 1 <= max_steps <= len(STAGES):
+        if type(max_steps) is not int or not 1 <= max_steps <= len(STAGES):
             raise ValueError("max_steps must be 1..3")
         for _ in range(max_steps):
             claimed = self._claim(tenant, mission_id)
@@ -282,7 +322,9 @@ class SalesMissionEngine:
                 proposed = await neuron.execute(role, objective, context)
                 validated = _validate_proposal(proposed, context["accounts"])
                 cost = proposed.cost_usd
-                if cost is not None and (not isinstance(cost, (int, float)) or cost < 0):
+                if cost is not None and (
+                        type(cost) not in (int, float)
+                        or not math.isfinite(cost) or cost < 0):
                     raise ValueError("invalid model cost receipt")
             except Exception as exc:
                 # Provider may have executed despite timeout. Never auto-retry.
@@ -308,8 +350,9 @@ class SalesMissionEngine:
                 # Validate immutable source and suppression AGAIN after the
                 # neuron returns, in the same transaction as proposal commit.
                 # No stale recommendation may be accepted after an opt-out.
-                current_accounts = db.execute("""SELECT m.source_sha256,
-                          o.source_json,s.reason AS suppressed
+                current_accounts = db.execute("""SELECT m.opportunity_id,m.source_sha256,
+                          o.offer_id,o.company_name,o.source_json,
+                          s.reason AS suppressed
                     FROM sales_mission_accounts m
                     LEFT JOIN opportunities o ON o.tenant=m.tenant
                         AND o.opportunity_id=m.opportunity_id
@@ -318,7 +361,8 @@ class SalesMissionEngine:
                     WHERE m.tenant=? AND m.mission_id=?""",
                     (tenant, mission_id)).fetchall()
                 stale = not current_accounts or any(
-                    item["source_json"] is None or item["suppressed"] is not None
+                    self._validated_source_record(item) is None
+                    or item["suppressed"] is not None
                     or hashlib.sha256(item["source_json"].encode("utf-8")).hexdigest()
                         != item["source_sha256"]
                     for item in current_accounts)
