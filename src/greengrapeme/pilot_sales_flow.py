@@ -44,7 +44,12 @@ def _reference(ref: str) -> str:
     return ref
 
 
-def _future_date(value: str) -> str:
+def _normalized_followup_date(value: str) -> str:
+    """Parse an immutable follow-up instant, including expired past instants.
+
+    A replay of an already admitted step must compare the originally agreed
+    due timestamp, not reapply creation-only scheduling constraints.
+    """
     if not isinstance(value, str):
         raise ValueError("follow-up requires an ISO timestamp")
     try:
@@ -53,11 +58,16 @@ def _future_date(value: str) -> str:
         raise ValueError("invalid follow-up timestamp") from exc
     if date.tzinfo is None or date.utcoffset() is None:
         raise ValueError("follow-up timestamp must include its timezone")
-    date = date.astimezone(timezone.utc)
+    return date.astimezone(timezone.utc).isoformat()
+
+
+def _future_date(value: str) -> str:
+    normalized = _normalized_followup_date(value)
+    date = datetime.fromisoformat(normalized)
     now = datetime.now(timezone.utc)
     if not now < date <= now + timedelta(days=365):
         raise ValueError("follow-up due date must be within next 365 days")
-    return date.isoformat()
+    return normalized
 
 
 class PilotSalesFlow:
@@ -173,7 +183,11 @@ class PilotSalesFlow:
                 expected_state not in _STEPS or
                 to_state not in _STEPS[expected_state]):
             raise ValueError("unsupported sales case transition")
-        due = _future_date(followup_at) if to_state=="FOLLOWUP_SCHEDULED" else None
+        # Stable ISO normalization is always required, but the due-date
+        # horizon only applies to NEW schedules. An exact retry may arrive
+        # after that date and still be safely idempotent.
+        due = (_normalized_followup_date(followup_at)
+               if to_state=="FOLLOWUP_SCHEDULED" else None)
         if to_state!="FOLLOWUP_SCHEDULED" and followup_at:
             raise ValueError("followup_at applies only to FOLLOWUP_SCHEDULED")
         with self.store._db() as db:
@@ -191,6 +205,8 @@ class PilotSalesFlow:
                 if tuple(prior)!=(expected_state,to_state,evidence_ref,reporter_ref,due):
                     raise ValueError("step ID reused with changed evidence")
                 return self.get(tenant,pilot_id,case_id)
+            if to_state=="FOLLOWUP_SCHEDULED":
+                _future_date(followup_at)
             if current["state"]!=expected_state:
                 raise ValueError("sales state changed; refresh before submitting a new step")
             suppressed=db.execute("""SELECT 1 FROM suppressions WHERE
