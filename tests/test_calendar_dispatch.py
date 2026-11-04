@@ -259,6 +259,22 @@ class CalendarDispatchTests(unittest.TestCase):
             self.send()
         self.assertEqual(self.transport.calls, [])
 
+    def test_two_workers_after_permission_check_share_one_committed_attempt(self):
+        self.policy.allowed = True
+        nested = self.make_dispatcher()
+        second = []
+        def concurrent_worker():
+            self.policy.on_allow = None
+            second.append(nested.book(*self.keys, permission_ref=self.policy_ref))
+        self.policy.on_allow = concurrent_worker
+        first = self.send()
+        self.assertFalse(first["http_post_attempted_now"])
+        self.assertTrue(second[0]["http_post_attempted_now"])
+        self.assertEqual([method for method, _, _ in self.transport.calls],
+                         ["POST"])
+        self.assertEqual(self.dispatcher.get_attempt(*self.keys)["state"],
+                         "HTTP_ACCEPTED_UNVERIFIED")
+
     def test_google_event_must_match_committed_dispatch_fence(self):
         self.policy.allowed = True
         self.send()
