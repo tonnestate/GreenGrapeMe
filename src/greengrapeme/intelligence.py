@@ -86,7 +86,8 @@ _STOP = re.compile(
 _STOP_NEGATION = re.compile(
     r"(?i)\b(?:don't|do not|not|never)\s+(?:please\s+)?"
     r"(?:unsubscribe(?:\s+me)?|remove(?:\s+me)?(?:\s+from\s+(?:the\s+|your\s+)?(?:list|mailing\s+list))?|"
-    r"take\s+me\s+off(?:\s+(?:the\s+)?(?:list|mailing\s+list))?)\b"
+    r"take\s+me\s+off(?:\s+(?:the\s+)?(?:list|mailing\s+list))?|"
+    r"stop\s+(?:contacting\s+me|emailing\s+me|sending\s+me\s+(?:emails?|e-mails?|messages?)))\b"
 )
 _PRIVACY = re.compile(r"(?i)\b(?:delete my data|right to erasure|data subject access|gdpr request|dsgvo auskunft|löschen sie meine daten|woher haben sie meine daten)\b")
 _BOUNCE = re.compile(r"(?i)(?:mail delivery failed|undeliverable|unzustellbar|delivery status notification \(failure\))")
