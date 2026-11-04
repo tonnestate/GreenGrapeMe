@@ -162,8 +162,8 @@ class SalesMissionEngine:
             elif account_ids:
                 placeholders = ",".join("?" for _ in account_ids)
                 source_rows = db.execute(
-                    "SELECT opportunity_id,offer_id,company_name,source_json
-                    FROM opportunities WHERE tenant=? "
+                    "SELECT opportunity_id,offer_id,company_name,source_json "
+                    "FROM opportunities WHERE tenant=? "
                     "AND offer_id=? AND opportunity_id IN (" + placeholders + ")",
                     (tenant, offer_id, *account_ids)).fetchall()
                 if len(source_rows) != len(account_ids):
