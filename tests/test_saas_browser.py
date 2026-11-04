@@ -215,7 +215,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(accepted.mode, "new")
         self.assertEqual(accepted.search_terms, ("software",))
         with self.assertRaises(ValueError):
-            DiscoverySpec.parse({**accepted.__dict__, "south": 50.0})
+            DiscoverySpec(**{**accepted.__dict__, "south": 50.0})
 
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
