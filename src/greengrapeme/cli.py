@@ -6,6 +6,7 @@ import asyncio
 import json
 from .operations import SalesWorkspace
 from .database_recovery import backup_database, restore_database, verify_database
+from .release_audit import release_audit
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .dittofeed_lifecycle import DittofeedLifecycleProjection
@@ -47,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("overview")
     sub.add_parser("queue")
     sub.add_parser("db-verify", help="Read-only SQLite integrity and base schema check")
+    sub.add_parser("release-audit",
+        help="Read-only NO-GO production gate and unresolved external effect counts")
     backup = sub.add_parser("db-backup",
         help="Consistent SQLite snapshot; no overwrite, all tenants")
     backup.add_argument("--output", required=True, help="New backup file path")
@@ -170,7 +173,12 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--once", action="store_true", help="Process one queued item and exit")
     worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
-    if a.command in {"db-verify", "db-backup", "db-restore"}:
+    if a.command in {"db-verify", "db-backup", "db-restore",
+                     "release-audit"}:
+        if a.command == "release-audit":
+            result = release_audit(a.db)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 2 if not result["production_ready"] else 0
         if a.command == "db-verify":
             result = verify_database(a.db)
         elif a.command == "db-backup":
