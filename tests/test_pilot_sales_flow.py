@@ -118,6 +118,54 @@ class PilotSalesFlowTests(unittest.TestCase):
             self.step("FOLLOWUP_SCHEDULED","QUALIFIED_REPORTED","step-0003",
                       followup_at=(datetime.now(timezone.utc)+timedelta(days=366)).isoformat())
 
+    def test_nontext_source_does_not_break_due_followup_queue(self):
+        opened=self.open()
+        self.step("QUALIFIED_REPORTED","INBOUND_REVIEW","step-0001")
+        due=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat()
+        self.step("FOLLOWUP_SCHEDULED","QUALIFIED_REPORTED","step-0002",
+                  followup_at=due)
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET source_json=X'000102'
+                          WHERE tenant='tenant-01' AND opportunity_id=?""",
+                       (opened["opportunity_id"],))
+        result=self.flow.due_followups(
+            "tenant-01","pilot-0001",
+            as_of=datetime.now(timezone.utc)+timedelta(days=2))
+        self.assertEqual(result["total"],1)
+        self.assertEqual(len(result["items"]),1)
+        item=result["items"][0]
+        self.assertEqual(item["review_state"],"BLOCKED_SOURCE_REVISION")
+        self.assertFalse(item["source_current"])
+        self.assertFalse(result["outbound_authorized"])
+
+    def test_nontext_source_blocks_case_step_without_attribute_error(self):
+        opened=self.open()
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET source_json=X'000102'
+                          WHERE tenant='tenant-01' AND opportunity_id=?""",
+                       (opened["opportunity_id"],))
+        with self.assertRaisesRegex(ValueError,"source changed"):
+            self.step("QUALIFIED_REPORTED","INBOUND_REVIEW","step-0001")
+        self.assertEqual(self.flow.get("tenant-01","pilot-0001",self.case)[
+            "state"],"INBOUND_REVIEW")
+        self.assertEqual(self.pilots.summary("tenant-01","pilot-0001")[
+            "reported_event_count"],0)
+
+    def test_malformed_channel_and_states_rejected_cleanly(self):
+        for invalid in ([], {}, None, 3):
+            with self.subTest(channel=invalid),self.assertRaises(ValueError):
+                self.open(channel=invalid)
+        self.open()
+        for from_state,to_state in (([], "QUALIFIED_REPORTED"),
+                                    ("INBOUND_REVIEW", []),
+                                    (None, "QUALIFIED_REPORTED"),
+                                    ("INBOUND_REVIEW", {})):
+            with self.subTest(from_state=from_state,to_state=to_state):
+                with self.assertRaisesRegex(ValueError,"unsupported"):
+                    self.step(to_state,from_state,"step-invalid")
+        self.assertEqual(self.flow.get("tenant-01","pilot-0001",self.case)[
+            "state"],"INBOUND_REVIEW")
+
     def test_tenant_isolation_and_inbound_identity_conflict(self):
         one=self.open()
         self.assertEqual(self.flow.list("tenant-02","pilot-0001")["total"],0)
