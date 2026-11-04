@@ -97,3 +97,28 @@ retention, real disaster drill timing, encryption/key management,
 multi-process restart orchestration, schema migrations, external effect
 reconciliation and real-host E2E tests. Until those are operationally
 verified, **production release remains blocked**.
+
+## Versioned operational schema upgrade (v1)
+
+Existing pre-auth/partial-feature databases should not be pointed at the
+new SaaS service directly. Use the operator-only `db-migrate` command
+with a NEW unused output path, after separately backing up the source,
+stopping writers for a controlled cutover and reconciling uncertain
+external effects:
+
+```bash
+PYTHONPATH=src python -m greengrapeme.cli \
+  --db /srv/gg/legacy.sqlite db-migrate --output /srv/gg/tenant-data-v1.sqlite
+```
+
+The upgrade uses SQLite's committed online backup snapshot (including
+WAL), adds the currently known operational module tables, verifies
+the complete schema and version ledger, checks that all previous table
+row counts are unchanged, then atomically publishes without overwriting
+any destination. No business effects/providers are invoked. The
+preexisting source database remains **completely unchanged**. This is
+a copy-forward baseline migration, **not** a live in-place alteration,
+a historical payment reconciliation or a future-version rollback.
+The operator must deliberately switch application/worker configurations
+to the new database path. The new path must not be used while old
+writers continue to create states against the original.

@@ -7,6 +7,7 @@ import json
 from .operations import SalesWorkspace
 from .database_recovery import backup_database, restore_database, verify_database
 from .production_database import bootstrap_operational_database
+from .schema_migration import migrate_database
 from .release_audit import release_audit
 from .tenant_access import Principal, TenantMemberships
 from .pilot_metrics import PilotLedger
@@ -51,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("queue")
     sub.add_parser("db-verify", help="Read-only SQLite integrity and base schema check")
     sub.add_parser("db-bootstrap", help="Explicitly create a NEW operational database; never overwrite")
+    migration = sub.add_parser(
+        "db-migrate", help="Versioned copy-forward migration to a NEW path only")
+    migration.add_argument("--output", required=True,
+                           help="Unused destination path; source is never changed")
     sub.add_parser("release-audit",
         help="Read-only NO-GO production gate and unresolved external effect counts")
     backup = sub.add_parser("db-backup",
@@ -194,7 +199,11 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
     if a.command in {"db-verify", "db-backup", "db-restore",
-                     "db-bootstrap", "release-audit"}:
+                     "db-bootstrap", "db-migrate", "release-audit"}:
+        if a.command == "db-migrate":
+            result = migrate_database(a.db, a.output)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
         if a.command == "db-bootstrap":
             result = bootstrap_operational_database(a.db)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
