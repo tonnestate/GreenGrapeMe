@@ -123,14 +123,14 @@ const scriptPath = path.resolve(__dirname, "../src/greengrapeme/web/saas.js");
 const source = fs.readFileSync(scriptPath, "utf8");
 assert.match(source, /\nmain\(\);\s*$/, "expected SaaS script entrypoint");
 const sourceWithoutMain = source.replace(
-  /\nmain\(\);\s*$/, "\nglobalThis.__gg = { state, api, openTenant, logout, companies, queueDiscovery };\n"
+  /\nmain\(\);\s*$/, "\nglobalThis.__gg = { state, api, openTenant, logout, companies, queueDiscovery, appointmentInstant, appointmentWindow };\n"
 );
 const runtime = {
   document, fetch, sessionStorage, URLSearchParams, URL, crypto: webcrypto,
   TextEncoder, btoa, window: { location: { origin: "https://app.example" } },
 };
 vm.runInNewContext(sourceWithoutMain, runtime, { filename: scriptPath });
-const { state, api, openTenant, logout, companies, queueDiscovery } = runtime.__gg;
+const { state, api, openTenant, logout, companies, queueDiscovery, appointmentInstant, appointmentWindow } = runtime.__gg;
 
 async function admit(tenant) {
   element("tenant-id").value = tenant;
@@ -140,6 +140,56 @@ async function admit(tenant) {
 }
 
 async function run() {
+  // A valid ISO instant must be parsed as an exact offset-aware moment.
+  assert.equal(appointmentInstant.bind(null, "appointment-start") instanceof Function, true);
+  element("appointment-start").value = "2028-02-29T09:15:02+05:30";
+  assert.equal(appointmentInstant("appointment-start"), "2028-02-29T03:45:02.000Z");
+  element("appointment-start").value = "2028-02-29T09:15:02-03:30";
+  assert.equal(appointmentInstant("appointment-start"), "2028-02-29T12:45:02.000Z");
+  element("appointment-start").value = "2028-02-29T09:15Z";
+  assert.equal(appointmentInstant("appointment-start"), "2028-02-29T09:15:00.000Z");
+
+  // Timezones, calendar dates, hours, minutes and seconds are mandatory
+  // for safe server-compatible ISO parsing (seconds may be omitted).
+  for (const invalid of [
+    "", "2028-02-29T09:15", "2028-02-29 09:15:00+01:00",
+    "2027-02-29T09:15:00Z", "2026-04-31T09:15:00Z",
+    "2026-00-01T09:15:00Z", "2026-11-31T09:15:00Z",
+    "2026-11-04T24:00:00Z", "2026-11-04T10:60:00Z",
+    "2026-11-04T10:15:60Z", "2026-11-04T10:15:00+14:30",
+    "2026-11-04T10:15:00-10:99", "not-a-date",
+  ]) {
+    element("appointment-start").value = invalid;
+    assert.throws(() => appointmentInstant("appointment-start"),
+      /Terminzeit|Zeitzonenversatz/, "rejected invalid local time " + invalid);
+  }
+
+  // The booking window is normalized to UTC and enforces the server's
+  // 15..480-minute duration and <=365-day future-start constraints.
+  const start = new Date(Date.now() + 7 * 86400000);
+  const end = new Date(start.getTime() + 45 * 60000);
+  element("appointment-start").value = start.toISOString().replace(/Z$/, "+00:00");
+  element("appointment-end").value = end.toISOString();
+  let window = appointmentWindow();
+  assert.equal(window.slot_start_at, start.toISOString());
+  assert.equal(window.slot_end_at, end.toISOString());
+  element("appointment-end").value = new Date(start.getTime() + 14 * 60000).toISOString();
+  assert.throws(() => appointmentWindow(), /Termindauer/);
+  element("appointment-end").value = new Date(start.getTime() + 481 * 60000).toISOString();
+  assert.throws(() => appointmentWindow(), /Termindauer/);
+  element("appointment-end").value = new Date(start.getTime() - 45 * 60000).toISOString();
+  assert.throws(() => appointmentWindow(), /Termindauer/);
+  element("appointment-start").value = new Date(Date.now() - 86400000).toISOString();
+  element("appointment-end").value = new Date(Date.now() - 86400000 + 45 * 60000).toISOString();
+  assert.throws(() => appointmentWindow(), /nächsten 365 Tage/);
+  element("appointment-start").value = start.toISOString();
+  element("appointment-end").value = "2028-02-29T10:00:00"; // missing offset
+  assert.throws(() => appointmentWindow(), /Zeitzone/);
+
+  // Handler must submit normalized validated instants, not raw free text.
+  assert.match(source, /slot_start_at, slot_end_at/);
+  assert.match(source, /\.\.\.appointmentWindow\(\)/);
+
   state.token = "fake-token-for-isolation-test";
   state.expiresAt = Date.now() + 10 * 60_000;
   await admit("tenant-a");
