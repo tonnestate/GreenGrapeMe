@@ -208,9 +208,6 @@ class PilotLedger:
                   "EUR", stamp, evidence_ref, reporter_ref)
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            if opportunity_id:
-                self._require_current_account_link(
-                    db, tenant, pilot_id, pilot["offer_id"], opportunity_id)
             old = db.execute("""SELECT tenant,pilot_id,event_id,opportunity_id,
                        event_kind,amount_cents,currency,occurred_at,evidence_ref,reporter_ref,
                        state,provider_kind,provider_receipt_id,confirmed_at,created_at
@@ -226,6 +223,12 @@ class PilotLedger:
                         or (occurred_at is not None and previous[7] != record[7])):
                     raise ValueError("pilot event ID reused with changed evidence")
                 return dict(old)
+            if opportunity_id:
+                # Creation needs current account evidence; a strict
+                # idempotent replay of an already stored historical event
+                # must remain readable even after the source changes.
+                self._require_current_account_link(
+                    db, tenant, pilot_id, pilot["offer_id"], opportunity_id)
             now = self.store._now()
             db.execute("""INSERT INTO sales_pilot_events VALUES
                 (?,?,?,?,?,?,?,?,?,?,'REPORTED',NULL,NULL,NULL,?)""", (*record,now))
