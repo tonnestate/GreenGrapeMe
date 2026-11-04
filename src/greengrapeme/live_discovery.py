@@ -131,10 +131,13 @@ async def read_starfruit_companies(client: SourceToolClient, *,
         name = row.get("name")
         if not isinstance(name, str) or not name.strip():
             raise SourceSnapshotError("unnamed StarFruitMe candidate requires source reconciliation")
+        observations = detail.get("observations", [])
+        if not isinstance(observations, list):
+            raise SourceSnapshotError("StarFruitMe observations collection invalid")
         evidence = []
-        for observation in detail.get("observations", []):
+        for observation in observations:
             if not isinstance(observation, dict):
-                continue
+                raise SourceSnapshotError("StarFruitMe observation row invalid")
             url = observation.get("maps_url")
             obsid = observation.get("observation_id")
             if not isinstance(url, str) or not url.startswith(("https://", "http://")):
