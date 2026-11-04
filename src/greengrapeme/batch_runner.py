@@ -42,7 +42,7 @@ async def advance_batch(queue, tenant: str, request_id: str, spec,
                               error_kind="BATCH_SOURCE_CHANGED_OR_SUPPRESSED")
             return queue.get(tenant, request_id)
         with queue.store._db() as db:
-            checks = [db.execute("""SELECT o.company_name,b.input_sha256
+            checks = [db.execute("""SELECT o.company_name,o.source_json,b.input_sha256
                     FROM opportunities o LEFT JOIN sales_blackberry_reviews b
                       ON b.tenant=o.tenant AND b.opportunity_id=o.opportunity_id
                     WHERE o.tenant=? AND o.opportunity_id=?""",
@@ -53,8 +53,16 @@ async def advance_batch(queue, tenant: str, request_id: str, spec,
                                   error_kind="BATCH_ACCOUNT_MISSING")
                 return queue.get(tenant, request_id)
             if row["input_sha256"]:
+                if not isinstance(row["source_json"], str):
+                    queue._transition(tenant, request_id, state,
+                                      "BLOCKED_SOURCE_REVISION",
+                                      error_kind="RESEARCH_SOURCE_MISSING")
+                    return queue.get(tenant, request_id)
                 expected = research_fingerprint(
-                    account["id"], row["company_name"], spec.objective, (), "", "")
+                    account["id"], row["company_name"], spec.objective,
+                    (), "", "",
+                    source_sha256=hashlib.sha256(
+                        row["source_json"].encode("utf-8")).hexdigest())
                 if row["input_sha256"] != expected:
                     queue._transition(tenant, request_id, state,
                                       "BLOCKED_BLACKBERRY_REVISION",
