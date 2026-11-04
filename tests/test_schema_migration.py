@@ -57,7 +57,7 @@ class MigrationTests(unittest.TestCase):
             self.legacy)["uninitialized_optional_tables"])
         result = migrate_database(self.legacy, self.upgraded)
         self.assertEqual(result["from_schema_version"], 0)
-        self.assertEqual(result["to_schema_version"], 1)
+        self.assertEqual(result["to_schema_version"], 2)
         self.assertTrue(result["source_unchanged"])
         self.assertFalse(result["overwrote_existing_database"])
         self.assertEqual(result["schema_integrity"], "ok")
@@ -65,9 +65,9 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(result["production_ready"])
         self.assertEqual(self.legacy.read_bytes(), before)
         self.assertEqual(verify_database(self.legacy)["user_version"], 0)
-        self.assertEqual(verify_database(self.upgraded)["user_version"], 1)
+        self.assertEqual(verify_database(self.upgraded)["user_version"], 2)
         self.assertEqual(self._scalar(self.upgraded,
-            "SELECT version FROM greengrapeme_schema_migrations"), 1)
+            "SELECT max(version) FROM greengrapeme_schema_migrations"), 2)
         upgraded = SalesWorkspace(self.upgraded, bootstrap=False,
                                  require_operational=True)
         self.assertEqual(upgraded.overview("tenant-a")["opportunities"], 1)
