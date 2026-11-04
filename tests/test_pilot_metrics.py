@@ -169,6 +169,59 @@ class PilotLedgerTests(unittest.TestCase):
                 "MEETING_HELD",opportunity_id="opp-001",reporter_ref="host-operator",
                 evidence_ref="https://example.org/bad path")
 
+    def test_explicit_invalid_timestamp_is_not_replaced_with_now(self):
+        for invalid in ("", False, 0):
+            with self.subTest(occurred_at=invalid), self.assertRaises(ValueError):
+                self.ledger.record(
+                    "tenant-A", "pilot-001", "event-bad-time", "MEETING_HELD",
+                    opportunity_id="opp-001", reporter_ref="host-operator",
+                    evidence_ref="urn:external:record:bad-time",
+                    occurred_at=invalid)
+            with self.assertRaises(LookupError):
+                self.ledger.event("tenant-A", "pilot-001", "event-bad-time")
+
+    def test_unhashable_event_kind_and_provider_kind_are_rejected_cleanly(self):
+        for invalid in ([], {}, None, 7):
+            with self.subTest(kind=invalid), self.assertRaises(ValueError):
+                self.ledger.record(
+                    "tenant-A", "pilot-001", "event-bad-kind", invalid,
+                    evidence_ref="urn:external:record:bad-kind",
+                    reporter_ref="host-operator")
+        self.report()
+        class InvalidProvider:
+            def verify(self, event):
+                return {
+                    "confirmed": True, "event_kind": event["event_kind"],
+                    "amount_cents": event["amount_cents"], "currency": "EUR",
+                    "evidence_ref": event["evidence_ref"],
+                    "provider_kind": {"unhashable": "provider"},
+                    "provider_receipt_id": "receipt-invalid-provider",
+                }
+        with self.assertRaisesRegex(ValueError,"provider kind"):
+            self.ledger.reconcile(
+                "tenant-A", "pilot-001", "payment-001",
+                source=InvalidProvider())
+        self.assertEqual(self.ledger.event("tenant-A","pilot-001","payment-001")[
+            "state"],"REPORTED")
+
+    def test_external_receipt_amount_requires_exact_int_not_float_or_bool(self):
+        self.report()
+        for malformed in (79000.0, "79000"):
+            with self.subTest(amount=malformed), self.assertRaisesRegex(
+                    ValueError,"does not match"):
+                self.ledger.reconcile(
+                    "tenant-A","pilot-001","payment-001",
+                    source=Provider(amount=malformed))
+        self.assertEqual(self.ledger.event("tenant-A","pilot-001","payment-001")[
+            "state"],"REPORTED")
+        self.report(event_id="payment-one-cent",amount_cents=1)
+        with self.assertRaisesRegex(ValueError,"does not match"):
+            self.ledger.reconcile(
+                "tenant-A","pilot-001","payment-one-cent",
+                source=Provider(amount=True))
+        self.assertEqual(self.ledger.event(
+            "tenant-A","pilot-001","payment-one-cent")["state"],"REPORTED")
+
     def test_restart_recovers_reported_events_without_recreating_receipt(self):
         self.report()
         second=PilotLedger(SalesWorkspace(Path(self.tmp.name)/"sales.db"))

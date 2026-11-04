@@ -50,3 +50,24 @@ infrastructure, external customer, or production-deployment certification.
   and restoration tests. Passing unit/CI tests alone does not prove these.
 
 The production readiness gate stays **BLOCKED** pending these facts.
+
+## Additional pilot-ledger validation repairs (2026-11-04)
+
+A separate review of the commercial evidence ledger found three small
+input-validation defects, independent of the Dittofeed connector:
+
+1. An explicitly supplied `occurred_at=""`, `False` or `0` was
+   silently treated like an omitted timestamp, and replaced with the
+   current time. Only `None` now means "generate current time".
+2. A malformed non-string event kind or unhashable provider kind could
+   trigger an uncontrolled `TypeError` instead of the documented
+   validation failure.
+3. An externally supplied amount of `79000.0` compared equal to the
+   integer `79000`, and Boolean `True` compared equal to a one-cent
+   integer. Such provider receipts must not confirm a financial event.
+   The verified amount now requires `type(amount_cents) is int`.
+
+Regression tests assert these invalid inputs do not create or confirm
+commercial observations. No new payment processor, receipt validator or
+automated attribution mechanism is implied. Independent, trusted
+provider evidence and real commercial verification remain mandatory.
