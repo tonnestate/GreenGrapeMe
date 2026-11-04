@@ -52,7 +52,11 @@ const document = {
 };
 const sessionStorage = {
   removed: [],
-  removeItem(key) { this.removed.push(key); },
+  blocked: false,
+  removeItem(key) {
+    if (this.blocked) throw new Error("Browser storage refused access");
+    this.removed.push(key);
+  },
   getItem() { return null; },
 };
 const response = (body, status = 200) => ({
@@ -223,8 +227,16 @@ async function run() {
   assert.equal(element("company-details").children.length, 0);
   assert.ok(sessionStorage.removed.includes("gg-oidc-pkce-transaction"));
 
+  // Browser storage failures must not interrupt the security-critical purge.
+  state.token = "stale-token";
+  state.tenant = "tenant-next";
+  element("company-details").children = [new Element("private-detail")];
+  sessionStorage.blocked = true;
   logout();
+  assert.equal(state.token, null);
+  assert.equal(state.tenant, "");
   assert.equal(element("company-details").hidden, true);
+  assert.equal(element("company-details").children.length, 0);
   console.log("PASS GreenGrapeMe SaaS client tenant-isolation regression");
 }
 
