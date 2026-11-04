@@ -103,6 +103,24 @@ class CalendarBookings:
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS u_calendar_dispatch_event
                     ON sales_calendar_dispatch_attempts(tenant,provider_event_id);
+                    CREATE TABLE IF NOT EXISTS sales_calendar_cancellation_attempts (
+                        tenant TEXT NOT NULL, pilot_id TEXT NOT NULL,
+                        case_id TEXT NOT NULL, booking_id TEXT NOT NULL,
+                        provider_event_id TEXT NOT NULL, event_id TEXT NOT NULL,
+                        intent_sha256 TEXT NOT NULL,
+                        original_receipt_id TEXT NOT NULL,
+                        permission_ref TEXT NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN (
+                            'DISPATCH_UNCERTAIN','HTTP_ACCEPTED_UNVERIFIED',
+                            'CANCELLED_CONFIRMED')),
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                        PRIMARY KEY(tenant,pilot_id,case_id,booking_id),
+                        FOREIGN KEY(tenant,pilot_id,case_id,booking_id)
+                          REFERENCES sales_pilot_appointments
+                          (tenant,pilot_id,case_id,booking_id)
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS u_calendar_cancel_event
+                    ON sales_calendar_cancellation_attempts(tenant,provider_event_id);
                 """)
             elif db.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -323,6 +341,20 @@ class CalendarBookings:
                     SET state=?,updated_at=?
                     WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
                 """, (state,self.store._now(),tenant,pilot_id,case_id,booking_id))
+            if state == "CANCELLED_CONFIRMED":
+                cancellation = db.execute("""
+                    SELECT provider_event_id FROM sales_calendar_cancellation_attempts
+                    WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+                """, (tenant,pilot_id,case_id,booking_id)).fetchone()
+                if cancellation:
+                    if (provider != "GOOGLE_CALENDAR" or
+                            cancellation["provider_event_id"] != event_id):
+                        raise ValueError("verified cancellation event identity changed")
+                    db.execute("""
+                        UPDATE sales_calendar_cancellation_attempts
+                        SET state='CANCELLED_CONFIRMED',updated_at=?
+                        WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
+                    """, (self.store._now(),tenant,pilot_id,case_id,booking_id))
             self.store._audit(
                 db,tenant,old["opportunity_id"],"APPOINTMENT_PROVIDER_VERIFIED",
                 {"pilot_id":pilot_id,"case_id":case_id,"booking_id":booking_id,
