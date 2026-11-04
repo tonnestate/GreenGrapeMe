@@ -129,3 +129,31 @@ A malformed SQLite BLOB could interrupt batch progression with
 `BLOCKED_SOURCE_REVISION`. The validator now returns `False` for
 non-text sources, stopping research and canonical admission without
 executing new external actions. Regression tests cover both cases.
+
+## Discovery single-account source revocation and malformed SQLite data (2026-11-04)
+
+The multi-batch discovery worker already rechecked `allowed_existing_jobs`
+before later research/admission steps. The original single-mission pathway
+(up to 25 sourced accounts) checked the host's StarFruitMe job binding only
+in `QUEUED`, `SOURCE_READY` and `SOURCE_DONE`. Once the job reached
+`AWAITING_BLACKBERRY`, `AWAITING_CANONICAL_WORK` or `ADMITTED`,
+revocation of that binding was not considered before another external call.
+An unauthorized continuation could thus reach account research, canonical
+MangoMe work admission or model processing.
+
+The single-mission worker now checks the current authorized existing job
+binding at all three downstream states **before** entering any downstream
+stage, transitioning an unauthorized job to `BLOCKED_SOURCE_POLICY` with
+`EXISTING_SOURCE_JOB_ACCESS_REVOKED`. Tests cover revocation prior to
+BlackberryMe, MangoMe and Neuron execution, and verify no new calls.
+
+The same pathway formerly called `.encode()` on unchecked SQLite
+`opportunities.source_json` values at two source-revision checkpoints.
+Both now reject non-string values and mark the job
+`BLOCKED_SOURCE_REVISION` instead of raising `AttributeError`.
+The blocking behavior is tested against a corrupt SQLite BLOB.
+
+These checks protect **stage entry** and do not establish a distributed
+authorization transaction across external calls. Separately deployed donor
+hosts remain responsible for independently enforcing revocation at their
+actual operation boundary.
