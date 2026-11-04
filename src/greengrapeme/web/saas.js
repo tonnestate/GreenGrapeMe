@@ -5,7 +5,8 @@
 // textContent; token/tenant claims never bypass backend authorization.
 const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
-                role: "", companyOffset: 0, companyTotal: 0 };
+                role: "", companyOffset: 0, companyTotal: 0, generation: 0,
+                companyQueryRevision: 0, crmQueryRevision: 0 };
 const LOGIN_TRANSACTION = "gg-oidc-pkce-transaction";
 const PAGE_SIZE = 40;
 
@@ -14,6 +15,13 @@ function say(message, login = false) {
   target.textContent = String(message || "");
 }
 function value(id) { return $(id).value.trim(); }
+// An old tenant's response must never mutate a newer tenant's DOM.
+class StaleContextError extends Error {
+  constructor() { super("Veraltete Sitzung oder Mandantenanfrage verworfen."); }
+}
+function assertGeneration(generation) {
+  if (generation !== state.generation) throw new StaleContextError();
+}
 function base64url(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -30,7 +38,10 @@ function expired() {
   return !state.token || Date.now() >= state.expiresAt;
 }
 function headers(write = false) {
-  if (expired()) throw new Error("Die Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+  if (expired()) {
+    logout();
+    throw new Error("Die Anmeldung ist abgelaufen. Bitte erneut anmelden.");
+  }
   if (!state.tenant) throw new Error("Bitte zuerst einen Mandanten öffnen.");
   const result = {
     "Authorization": "Bearer " + state.token,
@@ -40,19 +51,24 @@ function headers(write = false) {
   return result;
 }
 async function api(path, { method = "GET", body = null } = {}) {
+  const requestHeaders = headers(method !== "GET");
+  const generation = state.generation;
+  const tenant = state.tenant;
+  const token = state.token;
   const response = await fetch(path, {
-    method, headers: headers(method !== "GET"),
+    method, headers: requestHeaders,
     ...(body !== null ? { body: JSON.stringify(body) } : {}),
     cache: "no-store", credentials: "omit", redirect: "error",
   });
+  assertGeneration(generation);
   const result = await response.json().catch(() => ({}));
+  assertGeneration(generation);
+  if (state.tenant !== tenant || state.token !== token) {
+    throw new StaleContextError();
+  }
   if (response.status === 401) {
-    state.token = null;
-    state.expiresAt = 0;
-    $("workspace").hidden = true;
-    $("login").hidden = false;
-    $("tenant-form").hidden = true;
-    $("login-button").hidden = false;
+    logout();
+    say("Sitzung abgelaufen. Bitte neu anmelden.", true);
     throw new Error("Sitzung abgelaufen. Bitte neu anmelden.");
   }
   if (!response.ok) {
@@ -138,6 +154,7 @@ async function receiveAuthorizationCode() {
   form.set("code", code);
   form.set("redirect_uri", state.config.redirect_uri);
   form.set("code_verifier", txn.verifier);
+  const loginGeneration = state.generation;
   const response = await fetch(state.config.token_endpoint, {
     method: "POST", body: form,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -145,6 +162,7 @@ async function receiveAuthorizationCode() {
   });
   if (!response.ok) throw new Error("OIDC-Codetausch fehlgeschlagen.");
   const tokens = await response.json();
+  assertGeneration(loginGeneration);
   if (typeof tokens.access_token !== "string" ||
       tokens.access_token.length < 16 ||
       String(tokens.token_type || "").toLowerCase() !== "bearer" ||
@@ -192,21 +210,27 @@ function renderView(id) {
     });
 }
 async function overview() {
+  const generation = state.generation;
   const [report, pilots] = await Promise.all([
     api("/api/overview"), api("/api/pilots"),
   ]);
+  assertGeneration(generation);
   $("metric-companies").textContent = report.opportunities ?? "–";
   $("metric-work").textContent = report.work_items ?? "–";
   $("metric-missions").textContent = report.missions ?? "–";
   $("metric-pilots").textContent = pilots.items?.length ?? "–";
 }
 async function companies() {
+  const generation = state.generation;
+  const revision = ++state.companyQueryRevision;
   const query = value("company-query");
   const params = new URLSearchParams({
     q: query, limit: String(PAGE_SIZE),
     offset: String(state.companyOffset),
   });
   const report = await api("/api/companies?" + params.toString());
+  assertGeneration(generation);
+  if (revision !== state.companyQueryRevision) return;
   state.companyTotal = report.total || 0;
   const out = $("companies-list");
   out.replaceChildren();
@@ -222,7 +246,9 @@ async function companies() {
     button.textContent = "Öffnen";
     button.addEventListener("click", async () => {
       try {
+        assertGeneration(generation);
         const detail = await api("/api/company?id=" + encodeURIComponent(item.opportunity_id));
+        assertGeneration(generation);
         const target = $("company-details");
         target.replaceChildren();
         const heading = document.createElement("h3");
@@ -233,7 +259,11 @@ async function companies() {
         text.style.overflowWrap = "anywhere";
         target.append(heading, text);
         target.hidden = false;
-      } catch (error) { say(error.message); }
+      } catch (error) {
+        if (generation === state.generation && !(error instanceof StaleContextError)) {
+          say(error.message);
+        }
+      }
     });
     cell.appendChild(button);
     tr.appendChild(cell);
@@ -249,7 +279,9 @@ async function companies() {
   $("companies-next").disabled = state.companyOffset + PAGE_SIZE >= state.companyTotal;
 }
 async function discovery() {
+  const generation = state.generation;
   const result = await api("/api/discovery-jobs");
+  assertGeneration(generation);
   const out = $("discovery-list");
   out.replaceChildren();
   for (const item of result.items || []) {
@@ -262,7 +294,9 @@ async function discovery() {
   if (!result.items?.length) emptyRow(out, 4, "Noch keine Discovery-Aufträge.");
 }
 async function pilots() {
+  const generation = state.generation;
   const result = await api("/api/pilots");
+  assertGeneration(generation);
   const out = $("pilots-list");
   out.replaceChildren();
   for (const item of result.items || []) {
@@ -281,6 +315,8 @@ async function pilots() {
   if (!result.items?.length) emptyRow(out, 6, "Noch keine Pilotprojekte.");
 }
 async function crmWorklist() {
+  const generation = state.generation;
+  const revision = ++state.crmQueryRevision;
   const pilot = value("crm-pilot-id");
   if (!pilot) throw new Error("Bitte eine Pilot-ID eingeben.");
   const filter = "?pilot=" + encodeURIComponent(pilot);
@@ -298,6 +334,8 @@ async function crmWorklist() {
     api("/api/pilot-followups" + filter),
     api("/api/pilot-appointments" + filter),
   ]);
+  assertGeneration(generation);
+  if (revision !== state.crmQueryRevision) return;
   const casesBody = $("crm-case-list");
   const dueBody = $("crm-followup-list");
   const appointmentBody = $("crm-appointments-list");
@@ -338,6 +376,7 @@ async function crmWorklist() {
     String(appointments.total ?? 0) + " Kalendertermine (maximal 100 angezeigt; Buchung nur nach unabhängiger Providerbestätigung)";
 }
 function clearCrmWorklist() {
+  state.crmQueryRevision += 1;
   $("crm-pilot-id").value = "";
   $("crm-case-list").replaceChildren();
   $("crm-followup-list").replaceChildren();
@@ -350,18 +389,48 @@ function clearCrmWorklist() {
                     "appointment-start", "appointment-end"]) $(id).value = "";
 }
 
+// Destroy all tenant-derived DOM and draft form values before another
+// identity is admitted. Hidden views are not a safe data isolation boundary.
+function clearTenantWorkspace() {
+  state.companyOffset = 0;
+  state.companyTotal = 0;
+  state.companyQueryRevision += 1;
+  for (const id of ["metric-companies", "metric-work",
+                    "metric-missions", "metric-pilots"]) $(id).textContent = "–";
+  for (const id of ["companies-list", "discovery-list", "pilots-list"]) {
+    $(id).replaceChildren();
+  }
+  $("companies-count").textContent = "";
+  $("companies-page").textContent = "";
+  $("companies-prev").disabled = true;
+  $("companies-next").disabled = true;
+  $("company-details").replaceChildren();
+  $("company-details").hidden = true;
+  clearCrmWorklist();
+  for (const form of document.querySelectorAll("#workspace form")) form.reset();
+  $("app-feedback").textContent = "";
+  $("workspace-info").textContent = "";
+}
+
 async function openTenant(event) {
   event.preventDefault();
+  const proposed = value("tenant-id");
+  const attempt = ++state.generation;
+  // Fence previous async reads before the first await or any new authorization.
+  $("workspace").hidden = true;
+  $("login").hidden = false;
+  clearTenantWorkspace();
+  state.tenant = "";
+  state.role = "";
   try {
     if (expired()) throw new Error("Bitte erneut anmelden.");
-    const proposed = value("tenant-id");
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{1,79}$/.test(proposed)) {
       throw new Error("Ungültige Mandantenkennung.");
     }
     state.tenant = proposed;
     const me = await api("/api/me");
+    assertGeneration(attempt);
     state.role = me.role || "";
-    clearCrmWorklist();
     // Do not expose the workspace until initial tenant-scoped queries pass.
     // An authorization failure must leave the previous tenant's view closed.
     $("workspace").hidden = true;
@@ -380,17 +449,21 @@ async function openTenant(event) {
     $("payment-form").hidden = !finance;
     renderView("companies-view");
     await Promise.all([overview(), companies()]);
+    assertGeneration(attempt);
     $("login").hidden = true;
     $("workspace").hidden = false;
     $("auth-status").textContent = "Mandant: " + proposed;
     say("");
   } catch (error) {
+    // Another login or logout may already own the DOM. Do not undo it.
+    if (attempt !== state.generation) return;
+    state.generation += 1;
     state.tenant = "";
     state.role = "";
     $("workspace").hidden = true;
     $("login").hidden = false;
     $("company-details").hidden = true;
-    clearCrmWorklist();
+    clearTenantWorkspace();
     $("auth-status").textContent = "Mandant nicht geöffnet";
     say(error.message, true);
   }
@@ -398,11 +471,17 @@ async function openTenant(event) {
 function onForm(id, operation) {
   $(id).addEventListener("submit", async (event) => {
     event.preventDefault();
+    const generation = state.generation;
     try {
       const message = await operation();
+      assertGeneration(generation);
       say(message || "Vorgang gespeichert.");
       await overview();
-    } catch (error) { say(error.message); }
+    } catch (error) {
+      if (generation === state.generation && !(error instanceof StaleContextError)) {
+        say(error.message);
+      }
+    }
   });
 }
 function integers(id) {
@@ -411,6 +490,7 @@ function integers(id) {
   return n;
 }
 function logout() {
+  state.generation += 1;
   state.token = null;
   state.expiresAt = 0;
   state.tenant = "";
@@ -422,6 +502,7 @@ function logout() {
   $("auth-status").textContent = "Nicht angemeldet";
   $("company-details").hidden = true;
   clearCrmWorklist();
+  clearTenantWorkspace();
   say("Lokale Sitzung beendet; eine IdP-Sitzung muss ggf. separat beendet werden.", true);
 }
 async function main() {
