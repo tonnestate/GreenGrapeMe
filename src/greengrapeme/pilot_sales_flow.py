@@ -95,7 +95,7 @@ class PilotSalesFlow:
         case_id = _id(case_id, "case_id")
         reporter_ref = _id(reporter_ref, "reporter_ref")
         evidence_ref = _reference(evidence_ref)
-        if channel not in _CHANNELS:
+        if not isinstance(channel, str) or channel not in _CHANNELS:
             raise ValueError("inbound origin must be an existing authorized business source")
         if not isinstance(company_name, str) or not 1 <= len(company_name.strip()) <= 160:
             raise ValueError("invalid company name")
@@ -168,7 +168,10 @@ class PilotSalesFlow:
         step_id=_id(step_id,"step_id")
         reporter_ref=_id(reporter_ref,"reporter_ref")
         evidence_ref=_reference(evidence_ref)
-        if expected_state not in _STEPS or to_state not in _STEPS.get(expected_state,set()):
+        if (not isinstance(expected_state, str) or
+                not isinstance(to_state, str) or
+                expected_state not in _STEPS or
+                to_state not in _STEPS[expected_state]):
             raise ValueError("unsupported sales case transition")
         due = _future_date(followup_at) if to_state=="FOLLOWUP_SCHEDULED" else None
         if to_state!="FOLLOWUP_SCHEDULED" and followup_at:
@@ -199,6 +202,7 @@ class PilotSalesFlow:
                 WHERE tenant=? AND opportunity_id=?""",
                 (tenant,current["opportunity_id"])).fetchone()
             if (not linked or linked["offer_id"] != pilot["offer_id"] or
+                    not isinstance(linked["source_json"], str) or
                     hashlib.sha256(linked["source_json"].encode()).hexdigest() != current["source_sha256"]):
                 raise ValueError("original inbound opportunity source changed")
             now=self.store._now()
@@ -270,7 +274,7 @@ class PilotSalesFlow:
         items = []
         for row in rows:
             suppressed = row["suppressed_id"] is not None
-            source_current = (row["source_json"] is not None
+            source_current = (isinstance(row["source_json"], str)
                 and row["offer_id"] == pilot["offer_id"]
                 and hashlib.sha256(row["source_json"].encode()).hexdigest()
                     == row["source_sha256"])
