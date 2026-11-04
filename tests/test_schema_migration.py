@@ -57,7 +57,7 @@ class MigrationTests(unittest.TestCase):
             self.legacy)["uninitialized_optional_tables"])
         result = migrate_database(self.legacy, self.upgraded)
         self.assertEqual(result["from_schema_version"], 0)
-        self.assertEqual(result["to_schema_version"], 2)
+        self.assertEqual(result["to_schema_version"], 3)
         self.assertTrue(result["source_unchanged"])
         self.assertFalse(result["overwrote_existing_database"])
         self.assertEqual(result["schema_integrity"], "ok")
@@ -65,9 +65,9 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse(result["production_ready"])
         self.assertEqual(self.legacy.read_bytes(), before)
         self.assertEqual(verify_database(self.legacy)["user_version"], 0)
-        self.assertEqual(verify_database(self.upgraded)["user_version"], 2)
+        self.assertEqual(verify_database(self.upgraded)["user_version"], 3)
         self.assertEqual(self._scalar(self.upgraded,
-            "SELECT max(version) FROM greengrapeme_schema_migrations"), 2)
+            "SELECT max(version) FROM greengrapeme_schema_migrations"), 3)
         upgraded = SalesWorkspace(self.upgraded, bootstrap=False,
                                  require_operational=True)
         self.assertEqual(upgraded.overview("tenant-a")["opportunities"], 1)
@@ -135,10 +135,10 @@ class MigrationTests(unittest.TestCase):
             "operation"], "COPY_FORWARD_SCHEMA_MIGRATION")
         next_path = self.root / "saas-v1-second.sqlite"
         result = migrate_database(self.upgraded, next_path)
-        self.assertEqual(result["from_schema_version"], 2)
-        self.assertEqual(result["to_schema_version"], 2)
+        self.assertEqual(result["from_schema_version"], 3)
+        self.assertEqual(result["to_schema_version"], 3)
         self.assertEqual(self._scalar(next_path,
-            "SELECT max(version) FROM greengrapeme_schema_migrations"), 2)
+            "SELECT max(version) FROM greengrapeme_schema_migrations"), 3)
         self.assertEqual(self._scalar(next_path,
             "SELECT count(*) FROM dittofeed_provider_attempts"), 1)
 
@@ -156,12 +156,12 @@ class MigrationTests(unittest.TestCase):
             self.legacy,"SELECT count(*) FROM dittofeed_provider_attempts")
         upgraded = migrate_database(self.legacy,self.upgraded)
         self.assertEqual(upgraded["from_schema_version"],1)
-        self.assertEqual(upgraded["to_schema_version"],2)
+        self.assertEqual(upgraded["to_schema_version"],3)
         self.assertEqual(verify_database(self.legacy)["user_version"],1)
         self.assertIn("sales_pilot_appointments",
                       verify_database(self.legacy)["uninitialized_optional_tables"])
         self.assertEqual(self._scalar(self.upgraded,
-            "SELECT count(*) FROM greengrapeme_schema_migrations"),2)
+            "SELECT count(*) FROM greengrapeme_schema_migrations"),3)
         self.assertEqual(self._scalar(self.upgraded,
             "SELECT version FROM greengrapeme_schema_migrations "
             "WHERE applied_at='2026-11-04T08:00:00+00:00'"),1)
@@ -184,7 +184,7 @@ class MigrationTests(unittest.TestCase):
             writer.commit()
             self.assertTrue(Path(str(self.legacy)+"-wal").exists())
             result = migrate_database(self.legacy, self.upgraded)
-        self.assertEqual(result["to_schema_version"], 2)
+        self.assertEqual(result["to_schema_version"], 3)
         self.assertEqual(self._scalar(self.upgraded,
             "SELECT count(*) FROM audit WHERE event='WAL_COMMITTED'"), 1)
 
