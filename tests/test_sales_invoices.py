@@ -342,7 +342,7 @@ class SalesInvoiceTests(unittest.TestCase):
     def test_credit_schema_is_checked_on_backup_verification(self):
         self.prepare();self.confirm();self.credit_prepare();self.credit_confirm()
         verified=verify_database(self.path)
-        self.assertEqual(verified["user_version"],7)
+        self.assertEqual(verified["user_version"],8)
         self.assertIn("sales_customer_credit_notes",
                       verified["schema_tables_verified"])
         self.assertEqual(release_audit(self.path)[
