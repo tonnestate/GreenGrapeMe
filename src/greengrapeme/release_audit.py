@@ -18,7 +18,7 @@ _REQUIRED_OPERATIONS_TABLES = frozenset({
     "saas_tenants", "saas_memberships",
     "sales_pilots", "sales_pilot_events", "sales_pilot_cases",
     "sales_pilot_case_steps", "sales_pilot_reply_effects",
-    "sales_pilot_appointments",
+    "sales_pilot_appointments", "sales_calendar_dispatch_attempts",
     "sales_missions", "sales_mission_steps", "sales_mission_accounts",
     "discovery_product_jobs", "dittofeed_sync_outbox",
     "dittofeed_pomelo_effects", "dittofeed_provider_attempts",
@@ -28,6 +28,9 @@ _REQUIRED_OPERATIONS_TABLES = frozenset({
 # A queued job, reported financial observation or normal review backlog is
 # not by itself proof of an external effect and is NOT silently discarded.
 _UNCERTAIN_STATES = {
+    "sales_calendar_dispatch_attempts": (
+        "DISPATCH_UNCERTAIN", "HTTP_ACCEPTED_UNVERIFIED",
+    ),
     "sales_pilot_reply_effects": (
         "DISPATCH_IN_FLIGHT", "DISPATCH_UNCERTAIN",
     ),
