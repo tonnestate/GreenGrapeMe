@@ -94,3 +94,20 @@ reference and delete the event from inside a simulated external
 
 This protects the local SQLite state transition, not trust in the external
 provider, operational database ACLs or the truth of a third-party receipt.
+
+## Inbound case / follow-up operator queue integrity (2026-11-04)
+
+The local operator follow-up queue and human sales-case transition both
+calculated a stored opportunity source hash using `source_json.encode()`
+without first verifying the SQLite value was a string. An externally
+revised/corrupted source stored as a BLOB could cause `AttributeError`
+in a read-only due-followup listing (affecting the entire list) or while
+recording a case step.
+
+Both paths now fail closed: a scheduled follow-up with a non-text source
+is returned as `BLOCKED_SOURCE_REVISION`, preserving the other queue
+items without authorizing contact, while a transition fails with a
+controlled `ValueError` and no PilotLedger milestone. Inbound channel
+and case transition state validation additionally rejects unhashable
+inputs (lists, dictionaries) rather than allowing a Python `TypeError`
+to escape. Offline regression tests cover all of these cases.
