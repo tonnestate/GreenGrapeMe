@@ -211,7 +211,7 @@ class GoogleCalendarBookingDispatcher:
                 WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
             """, (tenant, pilot_id, case_id, booking_id)).fetchone()
             if existing:
-                if tuple(existing) != (request_hash, event_id, provider_id, permission_ref):
+                if any(existing[k] != v for k, v in {"intent_sha256": request_hash, "event_id": event_id, "provider_event_id": provider_id, "permission_ref": permission_ref}.items()):
                     raise PermissionError("calendar attempt binding changed")
                 # A concurrent worker already took the one irreversible slot.
                 return {**dict(existing), "http_post_attempted_now": False}
