@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from greengrapeme.cli import main as cli_main
 from greengrapeme.database_recovery import verify_database
@@ -176,7 +176,7 @@ class ProductionDatabaseStartupTests(unittest.TestCase):
                 "GG_ENABLE_BLACKBERRY_RESEARCH": ""}):
             with patch("greengrapeme.cli.InstalledStarFruitSource") as source:
                 with patch("greengrapeme.cli.DiscoveryJobQueue.run_next",
-                           new_callable=__import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock) as runner:
+                           new_callable=AsyncMock) as runner:
                     runner.return_value = None
                     self.assertEqual(cli_main([
                         "--db", str(self.target), "--tenant", "tenant-A",
