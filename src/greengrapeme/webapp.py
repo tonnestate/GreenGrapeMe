@@ -167,7 +167,10 @@ def serve(*, db: str, tenant: str, port: int = 8765,
     if not isinstance(token_env, str) or not token_env.isidentifier():
         raise ValueError("invalid token environment variable name")
     token = environ.get(token_env, "")
-    app = create_app(DiscoveryCatalog(SalesWorkspace(db)), tenant=tenant, token=token)
+    # A web server must not create a fresh, empty database or silently
+    # initialize missing business/authorization tables on startup.
+    store = SalesWorkspace(db, bootstrap=False, require_operational=True)
+    app = create_app(DiscoveryCatalog(store), tenant=tenant, token=token)
     with make_server(host, port, app) as server:
         print(f"GreenGrapeMe local Discovery UI: http://{host}:{port}/")
         server.serve_forever()
