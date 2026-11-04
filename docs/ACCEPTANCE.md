@@ -195,3 +195,29 @@ These guards are local evidence-integrity controls, not a live banking
 integration, a contractual price schedule or legal account identity
 verification. The release gate stays open until the external authorities
 and cost/invoice mapping are actually deployed and verified.
+
+## Financial receipt identity: explicit provider claims must agree (2026-11-04)
+
+The independent accounting/bank receipt contract checks kind, amount,
+currency and original evidence reference. A review found that the verifier
+silently ignored **additional explicit binding data** when supplied:
+a bank adapter could return an otherwise matching receipt carrying
+`tenant=other`, `pilot_id=other`, `event_id=other`,
+`opportunity_id=other` or a contradictory event occurrence timestamp,
+and the event could still be marked `SOURCE_CONFIRMED`.
+
+The local reconciliation boundary now fails closed whenever an explicitly
+provided receipt field contradicts the immutable source event.
+`tenant`, `pilot_id`, `event_id`, `opportunity_id` and
+`occurred_at` must match exactly, including correct types and a null
+opportunity for platform payments. An omitted optional field preserves
+compatibility with existing minimal independent receipts; omission is
+**not** treated as evidence that the provider authenticated that field.
+Negative regressions cover each foreign binding and a cross-account
+customer payment; a correctly bound receipt still confirms.
+
+**Remaining critical G5 limitation:** the hosted bank/accounting adapter
+must independently authenticate the provider and bind receipts to its
+real financial account, payer/invoice and tenant. Minimal legacy
+receipts do not prove recipient or contractual attribution. This
+change cannot by itself deliver production-ready accounting.
