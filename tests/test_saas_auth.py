@@ -270,6 +270,46 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertEqual(body, {"error": "forbidden"})
         self.assertNotIn("suppressed", json.dumps(body))
 
+    def test_saas_operator_handoffs_existing_discovery_account_without_contact(self):
+        from greengrapeme.pilot_metrics import PilotLedger
+
+        PilotLedger(self.store).create(
+            "tenant-a", "pilot-0009", "offer", "Source Pilot",
+            monthly_fee_cents=10000)
+        data = {
+            "pilot_id": "pilot-0009", "case_id": "prospect-0001",
+            "opportunity_id": "shared-company",
+            "evidence_ref": "https://example.org/alpha",
+        }
+        code, _, _ = self.request(
+            path="/api/pilot-discovery", method="POST", payload=data)
+        self.assertTrue(code.startswith("403"))  # viewer cannot adopt
+        self.members.grant("tenant-a", self.alice, "operator")
+        code, result, _ = self.request(
+            path="/api/pilot-discovery", method="POST",
+            payload=data, origin=ORIGIN)
+        self.assertTrue(code.startswith("202"), (code, result))
+        self.assertEqual(result["state"], "PROSPECT_REVIEW")
+        self.assertEqual(result["reported_channel"], "DISCOVERY")
+        self.assertEqual(result["contact_authority"], "NONE")
+        self.assertEqual(result["external_actions_executed"], 0)
+        code, repeated, _ = self.request(
+            path="/api/pilot-discovery", method="POST", payload=data)
+        self.assertTrue(code.startswith("202"), (code, repeated))
+        self.assertEqual(repeated["opportunity_id"], result["opportunity_id"])
+        code, _, _ = self.request(
+            path="/api/pilot-discovery", method="POST",
+            payload={**data, "evidence_ref": "urn:wrong:source:reference"})
+        self.assertTrue(code.startswith("400"))
+        code, _, _ = self.request(
+            path="/api/pilot-discovery", method="POST",
+            payload=data, tenant="tenant-b")
+        self.assertTrue(code.startswith("403"))
+        code, listing, _ = self.request(
+            path="/api/pilot-cases", params={"pilot": "pilot-0009"})
+        self.assertTrue(code.startswith("200"), listing)
+        self.assertEqual(listing["total"], 1)
+
     def test_post_malformed_payload_and_origin_fail_closed(self):
         self.members.grant("tenant-a", self.alice, "operator")
         for bad in ([], None, {"pilot_id":"x"}, {"unexpected":1}):
