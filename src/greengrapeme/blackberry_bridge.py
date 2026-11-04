@@ -184,7 +184,11 @@ class BlackberryReviewStore:
                 or any(c not in "0123456789abcdef"
                        for c in expected_source_sha256)):
             raise ValueError("invalid source sha256 for Blackberry review")
-        data = json.dumps(review.__dict__, sort_keys=True)
+        # The downstream SalesMissionEngine must be able to verify that an
+        # optional research receipt belongs to its exact immutable source.
+        data = json.dumps({**review.__dict__,
+                           "source_sha256": expected_source_sha256},
+                          sort_keys=True)
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT source_json,status FROM opportunities
