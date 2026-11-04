@@ -52,3 +52,14 @@ PYTHONPATH=src python -m greengrapeme.cli --db sales.db --tenant <host-tenant-id
 Localhost-API (vorhandener 24+-Zeichen-Token erforderlich): `GET /api/pilot-followups?pilot=pilot-0001&limit=100`. Die Antwort liefert `items`, `total`, `count_shown`, `as_of`, `operator_review_only=true`, `outbound_authorized=false`. Der Browser/HTTP-Aufruf sendet keine Nachrichten, erzeugt keine Follow-up-Aktionen und erteilt keine neuen Rechte. Für reales Kundenkontakt-Handling bleiben unabhängige Permission-/Suppression-/PomeloMe-Prüfungen am tatsächlichen Effektpunkt erforderlich.
 
 Offline-Regressionen: UTC-Fälligkeit und Sortierung, begrenzte Ergebnisgröße, Tenant-Isolation, Sperren/Quellenrevision, Abschluss ohne Versand, CLI und tokenpflichtige API. Ein produktiver Kalender oder tatsächliche Kontaktbearbeitung ist damit **nicht** nachgewiesen.
+
+
+## Quellengebundene Übergabe Discovery → CRM (04.11.2026)
+
+Bereits von StarFruitMe/KIGOR übernommene und in `SalesWorkspace` gespeicherte Opportunities lassen sich jetzt explizit einem vorhandenen Pilot zuordnen. `PilotSalesFlow.adopt_sourced_case` verwendet **dieselbe** Opportunity-Identität, validiert im Transaktions-Lock Mandant, Angebot, Quell-JSON, den exakten vorhandenen Quellenbeleg und Opt-out/Suppression. Eine Opportunity kann innerhalb eines Mandanten nicht mehrfach auf unterschiedliche CRM-Fälle verteilt werden; exakte Wiederholungen sind idempotent. Quelländerungen verhindern die Übernahme bzw. weitere Zustandsübergänge.
+
+API: Ein mit OIDC authentifizierter `operator` oder `admin` darf `POST /api/pilot-discovery` mit `pilot_id`, `case_id`, `opportunity_id` und `evidence_ref` aufrufen. Die SaaS-CRM-Ansicht stellt diesen Vorgang bereit. Der neue Status lautet `PROSPECT_REVIEW`, der Ursprung `DISCOVERY`. Der Operator kann nach tatsächlicher manueller Prüfung einen berichteten `QUALIFIED_REPORTED`-Schritt dokumentieren; das ist noch keine unabhängige Identitäts-, Termin- oder Umsatzbestätigung.
+
+**Entscheidende Trennung:** Ein Discovery-Prospect ist **keine eingegangene Kundenanfrage** und erhält keine Kommunikationsbefugnis. `ReplyEffects.prepare`, die erneute Quellprüfung vor Dispatch und der transaktionale Pre-Dispatch-Fence akzeptieren nur die explizit anerkannten Inbound-Kanäle. Auch nach manueller Qualifizierung eines Discovery-Prospects ist diese Reply-Brücke für den Prospect gesperrt. Fällige Prospect-Wiedervorlagen tragen `PROSPECT_REVIEW_NO_CONTACT_AUTHORITY` statt einer Kontaktaufforderung. Ein später tatsächlich autorisierter Outbound-Kampagnenweg muss separat über die kanalspezifische Rechts-/Host-Prüfung und PomeloMe-Effects implementiert und live abgenommen werden.
+
+Dieser Slice schließt die Daten- und CRM-Prozesslücke, **nicht** G2 (rechtmäßig autorisierter Outbound), G3 (echte Kalenderbuchung) oder G4/G5 (Vertrag/Zahlung). Er erzeugt keine Provider-Aufrufe.
