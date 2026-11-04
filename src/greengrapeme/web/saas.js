@@ -167,10 +167,11 @@ function emptyRow(tbody, columns, message) {
   tbody.appendChild(row);
 }
 function euro(cents) {
-  if (!Number.isSafeInteger(Number(cents))) return "–";
+  // Missing financial evidence is not a verified zero amount.
+  if (typeof cents !== "number" || !Number.isSafeInteger(cents)) return "–";
   return new Intl.NumberFormat("de-DE", {
     style: "currency", currency: "EUR",
-  }).format(Number(cents) / 100);
+  }).format(cents / 100);
 }
 function renderView(id) {
   const views = ["companies-view", "discovery-view", "pilots-view",
