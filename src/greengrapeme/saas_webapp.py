@@ -305,6 +305,11 @@ def create_saas_app(
         except LookupError:
             return _reply(start_response, "404 Not Found",
                           {"error": "not_found"})
+        except PermissionError:
+            # A domain suppression/consent refusal is an expected denied
+            # operation, never a successful effect or a server outage.
+            return _reply(start_response, "403 Forbidden",
+                          {"error": "forbidden"})
         except Exception:
             # No secret, stack trace, customer or database path to clients.
             return _reply(start_response, "500 Internal Server Error",
