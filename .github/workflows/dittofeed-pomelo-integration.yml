@@ -1,19 +1,13 @@
 name: Dittofeed + real PomeloMe integration
 
+# All business, state, source and migration changes can affect an
+# irreversible communication effect. The pinned real-PomeloMe contract
+# must run on EVERY PR and every main push, not only Dittofeed source edits.
 on:
   pull_request:
-    paths:
-      - "src/greengrapeme/dittofeed_*.py"
-      - "integration_tests/**"
-      - ".github/workflows/dittofeed-pomelo-integration.yml"
-      - "pyproject.toml"
   push:
     branches: [main]
-    paths:
-      - "src/greengrapeme/dittofeed_*.py"
-      - "integration_tests/**"
-      - ".github/workflows/dittofeed-pomelo-integration.yml"
-      - "pyproject.toml"
+  workflow_dispatch:
 
 permissions:
   contents: read
