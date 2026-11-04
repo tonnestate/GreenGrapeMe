@@ -164,6 +164,27 @@ class BrowserTests(unittest.TestCase):
         self.assertLess(callback.index("sessionStorage.removeItem(LOGIN_TRANSACTION)"),
                         callback.index("counts.some((count) => count > 1)"))
 
+    def test_crm_cockpit_reads_real_case_and_due_followup_apis(self):
+        html = self.get("/")["body"].decode()
+        js = self.get("/saas.js")["body"].decode()
+        for field in ("crm-case-filter", "crm-pilot-id", "crm-case-list",
+                      "crm-followup-list", "crm-case-count", "crm-followup-count"):
+            self.assertIn('id="' + field + '"', html)
+        crm = js[js.index("async function crmWorklist() {"):
+                 js.index("function clearCrmWorklist() {")]
+        self.assertIn('api("/api/pilot-cases" + filter)', crm)
+        self.assertIn('api("/api/pilot-followups" + filter)', crm)
+        self.assertIn('encodeURIComponent(pilot)', crm)
+        self.assertIn("await Promise.all(", crm)
+        self.assertIn("item.suppressed", crm)
+        self.assertIn("item.review_state", crm)
+        self.assertNotIn('method: "POST"', crm)
+        self.assertNotIn("innerHTML", crm)
+        self.assertLess(crm.index('$("crm-case-list").replaceChildren()'),
+                        crm.index("await Promise.all("))
+        self.assertIn("clearCrmWorklist();", js[js.index("function logout() {"):
+                                               js.index("async function main() {")])
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),

@@ -280,6 +280,56 @@ async function pilots() {
   }
   if (!result.items?.length) emptyRow(out, 6, "Noch keine Pilotprojekte.");
 }
+async function crmWorklist() {
+  const pilot = value("crm-pilot-id");
+  if (!pilot) throw new Error("Bitte eine Pilot-ID eingeben.");
+  const filter = "?pilot=" + encodeURIComponent(pilot);
+  // Never retain a different pilot's cases after a failed request.
+  $("crm-case-list").replaceChildren();
+  $("crm-followup-list").replaceChildren();
+  $("crm-case-count").textContent = "";
+  $("crm-followup-count").textContent = "";
+  // The API checks the current OIDC subject and tenant membership on each read.
+  // Neither a queued follow-up nor a reported case grants contact authority.
+  const [cases, due] = await Promise.all([
+    api("/api/pilot-cases" + filter),
+    api("/api/pilot-followups" + filter),
+  ]);
+  const casesBody = $("crm-case-list");
+  const dueBody = $("crm-followup-list");
+  // Publish both lists only after both tenant-scoped requests succeed.
+  const caseRows = document.createDocumentFragment();
+  for (const item of cases.items || []) {
+    const row = document.createElement("tr");
+    for (const field of [item.case_id, item.company_name, item.state,
+      item.next_followup_at || "–",
+      item.suppressed ? "Gesperrt" : "Keine lokale Sperre"]) td(row, field);
+    caseRows.appendChild(row);
+  }
+  const dueRows = document.createDocumentFragment();
+  for (const item of due.items || []) {
+    const row = document.createElement("tr");
+    for (const field of [item.case_id, item.company_name,
+      item.next_followup_at || "–", item.review_state]) td(row, field);
+    dueRows.appendChild(row);
+  }
+  casesBody.replaceChildren(caseRows);
+  dueBody.replaceChildren(dueRows);
+  if (!cases.items?.length) emptyRow(casesBody, 5, "Keine CRM-Vorgänge.");
+  if (!due.items?.length) emptyRow(dueBody, 4, "Keine fälligen Wiedervorlagen.");
+  $("crm-case-count").textContent =
+    String(cases.total ?? 0) + " Vorgänge (maximal 100 angezeigt)";
+  $("crm-followup-count").textContent =
+    String(due.total ?? 0) + " fällige Wiedervorlagen (maximal 100 angezeigt; kein Kontaktauftrag)";
+}
+function clearCrmWorklist() {
+  $("crm-pilot-id").value = "";
+  $("crm-case-list").replaceChildren();
+  $("crm-followup-list").replaceChildren();
+  $("crm-case-count").textContent = "";
+  $("crm-followup-count").textContent = "";
+}
+
 async function openTenant(event) {
   event.preventDefault();
   try {
@@ -291,6 +341,7 @@ async function openTenant(event) {
     state.tenant = proposed;
     const me = await api("/api/me");
     state.role = me.role || "";
+    clearCrmWorklist();
     // Do not expose the workspace until initial tenant-scoped queries pass.
     // An authorization failure must leave the previous tenant's view closed.
     $("workspace").hidden = true;
@@ -317,6 +368,7 @@ async function openTenant(event) {
     $("workspace").hidden = true;
     $("login").hidden = false;
     $("company-details").hidden = true;
+    clearCrmWorklist();
     $("auth-status").textContent = "Mandant nicht geöffnet";
     say(error.message, true);
   }
@@ -347,11 +399,17 @@ function logout() {
   $("login-button").hidden = false;
   $("auth-status").textContent = "Nicht angemeldet";
   $("company-details").hidden = true;
+  clearCrmWorklist();
   say("Lokale Sitzung beendet; eine IdP-Sitzung muss ggf. separat beendet werden.", true);
 }
 async function main() {
   $("login-button").addEventListener("click", beginLogin);
   $("tenant-form").addEventListener("submit", openTenant);
+  $("crm-case-filter").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await crmWorklist(); say(""); }
+    catch (error) { say(error.message); }
+  });
   $("logout-button").addEventListener("click", logout);
   document.querySelectorAll('nav[aria-label="Produktbereiche"] button')
     .forEach((button) => button.addEventListener("click", async () => {
