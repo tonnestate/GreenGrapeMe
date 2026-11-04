@@ -76,7 +76,20 @@
         <h2 id="discovery-title">Discovery-Aufträge</h2>
         <p>Aufträge werden nur in die lokale Queue aufgenommen. Externe Recherche benötigt zusätzlich eine aktuelle Freigabe im FruitStack-Host.</p>
         <form id="discovery-form" class="discovery-form" hidden>
-          <div><label for="disc-job">Bereits autorisierte StarFruitMe-Job-ID</label><input id="disc-job" required minlength="24" maxlength="24" pattern="[0-9a-f]{24}"></div>
+          <div><label for="disc-mode">Discovery-Modus</label><select id="disc-mode"><option value="existing">Vorhandenen Job übernehmen</option><option value="new">Neuen StarFruitMe-Auftrag anlegen</option></select></div>
+          <div id="disc-existing-fields"><label for="disc-job">Bereits autorisierte StarFruitMe-Job-ID</label><input id="disc-job" required minlength="24" maxlength="24" pattern="[0-9a-f]{24}"></div>
+          <fieldset id="disc-new-fields" hidden>
+            <legend>Neue Discovery (Deutschland, WGS84)</legend>
+            <div><label for="disc-nace">NACE-Code NN.NN</label><input id="disc-nace" maxlength="5" pattern="[0-9]{2}\\.[0-9]{2}"></div>
+            <div><label for="disc-south">Südlicher Breitengrad</label><input id="disc-south" type="number" min="45" max="56" step="any"></div>
+            <div><label for="disc-west">Westlicher Längengrad</label><input id="disc-west" type="number" min="5" max="16" step="any"></div>
+            <div><label for="disc-north">Nördlicher Breitengrad</label><input id="disc-north" type="number" min="45" max="56" step="any"></div>
+            <div><label for="disc-east">Östlicher Längengrad</label><input id="disc-east" type="number" min="5" max="16" step="any"></div>
+            <div><label for="disc-seed-km">Suchradius (km, 1–50)</label><input id="disc-seed-km" type="number" min="1" max="50" step="any" value="25"></div>
+            <div><label for="disc-searches">Maximale Suchläufe (1–10)</label><input id="disc-searches" type="number" min="1" max="10" step="1" value="5"></div>
+            <div><label for="disc-terms">Zusätzliche Suchbegriffe (maximal 8, je Zeile einer)</label><textarea id="disc-terms" rows="3" maxlength="807"></textarea></div>
+            <label><input type="checkbox" id="disc-rights"> Ich bestätige, dass die erforderlichen Nutzungsrechte an den angegebenen Datenquellen vorliegen. Dies ersetzt keine Freigabe durch den FruitStack-Host.</label>
+          </fieldset>
           <div><label for="disc-offer">Angebots-ID</label><input id="disc-offer" required maxlength="160"></div>
           <div><label for="disc-objective">Vertriebsziel</label><input id="disc-objective" required maxlength="2000"></div>
           <div><label for="disc-icp">Ideales Kundenprofil</label><input id="disc-icp" required maxlength="2000"></div>

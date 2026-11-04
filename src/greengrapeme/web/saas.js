@@ -434,16 +434,62 @@ async function main() {
     state.companyOffset += PAGE_SIZE;
     try { await companies(); } catch (error) { say(error.message); }
   });
+  $("disc-mode").addEventListener("change", () => {
+    const creating = value("disc-mode") === "new";
+    $("disc-existing-fields").hidden = creating;
+    $("disc-new-fields").hidden = !creating;
+    $("disc-job").required = !creating;
+    $("disc-nace").required = creating;
+    for (const id of ["disc-south", "disc-west", "disc-north", "disc-east"]) {
+      $(id).required = creating;
+    }
+  });
   onForm("discovery-form", async () => {
+    const mode = value("disc-mode");
     const spec = {
-      mode: "existing", job_id: value("disc-job"), offer_id: value("disc-offer"),
+      mode, offer_id: value("disc-offer"),
       objective: value("disc-objective"), icp: value("disc-icp"),
     };
+    if (mode === "existing") {
+      spec.job_id = value("disc-job");
+    } else if (mode === "new") {
+      if (!$("disc-rights").checked) {
+        throw new Error("Bitte die Datenquellen-Nutzungsrechte ausdrücklich bestätigen.");
+      }
+      const number = (id) => {
+        const raw = value(id);
+        if (!raw) throw new Error("Geografische Angaben dürfen nicht fehlen.");
+        const n = Number(raw);
+        if (!Number.isFinite(n)) throw new Error("Ungültige geografische Angabe.");
+        return n;
+      };
+      const south = number("disc-south"), west = number("disc-west");
+      const north = number("disc-north"), east = number("disc-east");
+      const seed_km = number("disc-seed-km"), max_searches = number("disc-searches");
+      if (!(south >= 45 && south < north && north <= 56 &&
+            west >= 5 && west < east && east <= 16 &&
+            seed_km >= 1 && seed_km <= 50 &&
+            Number.isSafeInteger(max_searches) && max_searches >= 1 && max_searches <= 10)) {
+        throw new Error("Discovery-Grenzen sind ungültig.");
+      }
+      const search_terms = value("disc-terms").split(/\r?\n/)
+        .map((term) => term.trim()).filter(Boolean);
+      if (search_terms.length > 8 || search_terms.some((term) => term.length > 100)) {
+        throw new Error("Maximal acht Suchbegriffe mit jeweils höchstens 100 Zeichen.");
+      }
+      Object.assign(spec, {
+        nace: value("disc-nace"), south, west, north, east,
+        seed_km, max_searches, search_terms,
+        source_rights_acknowledged: true,
+      });
+    } else {
+      throw new Error("Unbekannter Discovery-Modus.");
+    }
     await api("/api/discovery-jobs", {
       method: "POST", body: { request_id: crypto.randomUUID(), spec },
     });
     await discovery();
-    return "Discovery-Auftrag in Queue aufgenommen (noch keine externe Ausführung).";
+    return "Discovery-Auftrag in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
   });
   onForm("inbound-form", async () => {
     const result = await api("/api/pilot-inbound", {

@@ -185,6 +185,38 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("clearCrmWorklist();", js[js.index("function logout() {"):
                                                js.index("async function main() {")])
 
+    def test_new_starfruit_discovery_form_maps_to_existing_bounded_contract(self):
+        from greengrapeme.discovery_jobs import DiscoverySpec
+        html = self.get("/")["body"].decode()
+        script = self.get("/saas.js")["body"].decode()
+        for control in ("disc-mode", "disc-existing-fields", "disc-new-fields",
+                        "disc-nace", "disc-south", "disc-west", "disc-north",
+                        "disc-east", "disc-seed-km", "disc-searches",
+                        "disc-terms", "disc-rights"):
+            self.assertIn('id="' + control + '"', html)
+        start = script.index('onForm("discovery-form"')
+        end = script.index('onForm("inbound-form"', start)
+        submit = script[start:end]
+        for required in ("source_rights_acknowledged: true", "max_searches",
+                         "seed_km", "search_terms", "disc-rights",
+                         "Number.isFinite(n)", "Number.isSafeInteger(max_searches)",
+                         'mode === "existing"', 'mode === "new"',
+                         'api("/api/discovery-jobs"'):
+            self.assertIn(required, submit)
+        self.assertIn(r".split(/\r?\n/)", submit)
+        self.assertNotIn("source_rights_acknowledged: false", submit)
+        accepted = DiscoverySpec.parse({
+            "mode": "new", "offer_id": "offer-test", "objective": "B2B outreach",
+            "icp": "regional B2B", "nace": "62.01",
+            "south": 48.0, "west": 9.0, "north": 49.0, "east": 10.0,
+            "seed_km": 25, "max_searches": 5, "search_terms": ["software"],
+            "source_rights_acknowledged": True,
+        })
+        self.assertEqual(accepted.mode, "new")
+        self.assertEqual(accepted.search_terms, ("software",))
+        with self.assertRaises(ValueError):
+            DiscoverySpec(**{**accepted.__dict__, "south": 50.0})
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),
