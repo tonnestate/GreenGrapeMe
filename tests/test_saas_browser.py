@@ -122,6 +122,24 @@ class BrowserTests(unittest.TestCase):
         self.assertNotIn("document.cookie", js)
         self.assertNotIn("sessionStorage.setItem(\"access_token", js)
 
+    def test_dashboard_opens_only_after_tenant_authorization_and_reads(self):
+        js = self.get("/saas.js")["body"].decode()
+        admission = js[js.index("async function openTenant("):
+                       js.index("function onForm(", js.index("async function openTenant("))]
+        self.assertLess(admission.index('await api("/api/me")'),
+                        admission.index("await Promise.all([overview(), companies()])"))
+        self.assertLess(admission.index("await Promise.all([overview(), companies()])"),
+                        admission.index('$("workspace").hidden = false;'))
+        failure = admission[admission.index("} catch (error) {"):]
+        for required in (
+            'state.tenant = "";',
+            'state.role = "";',
+            '$("workspace").hidden = true;',
+            '$("login").hidden = false;',
+            '$("company-details").hidden = true;',
+        ):
+            self.assertIn(required, failure)
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),
