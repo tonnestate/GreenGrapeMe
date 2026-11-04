@@ -141,7 +141,7 @@ class PilotLedger:
         pilot = self.get(tenant, pilot_id)
         event_id = _id(event_id, "event_id")
         reporter_ref = _id(reporter_ref, "reporter_ref")
-        if kind not in _KINDS:
+        if not isinstance(kind, str) or kind not in _KINDS:
             raise ValueError("unknown pilot event kind")
         if (not isinstance(evidence_ref, str) or
                 not (evidence_ref.startswith("https://") or evidence_ref.startswith("urn:")) or
@@ -156,7 +156,9 @@ class PilotLedger:
             opportunity_id = self.store._required(opportunity_id, "opportunity_id")
         elif opportunity_id:
             raise ValueError("platform revenue/cost must not bind a prospect opportunity")
-        stamp = _instant(occurred_at or self.store._now())
+        # Only a genuinely omitted timestamp gets the current time. An
+        # explicitly supplied empty/false/zero timestamp is invalid.
+        stamp = _instant(self.store._now() if occurred_at is None else occurred_at)
         record = (tenant, pilot_id, event_id, opportunity_id or None, kind, amount_cents,
                   "EUR", stamp, evidence_ref, reporter_ref)
         with self.store._db() as db:
@@ -218,10 +220,12 @@ class PilotLedger:
             raise ValueError("source did not confirm event")
         provider = receipt.get("provider_kind")
         receipt_id = receipt.get("provider_receipt_id")
-        if provider not in _SOURCE_BY_KIND[event["event_kind"]]:
+        if (not isinstance(provider, str) or
+                provider not in _SOURCE_BY_KIND[event["event_kind"]]):
             raise ValueError("unexpected independent evidence provider kind")
         receipt_id = _id(receipt_id, "provider_receipt_id")
         if (receipt.get("event_kind") != event["event_kind"] or
+                type(receipt.get("amount_cents")) is not int or
                 receipt.get("amount_cents") != event["amount_cents"] or
                 receipt.get("currency") != "EUR" or
                 receipt.get("evidence_ref") != event["evidence_ref"]):
