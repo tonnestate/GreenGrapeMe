@@ -20,6 +20,7 @@ _REQUIRED_OPERATIONS_TABLES = frozenset({
     "sales_pilot_case_steps", "sales_pilot_reply_effects",
     "sales_pilot_contracts", "sales_customer_invoices",
     "sales_customer_movements",
+    "sales_customer_credit_notes",
     "sales_pilot_appointments", "sales_calendar_dispatch_attempts",
     "sales_calendar_cancellation_attempts",
     "sales_missions", "sales_mission_steps", "sales_mission_accounts",
@@ -96,6 +97,8 @@ def release_audit(path: str | Path) -> dict:
         "independently_signed_contract_count": 0,
         "confirmed_customer_invoice_count": 0,
         "unissued_customer_invoice_count": 0,
+        "unconfirmed_customer_credit_note_count": 0,
+        "confirmed_customer_credit_note_count": 0,
         "orphaned_provider_attempt_count": 0,
         "live_release_gates": {name: "UNVERIFIED" for name in _EXTERNAL_GATES},
         "blockers": list(_EXTERNAL_GATES),
@@ -128,6 +131,17 @@ def release_audit(path: str | Path) -> dict:
             report["uncertain_external_effect_counts"] = uncertain
             if any(uncertain.values()):
                 report["blockers"].insert(0, "UNRECONCILED_EXECUTION_OR_EFFECTS")
+            if "sales_customer_credit_notes" in verified:
+                credit_counts = dict(db.execute(
+                    "SELECT state,count(*) FROM sales_customer_credit_notes "
+                    "GROUP BY state"
+                ).fetchall())
+                report["unconfirmed_customer_credit_note_count"] = (
+                    credit_counts.get("PREPARED",0)
+                )
+                report["confirmed_customer_credit_note_count"] = (
+                    credit_counts.get("CREDITED_CONFIRMED",0)
+                )
             if "sales_customer_invoices" in verified:
                 invoice_counts = dict(db.execute(
                     "SELECT state,count(*) FROM sales_customer_invoices "
