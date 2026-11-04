@@ -38,6 +38,11 @@ def _destination_path(path: str | Path, source: Path) -> Path:
     destination = Path(path).absolute()
     if destination == source or destination.resolve() == source.resolve():
         raise ValueError("database source and destination must differ")
+    if destination.name in {
+        source.name + "-wal", source.name + "-shm",
+        source.name + "-journal",
+    }:
+        raise ValueError("database destination conflicts with SQLite source sidecar")
     if not destination.parent.is_dir():
         raise FileNotFoundError("database destination directory must exist")
     if destination.exists() or destination.is_symlink():
@@ -123,7 +128,13 @@ def _publish_snapshot(source: Path, destination: Path) -> dict:
             folder_fd = None
         if folder_fd is not None:
             try:
-                os.fsync(folder_fd)
+                try:
+                    os.fsync(folder_fd)
+                except OSError:
+                    # Some mounted filesystems do not support fsync on
+                    # directories. Publication has already happened and
+                    # must not be reported as an unpublished failure.
+                    pass
             finally:
                 os.close(folder_fd)
         return {
