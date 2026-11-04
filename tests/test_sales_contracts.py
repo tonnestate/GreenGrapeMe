@@ -19,6 +19,7 @@ from greengrapeme.pilot_sales_flow import PilotSalesFlow
 from greengrapeme.production_database import bootstrap_operational_database
 from greengrapeme.release_audit import release_audit
 from greengrapeme.sales_contracts import SalesContracts
+from greengrapeme.sales_terminations import SalesTerminations
 
 
 class HostQuoteApproval:
@@ -250,6 +251,48 @@ class SalesContractsTests(unittest.TestCase):
                 SELECT count(*) FROM sales_pilot_events
                 WHERE event_kind='DEAL_SIGNED' AND state='SOURCE_CONFIRMED'
             """).fetchone()[0],0)
+
+    def test_cancellation_receipt_cannot_be_reused_as_another_signature(self):
+        self.prepare();self.approve();self.sign()
+        first=self.contracts.get(*self.key)
+        cancels=SalesTerminations(self.store)
+        class CancellationSource:
+            def verify(self,binding):
+                return {
+                    **binding,"confirmed":True,
+                    "provider_kind":"CONTRACT",
+                    "status":"CANCELLATION_ACCEPTED",
+                    "provider_receipt_id":"termination-confirm-001",
+                    "accepted_at":(datetime.now(timezone.utc)-
+                                   timedelta(seconds=1)).isoformat(),
+                }
+        cancel=cancels.reconcile(
+            *self.key,"cancel-id-0001",
+            cancellation_ref="urn:contract:cancel:0001",
+            reason_ref="urn:legal:termination:0001",
+            effective_at=(datetime.now(timezone.utc)+
+                          timedelta(days=5)).isoformat(),
+            source=CancellationSource())
+        self.assertEqual(cancel["provider_receipt_id"],
+                         "termination-confirm-001")
+        self.create_case("case-0002","Another GmbH")
+        second=("tenant-01","pilot-0001","case-0002","contract-0002")
+        self.contracts.prepare(
+            *second,catalog_ref=self.values["catalog_ref"],
+            proposal_ref="urn:proposal:offer-001:issued-0002",
+            reporter_ref=self.values["reporter_ref"])
+        self.contracts.approve(
+            *second,approval_ref=self.approval_ref,
+            approval=HostQuoteApproval(receipt_id="approval-receipt-002"))
+        with self.assertRaisesRegex(ValueError,
+                                    "already claimed as accepted contract"):
+            self.contracts.reconcile(
+                *second,signer_ref=self.signer_ref,
+                source=SignaturePlatform(receipt_id="termination-confirm-001"))
+        self.assertEqual(self.contracts.get(*second)["state"],"APPROVED")
+        self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
+            "client_net_payment_confirmed_cents"],0)
+        self.assertEqual(first["state"],"SIGNED_CONFIRMED")
 
     def test_immutable_signature_receipt_cannot_confirm_two_cases(self):
         self.prepare()
