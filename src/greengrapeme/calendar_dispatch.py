@@ -20,6 +20,7 @@ from urllib.parse import quote
 from urllib.request import Request, ProxyHandler, build_opener
 
 from .calendar_bookings import CalendarBookings, _ALLOWED_CASE_STATES, _instant
+from .google_calendar_availability import GoogleCalendarAvailability
 from .google_calendar_source import (
     GoogleCalendarEvidenceSource, _ENDPOINT, _NoRedirect, _email, _host_string,
 )
@@ -191,6 +192,20 @@ class GoogleCalendarBookingDispatcher:
         if self._permission.allow(dict(policy_request)) is not True:
             raise PermissionError("current independent invitation permission denied")
 
+        # Read-only provider availability before the irreversible attempt
+        # fence. Missing/error responses must never be treated as FREE.
+        availability = GoogleCalendarAvailability(
+            tenant=self.tenant, calendar_ref=self.calendar_ref,
+            calendar_id=self.calendar_id, access_token=self._access_token,
+            timeout_seconds=self.timeout_seconds, transport=self._transport,
+        ).check({
+            "tenant": tenant, "calendar_ref": booking["calendar_ref"],
+            "slot_start_at": booking["slot_start_at"],
+            "slot_end_at": booking["slot_end_at"],
+        })
+        if availability["available"] is not True:
+            raise ValueError("Google Calendar slot is already busy")
+
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
             current = db.execute("""
@@ -237,6 +252,28 @@ class GoogleCalendarBookingDispatcher:
                 raise PermissionError("calendar account evidence changed before dispatch")
             if datetime.fromisoformat(current["slot_start_at"]) <= datetime.now(timezone.utc):
                 raise ValueError("booking slot elapsed during authorization")
+            # FreeBusy cannot atomically reserve Google's calendar. Within
+            # GreenGrapeMe, also prevent concurrent locally submitted
+            # overlapping invitations on the SAME host calendar reference.
+            # A previously uncertain POST still reserves this window until
+            # independently reconciled, never assume the send failed.
+            collision = db.execute("""
+                SELECT 1 FROM sales_calendar_dispatch_attempts d
+                JOIN sales_pilot_appointments a ON
+                    a.tenant=d.tenant AND a.pilot_id=d.pilot_id
+                    AND a.case_id=d.case_id AND a.booking_id=d.booking_id
+                WHERE d.tenant=? AND a.calendar_ref=?
+                  AND d.state!='CANCELLED_CONFIRMED'
+                  AND a.slot_start_at<? AND a.slot_end_at>?
+                  AND NOT (a.pilot_id=? AND a.case_id=? AND a.booking_id=?)
+                LIMIT 1
+            """, (
+                tenant, self.calendar_ref,
+                booking["slot_end_at"], booking["slot_start_at"],
+                pilot_id, case_id, booking_id,
+            )).fetchone()
+            if collision:
+                raise ValueError("conflicting locally dispatched calendar slot")
             stamp = self.store._now()
             db.execute("""
                 INSERT INTO sales_calendar_dispatch_attempts
