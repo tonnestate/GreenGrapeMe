@@ -71,3 +71,26 @@ Regression tests assert these invalid inputs do not create or confirm
 commercial observations. No new payment processor, receipt validator or
 automated attribution mechanism is implied. Independent, trusted
 provider evidence and real commercial verification remain mandatory.
+
+## Post-verification pilot event mutation fence (2026-11-04)
+
+The initial `PilotLedger.reconcile` passed a reported event to a host
+evidence adapter **before** opening the transaction that confirmed that
+event. During provider latency, a separate database writer could change
+the event's amount, evidence reference or bound account. The method
+previously re-read only the `state` and existing receipt IDs. It could
+therefore mark the **new** business claim `SOURCE_CONFIRMED` using a
+receipt that independently verified the **old** business claim.
+
+Under `BEGIN IMMEDIATE`, the ledger now re-reads the entire persisted
+event and compares tenant, pilot, event ID, account, event kind, amount,
+currency, occurred timestamp, evidence reference and reporter reference
+with the exact object sent to the independent verifier. It also rejects a
+missing event or a partially modified confirmation state. Any change
+prevents source confirmation and commercial-revenue attribution.
+Regression tests deliberately modify the financial amount, evidence
+reference and delete the event from inside a simulated external
+`verify` call, and assert the stale proof is never committed.
+
+This protects the local SQLite state transition, not trust in the external
+provider, operational database ACLs or the truth of a third-party receipt.
