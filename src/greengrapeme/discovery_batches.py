@@ -114,6 +114,7 @@ class DiscoveryBatches:
                     WHERE o.tenant=? AND o.opportunity_id=?""",
                     (tenant, account["id"])).fetchone()
                 if (not r or r["suppressed"] is not None or
+                    not isinstance(r["source_json"], str) or
                     hashlib.sha256(r["source_json"].encode()).hexdigest()
                        != account["sha256"]):
                     return False

@@ -111,3 +111,21 @@ controlled `ValueError` and no PilotLedger milestone. Inbound channel
 and case transition state validation additionally rejects unhashable
 inputs (lists, dictionaries) rather than allowing a Python `TypeError`
 to escape. Offline regression tests cover all of these cases.
+
+## Discovery donor and batch source integrity (2026-11-04)
+
+The asynchronous StarFruitMe candidate-detail reader previously silently
+ignored non-object observation entries, and an `observations` value that
+was a non-list (such as `null`) could raise an unhandled `TypeError`.
+Both cases could produce incomplete evidence or prevent deterministic
+source-blocked handling. The reader now rejects malformed observations
+explicitly as `SourceSnapshotError` so no partial candidate list can
+be imported as complete.
+
+The previously stored batch source-integrity check also assumed
+`source_json` was always text and called `.encode()` unconditionally.
+A malformed SQLite BLOB could interrupt batch progression with
+`AttributeError` instead of marking the job
+`BLOCKED_SOURCE_REVISION`. The validator now returns `False` for
+non-text sources, stopping research and canonical admission without
+executing new external actions. Regression tests cover both cases.

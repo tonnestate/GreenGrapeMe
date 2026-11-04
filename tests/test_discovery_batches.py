@@ -198,6 +198,19 @@ class BatchesTests(unittest.TestCase):
         self.assertEqual(self.researcher.calls,[])
         self.assertEqual(self.host.calls,[])
 
+    def test_malformed_nontext_source_blocks_batch_before_research(self):
+        first=self.advance()
+        self.assertEqual(first["state"],"BATCH_AWAITING_BLACKBERRY")
+        with self.store._db() as db:
+            db.execute("""UPDATE opportunities SET source_json=X'000102'
+                          WHERE tenant=? AND opportunity_id=?""",
+                       ("tenant-A","company-025"))
+        result=self.advance(researcher=self.researcher)
+        self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
+        self.assertEqual(self.researcher.calls,[])
+        self.assertEqual(self.host.calls,[])
+        self.assertEqual(self.neuron.contexts,[])
+
     def test_suppression_blocks_entire_batch_before_next_donor_call(self):
         self.advance()
         self.advance(researcher=self.researcher)
