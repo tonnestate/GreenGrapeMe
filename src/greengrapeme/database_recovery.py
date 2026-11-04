@@ -71,6 +71,17 @@ _SCHEMA = {
         "setup_fee_cents currency reporter_ref state approval_ref approval_receipt_id "
         "signer_ref signature_provider signature_receipt_id signed_at created_at updated_at",
         ("tenant", "pilot_id", "case_id", "contract_id")),
+    "sales_customer_invoices": (
+        "tenant pilot_id case_id invoice_id contract_id opportunity_id "
+        "contract_terms_sha256 invoice_kind period_key invoice_ref "
+        "amount_cents currency reporter_ref state invoice_provider "
+        "invoice_receipt_id issued_at created_at updated_at",
+        ("tenant", "pilot_id", "case_id", "invoice_id")),
+    "sales_customer_movements": (
+        "tenant pilot_id case_id invoice_id movement_id direction "
+        "amount_cents currency evidence_ref provider_kind provider_receipt_id "
+        "occurred_at ledger_event_id created_at",
+        ("tenant", "pilot_id", "case_id", "invoice_id", "movement_id")),
     "sales_pilot_reply_effects": ("tenant pilot_id case_id reply_id opportunity_id "
                                   "recipient_ref content_ref content_sha256 "
                                   "case_source_sha256 effect_id state permission_receipt_ref "
@@ -118,6 +129,14 @@ _UNIQUE_BINDINGS = {
         ("tenant", "pilot_id", "case_id"),
         ("tenant", "approval_receipt_id"),
         ("tenant", "signature_provider", "signature_receipt_id"),
+    ),
+    "sales_customer_invoices": (
+        ("tenant", "pilot_id", "case_id", "invoice_kind", "period_key"),
+        ("tenant", "invoice_provider", "invoice_receipt_id"),
+    ),
+    "sales_customer_movements": (
+        ("tenant", "provider_kind", "provider_receipt_id"),
+        ("tenant", "pilot_id", "ledger_event_id"),
     ),
     "sales_pilot_reply_effects": (("tenant", "effect_id"),),
     "dittofeed_sync_outbox": (("tenant", "workspace_id", "message_id"),),
@@ -210,7 +229,10 @@ def _check_open_database(db: sqlite3.Connection) -> dict:
                         "WHERE PROVIDER_RECEIPT_ID IS NOT NULL"
                         if table == "sales_pilot_events"
                         else "WHERE " + required_unique[-1].upper() + " IS NOT NULL"
-                        if table in ("sales_pilot_appointments", "sales_pilot_contracts")
+                        if table in (
+                            "sales_pilot_appointments", "sales_pilot_contracts",
+                            "sales_customer_invoices"
+                        )
                         else None
                     )
                     if allowed_where is None or allowed_where not in " ".join(sql.split()):

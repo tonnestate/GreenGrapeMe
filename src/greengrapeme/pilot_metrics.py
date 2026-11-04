@@ -18,10 +18,10 @@ from .commercial_reconciliation import commercial_evidence_review
 
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{5,119}$")
-_FINANCIAL = {"CUSTOMER_PAYMENT_RECEIVED", "PLATFORM_PAYMENT_RECEIVED",
-              "PROVIDER_COST_INCURRED"}
+_FINANCIAL = {"CUSTOMER_PAYMENT_RECEIVED", "CUSTOMER_REFUND_PAID",
+              "PLATFORM_PAYMENT_RECEIVED", "PROVIDER_COST_INCURRED"}
 _ACCOUNT = {"LEAD_ACCEPTED", "MEETING_HELD", "PROPOSAL_DELIVERED",
-            "DEAL_SIGNED", "CUSTOMER_PAYMENT_RECEIVED"}
+            "DEAL_SIGNED", "CUSTOMER_PAYMENT_RECEIVED", "CUSTOMER_REFUND_PAID"}
 _KINDS = _FINANCIAL | _ACCOUNT
 _SOURCE_BY_KIND = {
     "LEAD_ACCEPTED": {"CRM"},
@@ -29,6 +29,7 @@ _SOURCE_BY_KIND = {
     "PROPOSAL_DELIVERED": {"DELIVERY"},
     "DEAL_SIGNED": {"CONTRACT"},
     "CUSTOMER_PAYMENT_RECEIVED": {"ACCOUNTING", "BANK"},
+    "CUSTOMER_REFUND_PAID": {"ACCOUNTING", "BANK"},
     "PLATFORM_PAYMENT_RECEIVED": {"ACCOUNTING", "BANK"},
     "PROVIDER_COST_INCURRED": {"ACCOUNTING", "BANK"},
 }
@@ -188,6 +189,10 @@ class PilotLedger:
         reporter_ref = _id(reporter_ref, "reporter_ref")
         if not isinstance(kind, str) or kind not in _KINDS:
             raise ValueError("unknown pilot event kind")
+        # Refunds must never be fabricated as standalone reported CRM facts.
+        # SalesInvoices is the single verified invoice/cash allocation path.
+        if kind == "CUSTOMER_REFUND_PAID":
+            raise PermissionError("customer refunds require verified invoice settlement")
         if (not isinstance(evidence_ref, str) or
                 not (evidence_ref.startswith("https://") or evidence_ref.startswith("urn:")) or
                 not 12 <= len(evidence_ref) <= 1024 or any(c.isspace() for c in evidence_ref)):
@@ -386,7 +391,8 @@ class PilotLedger:
             [dict(row) for row in rows], [dict(case) for case in cases],
             cases_available=cases_available)
         stages = {}
-        for kind in sorted(_ACCOUNT - {"CUSTOMER_PAYMENT_RECEIVED"}):
+        for kind in sorted(_ACCOUNT - {"CUSTOMER_PAYMENT_RECEIVED",
+                                      "CUSTOMER_REFUND_PAID"}):
             reported = {r["opportunity_id"] for r in rows if r["event_kind"] == kind}
             confirmed = {r["opportunity_id"] for r in rows
                          if r["event_kind"] == kind and r["state"] == "SOURCE_CONFIRMED"}
@@ -396,6 +402,7 @@ class PilotLedger:
             return sum(r["amount_cents"] for r in rows
                        if r["event_kind"] == kind and r["state"] == state)
         revenue_customer = money("CUSTOMER_PAYMENT_RECEIVED","SOURCE_CONFIRMED")
+        refunds_customer = money("CUSTOMER_REFUND_PAID","SOURCE_CONFIRMED")
         revenue_platform = money("PLATFORM_PAYMENT_RECEIVED","SOURCE_CONFIRMED")
         costs = money("PROVIDER_COST_INCURRED","SOURCE_CONFIRMED")
         return {
@@ -408,6 +415,9 @@ class PilotLedger:
             "stages":stages,
             "client_payment_reported_cents":money("CUSTOMER_PAYMENT_RECEIVED","REPORTED"),
             "client_payment_confirmed_cents":revenue_customer,
+            "client_refund_reported_cents":money("CUSTOMER_REFUND_PAID","REPORTED"),
+            "client_refund_confirmed_cents":refunds_customer,
+            "client_net_payment_confirmed_cents":revenue_customer-refunds_customer,
             "platform_payment_reported_cents":money("PLATFORM_PAYMENT_RECEIVED","REPORTED"),
             "platform_payment_confirmed_cents":revenue_platform,
             "provider_cost_reported_cents":money("PROVIDER_COST_INCURRED","REPORTED"),

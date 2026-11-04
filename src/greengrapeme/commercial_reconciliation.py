@@ -17,6 +17,7 @@ _FUNNEL = (
     "DEAL_SIGNED",
 )
 _ACCOUNT_PAYMENT = "CUSTOMER_PAYMENT_RECEIVED"
+_ACCOUNT_REFUND = "CUSTOMER_REFUND_PAID"
 _PLATFORM_PAYMENT = "PLATFORM_PAYMENT_RECEIVED"
 _MAX_REVIEW_ITEMS = 30
 
@@ -59,6 +60,7 @@ def commercial_evidence_review(events: list[dict], cases: list[dict],
     stage_coherent: dict[str, set[str]] = {kind: set() for kind in _FUNNEL}
     independently_signed: set[str] = set()
     verified_customer_payment = 0
+    verified_customer_refunds = 0
     verified_payment_with_contract = 0
     verified_payment_without_contract = 0
     payment_account_ids: set[str] = set()
@@ -109,6 +111,13 @@ def commercial_evidence_review(events: list[dict], cases: list[dict],
         if contract_dates and account not in stage_coherent["DEAL_SIGNED"]:
             issue(account, "CONTRACT_WITH_INCOMPLETE_CONFIRMED_FUNNEL")
         for event in confirmed:
+            if event.get("event_kind") == _ACCOUNT_REFUND:
+                cents = event.get("amount_cents")
+                if type(cents) is not int or cents <= 0:
+                    issue(account, "INVALID_CUSTOMER_REFUND_AMOUNT")
+                else:
+                    verified_customer_refunds += cents
+                continue
             if event.get("event_kind") != _ACCOUNT_PAYMENT:
                 continue
             cents = event.get("amount_cents")
@@ -156,6 +165,9 @@ def commercial_evidence_review(events: list[dict], cases: list[dict],
         "fully_confirmed_funnel_accounts": len(stage_coherent["DEAL_SIGNED"]),
         "customer_payment_accounts_with_confirmed_receipt": len(payment_account_ids),
         "customer_payment_confirmed_cents": verified_customer_payment,
+        "customer_refund_confirmed_cents": verified_customer_refunds,
+        "customer_net_settled_cents":
+            verified_customer_payment-verified_customer_refunds,
         "customer_payment_with_prior_confirmed_contract_cents":
             verified_payment_with_contract,
         "customer_payment_without_prior_confirmed_contract_cents":
