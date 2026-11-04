@@ -329,3 +329,42 @@ before any new account/work item is written, while recording one
 non-contact review/audit per conflicting ID. A single ID repeated in
 **separate** valid source batches remains normally idempotent. This is
 tested for both fresh and already imported account IDs.
+
+## Functional sales correctness: unsubscribe priority and future-dated intent (2026-11-04)
+
+This review targets **business behavior**, not just exception handling.
+
+**Opt-out must take precedence over unsafe content.** The inbound reply
+precheck previously classified any message containing an injection marker
+as `SECURITY_REVIEW` before considering an unsubscribe instruction.
+`SalesWorkspace.ingest_reply` only applies durable suppression for
+`OPT_OUT`, `PRIVACY_REVIEW` and `BOUNCE`; consequently an explicit
+“stop contacting me” contained in an injection-heavy reply could leave
+a qualified account's existing sales tasks actionable. In addition,
+the presence of **any** “don't unsubscribe” phrase in the reply
+suppressed a distinct explicit “please unsubscribe” instruction elsewhere
+in the same message. These were substantive customer-contact errors.
+
+The precheck now evaluates the unquoted, non-automated text for an
+explicit opt-out **before** injection review and removes **only**
+locally negated stop/unsubscribe clauses. It covers unambiguous English
+and German requests such as “stop contacting me”, “no more emails”,
+“keine weiteren E-Mails” and “schreiben Sie mir nicht mehr”. A solely
+negated request (“don't stop contacting me”) remains a normal
+classification, while an explicit independent stop instruction produces
+`OPT_OUT`. Existing `ingest_reply` suppression then blocks all
+queued and review-ready tasks atomically, with no sending side effect.
+Privacy requests continue to take priority. The rule remains deliberately
+conservative and is not comprehensive multilingual intent recognition.
+
+**Future evidence is not present intent.** The scoring algorithm
+previously clamped negative signal age to zero. An observation stamped
+tomorrow would receive the same high freshness weight as a verified
+observation today and inflate the lead ranking. The score now omits
+future-dated signals until their observation time. Regression tests
+cover future-only intent, mixed current/future signals and the stored
+rankings projection.
+
+Neither scored intent nor an inbound reply is proof of current outreach
+authorization. The production consent source and independent contact
+suppression provider remain mandatory release gates.
