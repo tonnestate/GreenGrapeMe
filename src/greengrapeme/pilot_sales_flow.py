@@ -18,6 +18,7 @@ from .sales import Opportunity, Evidence
 
 
 _STEPS = {
+    "PROSPECT_REVIEW": {"QUALIFIED_REPORTED", "CLOSED_LOST"},
     "INBOUND_REVIEW": {"QUALIFIED_REPORTED", "CLOSED_LOST"},
     "QUALIFIED_REPORTED": {"FOLLOWUP_SCHEDULED", "MEETING_HELD_REPORTED", "CLOSED_LOST"},
     "FOLLOWUP_SCHEDULED": {"FOLLOWUP_RECORDED", "MEETING_HELD_REPORTED", "CLOSED_LOST"},
@@ -151,6 +152,88 @@ class PilotSalesFlow:
                                    "channel":channel,"source_ref":evidence_ref,
                                    "identity_verified":False,"contact_authority":"NONE"})
         return self.get(tenant,pilot_id,case_id)
+
+    def adopt_sourced_case(self, tenant: str, pilot_id: str, case_id: str, *,
+                           opportunity_id: str, evidence_ref: str,
+                           reporter_ref: str) -> dict:
+        """Bind an existing sourced account to CRM without inventing inbound.
+
+        Discovery only creates a PROSPECT_REVIEW case. It never grants
+        contact permission, claims a customer inquiry, or dispatches effects.
+        The immutable imported source is checked under the insertion lock.
+        """
+        pilot = PilotLedger(self.store).get(tenant, pilot_id)
+        case_id = _id(case_id, "case_id")
+        opportunity_id = self.store._required(opportunity_id, "opportunity_id")
+        evidence_ref = _reference(evidence_ref)
+        reporter_ref = _id(reporter_ref, "reporter_ref")
+        with self.store._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            source_row = db.execute("""
+                SELECT offer_id,company_name,source_json,status
+                FROM opportunities WHERE tenant=? AND opportunity_id=?
+            """, (tenant, opportunity_id)).fetchone()
+            if source_row is None:
+                raise LookupError("unknown tenant source opportunity")
+            if source_row["offer_id"] != pilot["offer_id"]:
+                raise ValueError("source opportunity belongs to another offer")
+            if source_row["status"] == "REJECTED":
+                raise PermissionError("rejected source cannot enter pilot CRM")
+            try:
+                raw = source_row["source_json"]
+                if not isinstance(raw, str):
+                    raise ValueError("invalid source")
+                source = json.loads(raw)
+            except (ValueError, TypeError):
+                raise ValueError("source opportunity has invalid evidence") from None
+            if (not isinstance(source, dict) or
+                    source.get("opportunity_id") != opportunity_id or
+                    source.get("offer_id") != pilot["offer_id"] or
+                    source.get("company_name") != source_row["company_name"] or
+                    source.get("suppressed") is not False or
+                    not isinstance(source.get("evidence"), list) or
+                    not any(isinstance(item, dict) and
+                            item.get("reference") == evidence_ref
+                            for item in source["evidence"])):
+                raise ValueError("source opportunity provenance is inconsistent")
+            blocked = db.execute("""
+                SELECT 1 FROM suppressions WHERE tenant=? AND opportunity_id=?
+            """, (tenant, opportunity_id)).fetchone()
+            if blocked:
+                raise PermissionError("suppressed opportunity cannot enter CRM")
+            source_sha = hashlib.sha256(raw.encode()).hexdigest()
+            existing = db.execute("""
+                SELECT * FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+            """, (tenant, pilot_id, case_id)).fetchone()
+            if existing:
+                if (existing["opportunity_id"] != opportunity_id or
+                        existing["reported_channel"] != "DISCOVERY" or
+                        existing["inbound_ref"] != evidence_ref or
+                        existing["reporter_ref"] != reporter_ref or
+                        existing["source_sha256"] != source_sha or
+                        existing["company_name"] != source_row["company_name"]):
+                    raise ValueError("source case ID reused with conflicting evidence")
+            else:
+                prior = db.execute("""
+                    SELECT case_id,pilot_id FROM sales_pilot_cases
+                    WHERE tenant=? AND opportunity_id=?
+                """, (tenant, opportunity_id)).fetchone()
+                if prior:
+                    raise ValueError("source account is already bound to a CRM case")
+                now = self.store._now()
+                db.execute("""
+                    INSERT INTO sales_pilot_cases VALUES
+                    (?,?,?,?,?,?,?,?,?,'PROSPECT_REVIEW',NULL,?,?)
+                """, (tenant, pilot_id, case_id, opportunity_id, "DISCOVERY",
+                      evidence_ref, reporter_ref, source_sha,
+                      source_row["company_name"], now, now))
+                self.store._audit(
+                    db, tenant, opportunity_id, "DISCOVERY_PROSPECT_ADOPTED",
+                    {"pilot_id": pilot_id, "case_id": case_id,
+                     "source_ref": evidence_ref, "contact_authority": "NONE",
+                     "inbound_claimed": False, "external_effects": 0})
+        return self.get(tenant, pilot_id, case_id)
 
     def get(self, tenant: str, pilot_id: str, case_id: str) -> dict:
         pilot=PilotLedger(self.store).get(tenant,pilot_id)
@@ -296,6 +379,8 @@ class PilotSalesFlow:
                     == row["source_sha256"])
             review_state = ("BLOCKED_SUPPRESSION" if suppressed else
                             "BLOCKED_SOURCE_REVISION" if not source_current else
+                            "PROSPECT_REVIEW_NO_CONTACT_AUTHORITY"
+                            if row["reported_channel"] == "DISCOVERY" else
                             "HUMAN_REVIEW_DUE")
             items.append({
                 "pilot_id": pilot_id, "case_id": row["case_id"],

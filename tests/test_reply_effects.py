@@ -273,6 +273,19 @@ class ReplyEffectsTests(unittest.TestCase):
         self.assertEqual(row["state"],"PROVIDER_FAILED")
         self.assertIsNone(row["provider_ref"])
 
+    def test_inbound_reply_never_dispatches_if_origin_becomes_discovery(self):
+        self.prepare()
+        gateway = FakeGateway("success")
+        with self.store._db() as db:
+            db.execute("""
+                UPDATE sales_pilot_cases SET reported_channel='DISCOVERY'
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+            """, ("tenant-01", "pilot-0001", "inbound-0001"))
+        with self.assertRaises(PermissionError):
+            self.send(gateway=gateway)
+        self.assertEqual(gateway.calls, [])
+        self.assertEqual(self.effects.get(*self.key)["state"], "PREPARED")
+
     def test_suppression_and_revised_source_fail_closed(self):
         row=self.prepare()
         case=self.flow.get("tenant-01","pilot-0001","inbound-0001")

@@ -217,6 +217,21 @@ class BrowserTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             DiscoverySpec(**{**accepted.__dict__, "south": 50.0})
 
+    def test_discovery_prospect_handoff_is_operator_only_and_not_inbound(self):
+        html = self.get("/")["body"].decode()
+        js = self.get("/saas.js")["body"].decode()
+        for control in ("source-case-form", "source-pilot", "source-case",
+                        "source-opportunity", "source-evidence"):
+            self.assertIn('id="' + control + '"', html)
+        self.assertIn('$("source-case-form").hidden = !operates;', js)
+        segment = js[js.index('onForm("source-case-form"'):
+                     js.index('onForm("inbound-form"')]
+        self.assertIn('api("/api/pilot-discovery"', segment)
+        self.assertIn("source-opportunity", segment)
+        self.assertIn("source-evidence", segment)
+        self.assertIn("keine Kontaktfreigabe", segment)
+        self.assertNotIn('api("/api/pilot-inbound"', segment)
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),

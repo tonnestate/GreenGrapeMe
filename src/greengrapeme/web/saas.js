@@ -353,6 +353,7 @@ async function openTenant(event) {
     const finance = ["finance", "admin"].includes(state.role);
     $("discovery-form").hidden = !operates;
     $("inbound-form").hidden = !operates;
+    $("source-case-form").hidden = !operates;
     $("sales-step-form").hidden = !operates;
     $("pilot-form").hidden = !finance;
     $("payment-form").hidden = !finance;
@@ -490,6 +491,18 @@ async function main() {
     });
     await discovery();
     return "Discovery-Auftrag in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
+  });
+  onForm("source-case-form", async () => {
+    const result = await api("/api/pilot-discovery", {
+      method: "POST", body: {
+        pilot_id: value("source-pilot"), case_id: value("source-case"),
+        opportunity_id: value("source-opportunity"),
+        evidence_ref: value("source-evidence"),
+      },
+    });
+    if (value("crm-pilot-id") === value("source-pilot")) await crmWorklist();
+    return "Discovery-Prospect übernommen: " + result.state +
+      " (keine eingegangene Anfrage und keine Kontaktfreigabe).";
   });
   onForm("inbound-form", async () => {
     const result = await api("/api/pilot-inbound", {

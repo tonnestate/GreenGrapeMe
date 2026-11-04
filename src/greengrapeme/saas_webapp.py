@@ -259,6 +259,15 @@ def create_saas_app(
                     channel=values["channel"],
                     evidence_ref=values["evidence_ref"],
                     reporter_ref=_reporter_ref(principal))
+            elif path == "/api/pilot-discovery":
+                values = _request_json(environ, frozenset({
+                    "pilot_id", "case_id", "opportunity_id", "evidence_ref",
+                }))
+                result = PilotSalesFlow(store).adopt_sourced_case(
+                    tenant, values["pilot_id"], values["case_id"],
+                    opportunity_id=values["opportunity_id"],
+                    evidence_ref=values["evidence_ref"],
+                    reporter_ref=_reporter_ref(principal))
             elif path == "/api/pilot-step":
                 values = _request_json(environ, frozenset({
                     "pilot_id", "case_id", "step_id", "expected_state",
