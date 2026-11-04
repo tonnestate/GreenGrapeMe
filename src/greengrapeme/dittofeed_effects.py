@@ -372,10 +372,22 @@ class DittofeedPomeloEffects:
                 or type(effect.get("dispatch_count")) is not int
                 or effect["dispatch_count"] != 1):
             raise PermissionError("uncertain durable PomeloMe intent missing or untrusted")
-        # Pinned PomeloMe's EffectGateway routes these exact states only to
-        # _recover -> adapter.probe, and never to external adapter.dispatch.
+        # Pinned PomeloMe's EffectGateway recovery path invokes ONLY
+        # adapter.probe(), never adapter.dispatch(). Do NOT call execute()
+        # on a reconstructed EffectIntent: Pydantic frozenset conversion can
+        # reorder required_capabilities in model_dump(mode="json"), causing
+        # SqliteEffectStore.put_intent() to reject the SAME persisted intent
+        # as an identity collision before recovery. The stored intent has
+        # already passed exact immutable identity checks above.
+        #
+        # This deliberately binds to the inspected/pinned donor contract.
+        # Refuse unknown PomeloMe versions instead of falling back to execute
+        # (which could dispatch an irreversible external send).
+        recovery = getattr(gateway, "_recover", None)
+        if not callable(recovery):
+            raise PermissionError("pinned PomeloMe read-only recovery unavailable")
         intent = EffectIntent.model_validate(effect["intent"])
-        gateway.execute(intent, authority)
+        recovery(intent)
         return self._finish_from_durable(tenant, pilot_id, event_id, gateway)
 
     def reconcile(self, tenant: str, pilot_id: str, event_id: str, *,
