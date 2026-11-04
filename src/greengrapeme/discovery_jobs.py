@@ -311,6 +311,22 @@ class DiscoveryJobQueue:
                              "BLOCKED_SOURCE_POLICY",
                              error_kind="EXISTING_SOURCE_JOB_ACCESS_REVOKED")
             return self.get(tenant, request_id)
+        # A new discovery job also needs CURRENT host authorization after
+        # creation and completion. A prior acknowledgement/authorized run
+        # is not authority to read a later source snapshot, continue
+        # research, admit canonical work or run the model after revocation.
+        if (spec.mode == "new" and
+                state in ("SOURCE_DONE", "AWAITING_BLACKBERRY",
+                          "AWAITING_CANONICAL_WORK", "ADMITTED",
+                          "BATCH_AWAITING_BLACKBERRY",
+                          "BATCH_AWAITING_CANONICAL_WORK",
+                          "BATCH_ADMITTED") and
+                not (allow_external_source and
+                     spec.source_rights_acknowledged)):
+            self._transition(tenant, request_id, state,
+                             "BLOCKED_SOURCE_POLICY",
+                             error_kind="NEW_SOURCE_RIGHTS_REVOKED")
+            return self.get(tenant, request_id)
         if state == "QUEUED":
             if spec.mode == "new":
                 if not (allow_external_source and spec.source_rights_acknowledged):
