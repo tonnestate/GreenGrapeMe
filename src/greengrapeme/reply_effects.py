@@ -14,7 +14,7 @@ import re
 from typing import Protocol, Any
 
 from .operations import SalesWorkspace
-from .pilot_sales_flow import PilotSalesFlow, _reference
+from .pilot_sales_flow import PilotSalesFlow, _reference, _CHANNELS
 from .pilot_metrics import _id
 
 
@@ -107,13 +107,25 @@ class ReplyEffects:
         recipient_ref=_reference(recipient_ref)
         content_ref=_reference(content_ref)
         content_sha256=_sha(content_sha256)
-        if case["state"] not in _STATES_READY or case["suppressed"]:
+        if (case["reported_channel"] not in _CHANNELS or
+                case["state"] not in _STATES_READY or case["suppressed"]):
             raise PermissionError("case not eligible for an inbound reply")
         effect_id="gg-reply-"+hashlib.sha256(
             json.dumps([tenant,pilot_id,case_id,reply_id],
                        separators=(",",":")).encode()).hexdigest()[:40]
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
+            # Do not permit a source-created prospect to be repackaged as
+            # an existing inbound request, including on a racing mutation.
+            case_now = db.execute("""
+                SELECT reported_channel,state,source_sha256
+                FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+            """, (tenant,pilot_id,case_id)).fetchone()
+            if (not case_now or case_now["reported_channel"] not in _CHANNELS
+                    or case_now["state"] not in _STATES_READY
+                    or case_now["source_sha256"] != case["source_sha256"]):
+                raise PermissionError("only existing inbound cases may prepare a reply")
             existing=db.execute("""SELECT * FROM sales_pilot_reply_effects WHERE
                  tenant=? AND pilot_id=? AND case_id=? AND reply_id=?""",
                  (tenant,pilot_id,case_id,reply_id)).fetchone()
@@ -139,7 +151,8 @@ class ReplyEffects:
     def _current(self, row: dict) -> dict:
         """Always recheck material account state before external dispatch."""
         case=self.flow_get(row["tenant"],row["pilot_id"],row["case_id"])
-        if (case["state"] not in _STATES_READY or case["suppressed"] or
+        if (case["reported_channel"] not in _CHANNELS or
+            case["state"] not in _STATES_READY or case["suppressed"] or
             case["source_sha256"]!=row["case_source_sha256"]):
             raise PermissionError("case state, suppression or bound source invalid")
         with self.store._db() as db:
@@ -215,7 +228,7 @@ class ReplyEffects:
                 sales_pilot_reply_effects WHERE tenant=? AND pilot_id=?
                 AND case_id=? AND reply_id=?""",
                 (tenant,pilot_id,case_id,reply_id)).fetchone()
-            case_now=db.execute("""SELECT state,source_sha256 FROM sales_pilot_cases
+            case_now=db.execute("""SELECT state,source_sha256,reported_channel FROM sales_pilot_cases
                 WHERE tenant=? AND pilot_id=? AND case_id=?""",
                 (tenant,pilot_id,case_id)).fetchone()
             blocked=db.execute("""SELECT 1 FROM suppressions WHERE
@@ -226,6 +239,7 @@ class ReplyEffects:
                 (tenant,row["opportunity_id"])).fetchone()
             if (not current or current["state"]!="PREPARED" or
                 not case_now or case_now["state"] not in _STATES_READY or
+                case_now["reported_channel"] not in _CHANNELS or
                 case_now["source_sha256"]!=row["case_source_sha256"] or blocked or
                 not source or not isinstance(source["source_json"],str) or
                 hashlib.sha256(source["source_json"].encode()).hexdigest()
