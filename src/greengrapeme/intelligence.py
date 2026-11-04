@@ -56,7 +56,11 @@ def score_signals(signals: list[Signal], now: datetime) -> tuple[int, dict[str, 
         if signal.kind not in DEFINITIONS:
             continue
         weight, half_life = DEFINITIONS[signal.kind]
-        age_days = max(0.0, (now - signal.observed_at).total_seconds() / 86400)
+        # An observation dated in the future is not yet evidence of
+        # current buying intent. Do not give it full freshness weight.
+        if signal.observed_at > now:
+            continue
+        age_days = (now - signal.observed_at).total_seconds() / 86400
         score = max(0, min(100, round(weight * round(signal.strength, 2) * 0.5 ** (age_days / half_life))))
         if score > top.get(signal.kind, 0):
             top[signal.kind] = score
@@ -67,8 +71,23 @@ def score_signals(signals: list[Signal], now: datetime) -> tuple[int, dict[str, 
 
 
 _QUOTE_START = re.compile(r"(?im)^(?:on .{1,200} wrote:|am .{1,200} schrieb.{0,80}:|[-]{2,}\s*(?:original message|ursprüngliche nachricht))\s*$")
-_STOP = re.compile(r"(?i)\b(?:unsubscribe me|please unsubscribe|bitte abmelden|bitte austragen|nicht mehr kontaktieren|do not contact me|don't contact me|stop emailing me|remove me from (?:the |your )?(?:list|mailing list))\b")
-_STOP_NEGATION = re.compile(r"(?i)\b(?:don't|do not|not|never)\s+(?:please\s+)?(?:unsubscribe|remove|take me off)\b")
+_STOP = re.compile(
+    r"(?i)\b(?:unsubscribe me|please unsubscribe|bitte abmelden|bitte austragen|"
+    r"nicht mehr kontaktieren|bitte nicht mehr kontaktieren|"
+    r"do not contact me|don't contact me|stop emailing me|"
+    r"stop contacting me|stop sending me (?:emails?|e-mails?|messages?)|"
+    r"remove me from (?:the |your )?(?:list|mailing list)|"
+    r"no more (?:emails?|e-mails?|marketing messages?)|"
+    r"keine weiteren (?:e-mails?|mails?|nachrichten)|"
+    r"ich (?:will|möchte) keine weiteren (?:e-mails?|mails?|nachrichten)|"
+    r"(?:schreiben|kontaktieren) sie mich nicht mehr|"
+    r"keine werbung mehr)\b"
+)
+_STOP_NEGATION = re.compile(
+    r"(?i)\b(?:don't|do not|not|never)\s+(?:please\s+)?"
+    r"(?:unsubscribe(?:\s+me)?|remove(?:\s+me)?(?:\s+from\s+(?:the\s+|your\s+)?(?:list|mailing\s+list))?|"
+    r"take\s+me\s+off(?:\s+(?:the\s+)?(?:list|mailing\s+list))?)\b"
+)
 _PRIVACY = re.compile(r"(?i)\b(?:delete my data|right to erasure|data subject access|gdpr request|dsgvo auskunft|löschen sie meine daten|woher haben sie meine daten)\b")
 _BOUNCE = re.compile(r"(?i)(?:mail delivery failed|undeliverable|unzustellbar|delivery status notification \(failure\))")
 _AUTO = re.compile(r"(?i)^(?:automatic reply|out of office|abwesenheit|automatische antwort)")
@@ -86,18 +105,25 @@ def triage_reply(body: str, *, subject: str = "", sender: str = "", headers: dic
     own = "\n".join(l for l in own.splitlines() if not l.lstrip().startswith(">"))[:12000]
     if _PRIVACY.search(own):
         return "PRIVACY_REVIEW"
-    if _INJECTION.search(own):
-        return "SECURITY_REVIEW"
     automated = _AUTO.search(subject) or any(
         k.lower() == "auto-submitted" and v.lower() != "no" for k, v in (headers or {}).items()
     )
     if automated:
         return "AUTOMATED"
     normalized = own.lower().strip().strip(". !\n")
+    # A negative instruction such as "don't unsubscribe me" must not
+    # suppress a second, unambiguous request in the same message:
+    # "Don't unsubscribe me from updates. Stop contacting me."  Strip
+    # only the local negated clause rather than vetoing the entire mail.
+    actionable = _STOP_NEGATION.sub("", own)
     if normalized in {"stop", "abmelden", "austragen", "unsubscribe", "opt out"} or (
-        _STOP.search(own) and not _STOP_NEGATION.search(own)
+        _STOP.search(actionable)
     ):
         return "OPT_OUT"
+    # An injection attempt never outranks a genuine stop request:
+    # opt-out is a safety-critical, non-sending state transition.
+    if _INJECTION.search(own):
+        return "SECURITY_REVIEW"
     if re.search(r"(?i)\b(?:anwalt|abmahnung|legal action|security questionnaire|dpa request)\b", own):
         return "HUMAN_REVIEW"
     return "NEEDS_CLASSIFICATION"
