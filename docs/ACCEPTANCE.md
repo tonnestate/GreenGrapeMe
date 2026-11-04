@@ -159,3 +159,39 @@ identities, partial payments/refunds/chargebacks, accrual periods,
 complete per-campaign acquisition/fulfilment cost, valid revenue
 attribution and deployed provider acceptance. Local test fixtures are
 not substitutes for live commercial verification.
+
+## G5 source-account integrity at provider reconciliation (2026-11-04)
+
+A second transactional correctness gap was identified after the initial
+funnel-to-payment integration: the pilot ledger rechecked the persisted
+**event** at commit but not the *linked account's source identity*.
+During a slow independent banking/contract verification, a concurrent
+writer could rewrite the source evidence, attach the account to a
+different offer or change its inbound case fingerprint. The previous
+implementation could still mark the original event `SOURCE_CONFIRMED`
+against the changed account context.
+
+New account-bound **events** require a valid imported Opportunity
+matching the current tenant, offer, company and source structure. If
+an inbound `PilotSalesFlow` case is linked, its immutable
+`source_sha256` and original pilot binding must also match. Before
+calling an external independent evidence provider these checks must
+pass, and after provider verification they are **repeated under the
+same SQLite write lock as the confirmation**. A conflicting source
+leaves the event `REPORTED`, adds no confirmed revenue and requires
+operator reconciliation. A customer opt-out alone does NOT erase
+authentic past accounting history or block a legitimate independent
+receipt; marketing consent is a separate control.
+
+Already independently confirmed historical receipts remain immutable,
+including strict idempotent event and provider replays after a later
+source revision. New events cannot use a corrupt or reassigned account.
+Tests deliberately reassign the offer and mutate original case evidence
+inside provider verification; confirm zero misattributed cash, zero
+unnecessary external calls when already invalid, and preserved historic
+receipts after opt-out/restart.
+
+These guards are local evidence-integrity controls, not a live banking
+integration, a contractual price schedule or legal account identity
+verification. The release gate stays open until the external authorities
+and cost/invoice mapping are actually deployed and verified.
