@@ -154,3 +154,22 @@ integration as permission to launch a public SaaS. Run
 `PYTHONPATH=src python -m greengrapeme.cli --db /path/to/existing.sqlite release-audit`.
 See [docs/PRODUCTION_RELEASE_GATES.md](docs/PRODUCTION_RELEASE_GATES.md)
 for G1–G5 and security/operations acceptance requirements.
+
+## Authenticated SaaS API foundation (2026-11-04)
+
+GreenGrapeMe now includes an additional **OIDC RS256/JWKS authenticated,
+mandantengebundene** WSGI JSON API, separate from its local shared-token
+demo UI. Access is authorized through current revocable tenant memberships
+in the existing SQLite database, with `viewer`, `operator`, `finance`
+and `admin` roles. The API supports tenant-scoped Discovery, CRM funnel,
+pilot and reported-only finance endpoints; no API call can self-grant a
+role, select an unauthorized tenant, mark a payment independently
+confirmed or bypass external source/contact policy.
+
+New installations provision auth tables via explicit `db-bootstrap`;
+operator CLI commands administer tenants and members. See
+[docs/SAAS_AUTH_DEPLOYMENT.md](docs/SAAS_AUTH_DEPLOYMENT.md) for OIDC,
+JWKS rotation, scoped access, HTTPS WSGI configuration, commands, roles,
+security behavior and remaining release blockers. This is an authenticated
+API foundation, **not yet** a finished login UI, real customer onboarding,
+contract/payment execution or a public production deployment.
