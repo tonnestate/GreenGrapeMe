@@ -7,6 +7,8 @@ HTTPS reverse proxy / WSGI server with externally managed OIDC login.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from importlib import resources
 from os import environ
 import hashlib
 import json
@@ -24,6 +26,49 @@ from .tenant_access import TenantMemberships
 
 
 _MAX_JSON = 8192
+
+
+@dataclass(frozen=True)
+class BrowserOIDCConfig:
+    authorization_endpoint: str
+    token_endpoint: str
+    client_id: str
+
+    def __post_init__(self):
+        from .oidc_auth import _https_url
+        _https_url(self.authorization_endpoint, "authorization endpoint")
+        _https_url(self.token_endpoint, "token endpoint")
+        if (not isinstance(self.client_id, str)
+                or not 1 <= len(self.client_id) <= 256
+                or self.client_id != self.client_id.strip()
+                or any(ord(ch) < 33 for ch in self.client_id)):
+            raise ValueError("invalid public OIDC client ID")
+
+
+def _asset(start_response, path: str, token_endpoint: str):
+    filename, content_type = {
+        "/": ("saas.html", "text/html; charset=utf-8"),
+        "/index.html": ("saas.html", "text/html; charset=utf-8"),
+        "/saas.js": ("saas.js", "text/javascript; charset=utf-8"),
+        "/app.css": ("app.css", "text/css; charset=utf-8"),
+    }[path]
+    body = (resources.files("greengrapeme") / "web" / filename).read_bytes()
+    parsed = urlsplit(token_endpoint)
+    token_origin = parsed.scheme + "://" + parsed.netloc
+    start_response("200 OK", [
+        ("Content-Type", content_type),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store, max-age=0"),
+        ("Strict-Transport-Security", "max-age=31536000"),
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Referrer-Policy", "no-referrer"),
+        ("Content-Security-Policy",
+         "default-src 'none'; script-src 'self'; style-src 'self'; "
+         "connect-src 'self' " + token_origin + "; form-action 'none'; "
+         "base-uri 'none'; frame-ancestors 'none'"),
+    ])
+    return [body]
 
 
 def _reporter_ref(principal) -> str:
@@ -82,11 +127,14 @@ def _request_json(environ: dict, allowed: frozenset[str]) -> dict:
 def create_saas_app(
     catalog: DiscoveryCatalog, memberships: TenantMemberships,
     verifier: OIDCTokenVerifier, *, allowed_origin: str,
+    browser: BrowserOIDCConfig | None = None,
 ):
     origin = urlsplit(allowed_origin)
     if (origin.scheme != "https" or not origin.netloc or origin.path not in ("", "/")
             or origin.query or origin.fragment or allowed_origin.endswith("/")):
         raise ValueError("SaaS API must have a canonical HTTPS origin")
+    if browser is not None and not isinstance(browser, BrowserOIDCConfig):
+        raise ValueError("invalid browser OIDC configuration")
     store = catalog.store
     jobs = DiscoveryJobQueue(store)
 
@@ -98,6 +146,17 @@ def create_saas_app(
                           {"error": "tls_required"})
         path = environ.get("PATH_INFO", "")
         method = environ.get("REQUEST_METHOD", "")
+        if browser is not None and method == "GET":
+            if path in {"/", "/index.html", "/saas.js", "/app.css"}:
+                return _asset(start_response, path, browser.token_endpoint)
+            if path == "/public/config":
+                return _reply(start_response, "200 OK", {
+                    "authorization_endpoint": browser.authorization_endpoint,
+                    "token_endpoint": browser.token_endpoint,
+                    "client_id": browser.client_id,
+                    "scope": "openid profile",
+                    "redirect_uri": allowed_origin + "/",
+                })
         if not isinstance(path, str) or not path.startswith("/api/"):
             return _reply(start_response, "404 Not Found",
                           {"error": "not_found"})
@@ -264,7 +323,18 @@ def create_service_from_env():
         audience=environ["GG_OIDC_AUDIENCE"],
         jwks_uri=environ["GG_OIDC_JWKS_URI"],
     )
+    browser_fields = (
+        "GG_OIDC_AUTHORIZE_URI", "GG_OIDC_TOKEN_URI", "GG_OIDC_CLIENT_ID",
+    )
+    configured = [bool(environ.get(key)) for key in browser_fields]
+    if any(configured) and not all(configured):
+        raise ValueError("OIDC browser endpoints must be configured together")
+    browser = BrowserOIDCConfig(
+        authorization_endpoint=environ[browser_fields[0]],
+        token_endpoint=environ[browser_fields[1]],
+        client_id=environ[browser_fields[2]],
+    ) if all(configured) else None
     return create_saas_app(
         DiscoveryCatalog(store), memberships, OIDCTokenVerifier(config),
-        allowed_origin=environ["GG_SAAS_ORIGIN"],
+        allowed_origin=environ["GG_SAAS_ORIGIN"], browser=browser,
     )
