@@ -18,6 +18,39 @@ Blackberry's own domain logic returns a separate legal-identity `VERIFIED`, `PAR
 
 `src/greengrapeme/missions.py` includes a stored research summary in a Neuron mission's context, explicitly marked unverified and with no contact permission. Existing PlumMe Sales Neurons can take that research into account while remaining subject to their source-bound validation.
 
+## Source-bound research and fail-closed race recovery (2026-11-04)
+
+GreenGrapeMe now binds each newly accepted BlackberryMe summary to the SHA-256
+of the **complete original opportunity source JSON**, in addition to the
+company name and requested research inputs. Immediately before persisting a
+donor result, the existing SQLite write transaction rechecks:
+
+- the current tenant and opportunity record;
+- the full original source fingerprint, not merely the same company name;
+- current rejection/suppression state, including opt-outs arriving while
+  BlackberryMe was processing an earlier request.
+
+A source edit or opt-out during a donor call prevents any review completion
+record. Cached reviews are also checked against the current source on replay.
+A later sales mission refuses to expose a research summary to PlumMe unless
+the review's persisted source fingerprint agrees with the exact immutable
+mission account revision. These protections are implemented in
+`blackberry_bridge.py`, `batch_runner.py`, `discovery_jobs.py` and
+`missions.py`.
+
+Previously stored, **name-only** Blackberry reviews cannot establish this
+new provenance and are deliberately treated as `BLOCKED_BLACKBERRY_REVISION`.
+There is no automatic migration that fabricates missing source evidence:
+the authorized host must independently reconcile the original research
+result before permitting a new mission. The existing GreenGrapeMe API still
+does not verify a canonical legal entity or grant contact permission.
+
+The contract was cross-checked against the then-current private BlackberryMe
+MCP surface; the private donor code was not copied into the public repository.
+The tests cover real SQLite source edits/opt-outs during intercepted provider
+callbacks and injection of a legacy review into a sales mission. An actually
+installed FruitStack host run is **not** represented as completed.
+
 ## CLI
 
 ```bash

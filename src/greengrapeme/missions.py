@@ -16,7 +16,8 @@ from typing import Any, Protocol
 from .operations import SalesWorkspace
 
 STAGES = ("HEAD_OF_SALES", "MARKET_INTELLIGENCE", "SDR")
-TERMINAL = {"REVIEW_READY", "BLOCKED_NO_SOURCE", "BLOCKED_SOURCE_REVISION", "UNKNOWN", "CANCELLED"}
+TERMINAL = {"REVIEW_READY", "BLOCKED_NO_SOURCE", "BLOCKED_SOURCE_REVISION",
+            "BLOCKED_BLACKBERRY_REVISION", "UNKNOWN", "CANCELLED"}
 ALLOWED_ACTIONS = {"REVIEW", "RESEARCH", "NURTURE", "DEFER"}
 
 
@@ -262,12 +263,35 @@ class SalesMissionEngine:
             review_table = db.execute("""SELECT 1 FROM sqlite_master
                 WHERE type='table' AND name='sales_blackberry_reviews'""").fetchone()
             if review_table:
+                source_shas = {record["opportunity_id"]: record["source_sha256"]
+                               for record in records}
                 for account in accounts:
                     reviewed = db.execute("""SELECT review_json FROM sales_blackberry_reviews
                         WHERE tenant=? AND opportunity_id=?""",
                         (tenant, account["opportunity_id"])).fetchone()
                     if reviewed:
-                        b = json.loads(reviewed["review_json"])
+                        try:
+                            b = json.loads(reviewed["review_json"])
+                        except (ValueError, TypeError):
+                            b = None
+                        if (not isinstance(b, dict) or
+                                b.get("source_sha256") != source_shas[
+                                    account["opportunity_id"]] or
+                                b.get("donor_status") not in (
+                                    "VERIFIED", "PARTIAL", "CONFLICT", "UNRESOLVED") or
+                                not isinstance(b.get("role_reviews"), list) or
+                                not isinstance(b.get("source_urls"), list)):
+                            # Legacy unbound or corrupt review data must not
+                            # become model input, even if source name matches.
+                            db.execute("""UPDATE sales_missions
+                                SET status='BLOCKED_BLACKBERRY_REVISION',updated_at=?
+                                WHERE tenant=? AND mission_id=?""",
+                                (self.store._now(),tenant,mission_id))
+                            self.store._audit(db,tenant,mission_id,
+                                "MISSION_BLACKBERRY_EVIDENCE_REJECTED",
+                                {"reason":"REVIEW_NOT_BOUND_TO_CURRENT_SOURCE",
+                                 "opportunity_id":account["opportunity_id"]})
+                            return None
                         account["blackberry_research"] = {
                             "donor_status": b["donor_status"],
                             "account_linkage": "UNVERIFIED",

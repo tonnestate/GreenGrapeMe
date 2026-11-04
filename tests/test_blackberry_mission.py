@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import json
 import unittest
 
-from greengrapeme.blackberry_bridge import research_account
+from greengrapeme.blackberry_bridge import research_account, BlackberryReviewStore
 from greengrapeme.missions import SalesMissionEngine
 from greengrapeme.operations import SalesWorkspace
 from greengrapeme.sales import Evidence, Opportunity
@@ -48,6 +48,32 @@ class SalesMissionContextTests(unittest.TestCase):
             self.assertEqual(account["blackberry_research"]["contact_authority"], "NONE")
             self.assertEqual(account["blackberry_research"]["account_linkage"], "UNVERIFIED")
             self.assertEqual(fake.calls, ["blackberry_plan_company", "blackberry_role_relevance"])
+
+    def test_legacy_unbound_blackberry_review_blocks_neuron_input(self):
+        with TemporaryDirectory() as t:
+            store=SalesWorkspace(Path(t)/"state.sqlite")
+            store.ingest("org",[Opportunity(
+                "one","Example GmbH","offer-1",(
+                    Evidence("starfruitme","https://example.org/company",
+                             "Discovered place only","DISCOVERY_OBSERVATION"),))])
+            BlackberryReviewStore(store)
+            engine=SalesMissionEngine(store)
+            engine.create("org","mission","offer-1","Research accounts","SMB")
+            with store._db() as db:
+                db.execute("""INSERT INTO sales_blackberry_reviews VALUES(?,?,?,?,?)""",(
+                    "org","one","f"*64,json.dumps({
+                        "donor_status":"VERIFIED",
+                        "account_linkage":"UNVERIFIED",
+                        "role_reviews":[],
+                        "source_urls":["https://example.org/old-identity"]
+                    }),store._now()))
+            self.assertIsNone(engine._claim("org","mission"))
+            self.assertEqual(engine.status("org","mission")["status"],
+                             "BLOCKED_BLACKBERRY_REVISION")
+            with store._db() as db:
+                records=db.execute("""SELECT count(*) FROM sales_mission_steps
+                    WHERE tenant='org'""").fetchone()[0]
+            self.assertEqual(records,0)
 
 
 if __name__ == "__main__":
