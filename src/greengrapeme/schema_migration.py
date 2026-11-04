@@ -66,7 +66,7 @@ def migrate_database(source: str | Path, new_destination: str | Path) -> dict:
         missing = _REQUIRED_OPERATIONS_TABLES.difference(
             verified["schema_tables_verified"])
         if missing or verified["user_version"] != SCHEMA_VERSION:
-            raise ValueError("migration did not create a complete v1 schema")
+            raise ValueError("migration did not create a complete v2 schema")
 
         migrated_counts = _table_counts(staged)
         if any(migrated_counts.get(table) != count
