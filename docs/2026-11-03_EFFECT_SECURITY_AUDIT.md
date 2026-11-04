@@ -204,3 +204,35 @@ malformed evidence, mixed good/bad batches and restart idempotence.
 This protects deterministic **internal review**, not actual customer
 messaging. Neither queue readiness nor source evidence confers consent,
 verified legal identity or authority to send.
+
+## Mission source and Neuron receipt admission (2026-11-04)
+
+The sales mission pipeline previously assumed that `opportunities.source_json`
+was valid JSON text with complete evidence fields at mission creation,
+model-stage claim and model-result commit. SQLite TEXT columns can contain
+malformed BLOBs, while a valid but substituted JSON object may have
+incompatible account identity or original suppression. Unchecked `.encode()`,
+`json.loads()` and nested key lookups could fail inside these transitions.
+A damaged source arriving while a model operation was in flight could
+also prevent the intended `SOURCE_INVALIDATED` transition from being
+persisted, leaving a stage stuck as `RUNNING`.
+
+The mission runner now validates text type, parsed object structure,
+account/offer/company linkage, original `suppressed is False` and evidence
+fields before inserting a mission, before claiming a stage and **again in
+the same write transaction as the model result**. Pre-stage corruption
+becomes `BLOCKED_SOURCE_REVISION`; a change during the external call
+persists `SOURCE_INVALIDATED` and no model proposal. New mission creation
+with an invalid source raises an explicit `ValueError` and writes no
+partial mission records.
+
+Model cost receipts must also be exact `int`/`float`, finite and
+non-negative. Boolean, NaN, Infinity, negative and string-valued costs
+produce `UNKNOWN` without recording a proposal or silently retrying a
+potentially executed model action. A Boolean `max_steps` is no longer
+accepted as a valid bounded integer.
+
+All changes preserve the existing intentionally non-sending role model.
+These checks are necessary **local database and result-integrity gates**,
+not evidence of live PlumMe/MangoMe deployment, trusted expense receipts
+or authorization for customer contact.
