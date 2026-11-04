@@ -171,20 +171,35 @@ class BlackberryReviewStore:
                  PRIMARY KEY(tenant,opportunity_id))""")
 
     def save(self, tenant: str, review: BlackberryAccountReview,
-             *, input_fingerprint: str) -> bool:
+             *, input_fingerprint: str,
+             expected_source_sha256: str) -> bool:
         tenant = self.store._required(tenant, "tenant")
         opportunity = self.store._required(review.opportunity_id, "opportunity")
         if not isinstance(input_fingerprint, str) or len(input_fingerprint) != 64 or any(
             ch not in "0123456789abcdef" for ch in input_fingerprint
         ):
             raise ValueError("invalid input fingerprint")
+        if (not isinstance(expected_source_sha256, str)
+                or len(expected_source_sha256) != 64
+                or any(c not in "0123456789abcdef"
+                       for c in expected_source_sha256)):
+            raise ValueError("invalid source sha256 for Blackberry review")
         data = json.dumps(review.__dict__, sort_keys=True)
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("""SELECT source_json FROM opportunities
+            row = db.execute("""SELECT source_json,status FROM opportunities
                     WHERE tenant=? AND opportunity_id=?""", (tenant, opportunity)).fetchone()
             if not row:
                 raise ValueError("account is not present in this tenant")
+            if (not isinstance(row["source_json"], str) or
+                    hashlib.sha256(row["source_json"].encode("utf-8")).hexdigest()
+                    != expected_source_sha256):
+                raise ValueError("Blackberry source changed during donor research")
+            if row["status"] == "REJECTED" or db.execute("""
+                SELECT 1 FROM suppressions
+                WHERE tenant=? AND opportunity_id=?
+            """,(tenant, opportunity)).fetchone():
+                raise PermissionError("Blackberry research blocked by current suppression")
             prior = db.execute("""SELECT input_sha256,review_json
                     FROM sales_blackberry_reviews WHERE tenant=? AND opportunity_id=?""",
                                (tenant, opportunity)).fetchone()
@@ -211,8 +226,17 @@ class BlackberryReviewStore:
 
 def research_fingerprint(opportunity_id: str, account_name: str, objective: str,
                          titles: tuple[str, ...], linkedin_company: str,
-                         website_url: str) -> str:
-    inputs = (opportunity_id, account_name, objective, titles, linkedin_company, website_url)
+                         website_url: str, *, source_sha256: str) -> str:
+    """Bind Blackberry review to immutable account evidence, not display name.
+
+    Legacy name-only reviews intentionally fail this source-bound contract and
+    require explicit reconciliation before additional work can continue.
+    """
+    if (not isinstance(source_sha256, str) or len(source_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in source_sha256)):
+        raise ValueError("Blackberry review requires exact source fingerprint")
+    inputs = (opportunity_id, account_name, objective, titles,
+              linkedin_company, website_url, source_sha256)
     return hashlib.sha256(json.dumps(inputs, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -223,16 +247,21 @@ async def research_account(store: SalesWorkspace, tenant: str, opportunity_id: s
     tenant = store._required(tenant, "tenant")
     opportunity_id = store._required(opportunity_id, "opportunity")
     with store._db() as db:
-        row = db.execute("""SELECT company_name FROM opportunities WHERE tenant=?
-                            AND opportunity_id=?""", (tenant, opportunity_id)).fetchone()
+        row = db.execute("""SELECT company_name,source_json,status FROM opportunities
+                            WHERE tenant=? AND opportunity_id=?""",
+                            (tenant, opportunity_id)).fetchone()
         if row is None:
             raise ValueError("account not found in tenant")
         suppressed = db.execute("""SELECT 1 FROM suppressions WHERE tenant=?
                             AND opportunity_id=?""", (tenant, opportunity_id)).fetchone()
-    if suppressed:
+    if suppressed or row["status"] == "REJECTED":
         raise ValueError("account suppressed; do not perform further enrichment")
-    fingerprint = research_fingerprint(opportunity_id, row["company_name"],
-                                       objective, role_titles, linkedin_company, website_url)
+    if not isinstance(row["source_json"], str):
+        raise ValueError("Blackberry source record malformed")
+    source_sha256 = hashlib.sha256(row["source_json"].encode("utf-8")).hexdigest()
+    fingerprint = research_fingerprint(
+        opportunity_id, row["company_name"], objective, role_titles,
+        linkedin_company, website_url, source_sha256=source_sha256)
     reviews = BlackberryReviewStore(store)
     previous = reviews.get(tenant, opportunity_id)
     if previous:
@@ -241,14 +270,26 @@ async def research_account(store: SalesWorkspace, tenant: str, opportunity_id: s
             old = db.execute("""SELECT input_sha256 FROM sales_blackberry_reviews
                               WHERE tenant=? AND opportunity_id=?""",
                              (tenant, opportunity_id)).fetchone()
-        if old["input_sha256"] != fingerprint:
-            raise ValueError("Blackberry research input changed; reconcile before repeating")
+            current = db.execute("""SELECT source_json,status FROM opportunities
+                                  WHERE tenant=? AND opportunity_id=?""",
+                                  (tenant, opportunity_id)).fetchone()
+            blocked = db.execute("""SELECT 1 FROM suppressions
+                                WHERE tenant=? AND opportunity_id=?""",
+                                (tenant, opportunity_id)).fetchone()
+        if (old is None or old["input_sha256"] != fingerprint
+                or current is None or not isinstance(current["source_json"], str)
+                or hashlib.sha256(current["source_json"].encode("utf-8")).hexdigest()
+                   != source_sha256):
+            raise ValueError("Blackberry research source/input changed; reconcile")
+        if current["status"] == "REJECTED" or blocked:
+            raise PermissionError("Blackberry review replay blocked by suppression")
         return previous
     result = await evaluate_blackberry_account(
         client, account_name=row["company_name"], opportunity_id=opportunity_id,
         objective=objective, role_titles=role_titles,
         linkedin_company=linkedin_company, website_url=website_url)
-    reviews.save(tenant, result, input_fingerprint=fingerprint)
+    reviews.save(tenant, result, input_fingerprint=fingerprint,
+                 expected_source_sha256=source_sha256)
     return reviews.get(tenant, opportunity_id)
 
 
