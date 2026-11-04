@@ -15,7 +15,7 @@ from greengrapeme.dittofeed_effects import DittofeedPomeloEffects
 from greengrapeme.operations import SalesWorkspace
 from greengrapeme.pilot_metrics import PilotLedger
 from greengrapeme.schema_migration import migrate_database
-from greengrapeme.tenant_access import TenantMemberships
+from greengrapeme.tenant_access import Principal, TenantMemberships
 from greengrapeme.release_audit import release_audit
 from greengrapeme.sales import Opportunity
 
@@ -81,10 +81,8 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self._scalar(self.upgraded,
             "SELECT count(*) FROM audit"), self._scalar(
                 self.legacy, "SELECT count(*) FROM audit"))
-        self.assertEqual(TenantMemberships(upgraded).role(
-            __import__("greengrapeme.tenant_access", fromlist=["Principal"]).Principal(
-                "https://idp.example", "unknown"),
-            "tenant-a"), None)
+        self.assertIsNone(TenantMemberships(upgraded).role(
+            Principal("https://idp.example", "unknown"), "tenant-a"))
         # This new copy is structurally operational but not independently
         # authorized to execute real external effects.
         self.assertEqual(release_audit(self.upgraded)["status"], "NO_GO")
