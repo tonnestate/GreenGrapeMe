@@ -6,6 +6,7 @@ import asyncio
 import json
 from .operations import SalesWorkspace
 from .database_recovery import backup_database, restore_database, verify_database
+from .production_database import bootstrap_operational_database
 from .release_audit import release_audit
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("overview")
     sub.add_parser("queue")
     sub.add_parser("db-verify", help="Read-only SQLite integrity and base schema check")
+    sub.add_parser("db-bootstrap", help="Explicitly create a NEW operational database; never overwrite")
     sub.add_parser("release-audit",
         help="Read-only NO-GO production gate and unresolved external effect counts")
     backup = sub.add_parser("db-backup",
@@ -174,7 +176,11 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
     if a.command in {"db-verify", "db-backup", "db-restore",
-                     "release-audit"}:
+                     "db-bootstrap", "release-audit"}:
+        if a.command == "db-bootstrap":
+            result = bootstrap_operational_database(a.db)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
         if a.command == "release-audit":
             result = release_audit(a.db)
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
