@@ -51,6 +51,12 @@ _SCHEMA = {
     "sales_pilot_case_steps": ("tenant pilot_id case_id step_id from_state to_state "
                                "evidence_ref reporter_ref followup_at occurred_at",
                                ("tenant", "pilot_id", "case_id", "step_id")),
+    "sales_pilot_appointments": (
+        "tenant pilot_id case_id booking_id opportunity_id "
+        "case_source_sha256 calendar_ref slot_start_at slot_end_at "
+        "reporter_ref state provider_kind provider_event_id "
+        "provider_receipt_id provider_updated_at created_at updated_at",
+        ("tenant", "pilot_id", "case_id", "booking_id")),
     "sales_pilot_reply_effects": ("tenant pilot_id case_id reply_id opportunity_id "
                                   "recipient_ref content_ref content_sha256 "
                                   "case_source_sha256 effect_id state permission_receipt_ref "
@@ -89,6 +95,9 @@ _BASE_TABLES = frozenset({
 _UNIQUE_BINDINGS = {
     "sales_pilot_events": (("tenant", "provider_kind", "provider_receipt_id"),),
     "sales_pilot_cases": (("tenant", "opportunity_id"),),
+    "sales_pilot_appointments": (
+        ("tenant", "provider_kind", "provider_event_id"),
+        ("tenant", "provider_kind", "provider_receipt_id")),
     "sales_pilot_reply_effects": (("tenant", "effect_id"),),
     "dittofeed_sync_outbox": (("tenant", "workspace_id", "message_id"),),
     "dittofeed_pomelo_effects": (("tenant", "effect_id"),),
@@ -176,9 +185,14 @@ def _check_open_database(db: sqlite3.Connection) -> dict:
                         "SELECT sql FROM sqlite_master WHERE name=?",
                         (index_name,)).fetchone()
                     sql = (definition[0] or "").upper() if definition else ""
-                    if (table != "sales_pilot_events" or
-                            "WHERE PROVIDER_RECEIPT_ID IS NOT NULL" not in
-                            " ".join(sql.split())):
+                    allowed_where = (
+                        "WHERE PROVIDER_RECEIPT_ID IS NOT NULL"
+                        if table == "sales_pilot_events"
+                        else "WHERE " + required_unique[-1].upper() + " IS NOT NULL"
+                        if table == "sales_pilot_appointments"
+                        else None
+                    )
+                    if allowed_where is None or allowed_where not in " ".join(sql.split()):
                         continue
                 found = True
                 break
