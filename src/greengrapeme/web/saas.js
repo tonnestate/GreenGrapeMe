@@ -284,6 +284,11 @@ async function crmWorklist() {
   const pilot = value("crm-pilot-id");
   if (!pilot) throw new Error("Bitte eine Pilot-ID eingeben.");
   const filter = "?pilot=" + encodeURIComponent(pilot);
+  // Never retain a different pilot's cases after a failed request.
+  $("crm-case-list").replaceChildren();
+  $("crm-followup-list").replaceChildren();
+  $("crm-case-count").textContent = "";
+  $("crm-followup-count").textContent = "";
   // The API checks the current OIDC subject and tenant membership on each read.
   // Neither a queued follow-up nor a reported case grants contact authority.
   const [cases, due] = await Promise.all([
