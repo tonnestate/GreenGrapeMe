@@ -133,6 +133,15 @@
             <tbody id="crm-followup-list"></tbody>
           </table>
         </div>
+        <form id="source-case-form" class="discovery-form" hidden>
+          <h3>Discovery-Unternehmen ins CRM übernehmen</h3>
+          <p>Ein gefundener Prospect ist keine eingegangene Anfrage. Der Vorgang erhält keine Kontaktbefugnis.</p>
+          <div><label for="source-pilot">Pilot-ID</label><input id="source-pilot" required maxlength="120"></div>
+          <div><label for="source-case">Neue CRM-Vorgangs-ID</label><input id="source-case" required maxlength="120"></div>
+          <div><label for="source-opportunity">Bestehende Opportunity-ID</label><input id="source-opportunity" required maxlength="160"></div>
+          <div><label for="source-evidence">Exakte Quellenreferenz (URN/HTTPS)</label><input id="source-evidence" required maxlength="1024"></div>
+          <button type="submit">Als ungeprüften Prospect übernehmen</button>
+        </form>
         <form id="inbound-form" class="discovery-form" hidden>
           <div><label for="inbound-pilot">Pilot-ID</label><input id="inbound-pilot" required></div>
           <div><label for="inbound-case">Vorgangs-ID</label><input id="inbound-case" required></div>
