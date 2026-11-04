@@ -102,6 +102,69 @@ class FullPipelineContractTests(unittest.TestCase):
             self.assertEqual(final["state"], "REVIEW_READY")
             self.assertEqual(neuron.calls, 3)
 
+    def test_changed_mission_cohort_never_imports_unapproved_new_account(self):
+        with TemporaryDirectory() as t:
+            store = SalesWorkspace(Path(t)/"state.db")
+            source, neuron = FakeSource(count=1), FakeNeuron()
+            result = self._run(store, source, neuron)
+            self.assertEqual(result["state"], "REVIEW_READY")
+            self.assertEqual(store.overview("tenant-A")["opportunities"], 1)
+            source.count = 2
+            blocked = self._run(store, source, neuron)
+            self.assertEqual(blocked["state"], "BLOCKED_CHANGED_MISSION_INPUT")
+            self.assertEqual(blocked["effects"], 0)
+            self.assertEqual(store.overview("tenant-A")["opportunities"], 1)
+            self.assertEqual(neuron.calls, 3)
+            with store._db() as db:
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM audit WHERE tenant=? AND "
+                    "event='OPPORTUNITY_IMPORTED'",
+                    ("tenant-A",)).fetchone()[0], 1)
+
+    def test_bad_source_offer_and_duplicate_accounts_never_enter_database(self):
+        correct = Opportunity("account", "Example GmbH", "offer", ())
+        wrong = Opportunity("account", "Example GmbH", "other-offer", ())
+        malformed = Opportunity("account", "Example GmbH", "offer",
+                                (), verified_company="yes")
+        for returned, expected in (
+            ([wrong], "SOURCE_RECORDS_INVALID"),
+            ([correct, correct], "SOURCE_DUPLICATE_ACCOUNT_IDS"),
+            ([malformed], "SOURCE_RECORDS_INVALID"),
+            ([{"opportunity_id": "account"}], "SOURCE_RECORDS_INVALID"),
+            ((correct,), "SOURCE_SNAPSHOT_INVALID"),
+            (None, "SOURCE_SNAPSHOT_INVALID"),
+        ):
+            async def untrusted_reader(**kwargs):
+                return returned
+            with self.subTest(returned=repr(returned)), TemporaryDirectory() as t:
+                store = SalesWorkspace(Path(t)/"state.db")
+                neuron = FakeNeuron()
+                result = self._run(store, untrusted_reader, neuron)
+                self.assertEqual(result["state"], "BLOCKED_SOURCE_REVISION")
+                self.assertEqual(result["error_kind"], expected)
+                self.assertEqual(result["effects"], 0)
+                self.assertEqual(neuron.calls, 0)
+                self.assertEqual(store.overview("tenant-A")["opportunities"], 0)
+                self.assertEqual(store.queue("tenant-A"), [])
+
+    def test_bool_source_and_model_limits_denied_before_reader(self):
+        async def forbidden_reader(**kwargs):
+            raise AssertionError("untrusted source must not be reached")
+        with TemporaryDirectory() as t:
+            store = SalesWorkspace(Path(t)/"state.db")
+            for bad in (
+                {"max_accounts": True, "max_steps": 3},
+                {"max_accounts": 10, "max_steps": True},
+            ):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    asyncio.run(run_sales_pipeline(
+                        store=store, tenant="tenant-A", job_id="a"*24,
+                        offer_id="offer", mission_id="mission",
+                        objective="Find B2B customers", icp="German companies",
+                        neuron=FakeNeuron(), source_reader=forbidden_reader,
+                        **bad))
+            self.assertEqual(store.overview("tenant-A")["opportunities"], 0)
+
     def test_empty_discovery_prevents_provider_use(self):
         async def empty_source(**kwargs):
             return []
