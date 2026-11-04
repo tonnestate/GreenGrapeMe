@@ -7,7 +7,7 @@ const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
-                companyDetailRevision: 0 };
+                companyDetailRevision: 0, discoveryDraft: null };
 const LOGIN_TRANSACTION = "gg-oidc-pkce-transaction";
 const PAGE_SIZE = 40;
 
@@ -404,6 +404,7 @@ function clearTenantWorkspace() {
   state.companyTotal = 0;
   state.companyQueryRevision += 1;
   state.companyDetailRevision += 1;
+  state.discoveryDraft = null;
   for (const id of ["metric-companies", "metric-work",
                     "metric-missions", "metric-pilots"]) $(id).textContent = "–";
   for (const id of ["companies-list", "discovery-list", "pilots-list"]) {
@@ -501,6 +502,24 @@ function onForm(id, operation) {
       }
     }
   });
+}
+// A lost HTTP response is not proof that a create operation failed.
+// Reuse the same idempotency key for an identical draft until the server
+// confirms acceptance. The server enforces immutable (tenant, request_id).
+async function queueDiscovery(spec) {
+  const generation = state.generation;
+  const specJson = JSON.stringify(spec);
+  const prior = state.discoveryDraft;
+  const draft = prior && prior.generation === generation &&
+                prior.specJson === specJson
+    ? prior : { generation, specJson, requestId: crypto.randomUUID() };
+  state.discoveryDraft = draft;
+  const result = await api("/api/discovery-jobs", {
+    method: "POST", body: { request_id: draft.requestId, spec },
+  });
+  assertGeneration(generation);
+  if (state.discoveryDraft === draft) state.discoveryDraft = null;
+  return result;
 }
 function integers(id) {
   const n = Number(value(id));
@@ -608,9 +627,7 @@ async function main() {
     } else {
       throw new Error("Unbekannter Discovery-Modus.");
     }
-    await api("/api/discovery-jobs", {
-      method: "POST", body: { request_id: crypto.randomUUID(), spec },
-    });
+    await queueDiscovery(spec);
     await discovery();
     return "Discovery-Auftrag in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
   });
