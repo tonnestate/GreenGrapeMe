@@ -74,8 +74,39 @@ python -m greengrapeme.cli \
 ```
 
 A new database must use `db-bootstrap`. Existing pre-auth databases
-need an explicit schema migration and backup before use. The SaaS service
-**never** repairs or creates schema on startup.
+can use the versioned, non-destructive `db-migrate` command described
+below. The SaaS service **never** repairs or creates schema on startup.
+
+### Upgrade an EXISTING GreenGrapeMe database (copy-forward)
+
+Stop the Discovery worker, the web server, and other writers before
+performing cutover. Back up the original database to a separately secured
+offsite location first, and reconcile any uncertain external send/effect
+state. Then run:
+
+```bash
+python -m greengrapeme.cli --db /srv/gg/legacy.sqlite \
+  db-migrate --output /srv/gg/greengrapeme-v1.sqlite
+python -m greengrapeme.cli --db /srv/gg/greengrapeme-v1.sqlite db-verify
+python -m greengrapeme.cli --db /srv/gg/greengrapeme-v1.sqlite release-audit
+```
+
+The migration copies committed SQLite state via the WAL-safe online
+backup API, executes additive v1 application schema initialization in
+a private staging copy, records the migration version and compares
+preexisting table row counts. It verifies primary keys, receipt uniqueness
+and irreversible provider-attempt fences before atomically publishing to
+an UNUSED destination. **The source is never changed or overwritten.**
+A migration never automatically makes the new database the production
+database: change `GG_SAAS_DB` and worker configuration explicitly only
+after a controlled cutover. Transactions committed to the original after
+the snapshot are not magically copied over. Restoring an old snapshot
+may omit later independent provider actions; reconcile externally.
+
+`db-migrate` does not repair malformed legacy tables or invent missing
+data. A structurally incompatible source fails the migration instead of
+silently proceeding. Schema migration version 1 is the baseline; future
+breaking schema upgrades require explicit new numbered migrations.
 
 ## SaaS API service configuration
 
