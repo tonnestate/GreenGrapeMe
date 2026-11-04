@@ -128,3 +128,16 @@ GreenGrapeMe kann zu einem vorhandenen, mit Quellen dokumentierten Inbound-Fall 
 GreenGrapeMe may reuse the **entire MIT-licensed Dittofeed Community platform** for customer segmentation, visual journeys, lifecycle templates, broadcasts and engagement analytics, rather than reimplementing a second lifecycle engine. The first integrated, read-only `dittofeed-preview` converts only independently source-confirmed sales events from the existing PilotLedger into deterministic, tenant-separated, pseudonymous Dittofeed track/batch envelopes. It emits **no messages or API calls** and never infers consent, churn causes or ROI.
 
 The underlying Dittofeed runtime is **not installed or deployed here**. Its advanced multi-tenant auth/white-label/embedding features remain proprietary Enterprise options, and self-hosting has nonzero resource requirements. Commercial adoption requires verified isolation, provider and consent gates, PomeloMe host effect control, live compatibility and unit economics. Source pin, full-product adoption decision, technical contract and remaining gates: `docs/DITTOFEED_FULL_DONOR.md`.
+
+## SQLite backup / recovery — operator only (2026-11-04)
+
+GreenGrapeMe now includes read-only `db-verify`, consistent online
+`db-backup --output <new-path>` (including committed WAL transactions)
+and `db-restore --backup <snapshot> --output <new-path>`. All operate
+**across the entire tenant database**, require no `--tenant`, verify
+SQLite integrity and refuse to overwrite any existing destination.
+See [docs/DATABASE_RECOVERY.md](docs/DATABASE_RECOVERY.md) for required
+operator steps, protection of backup copies, the no-automatic-retry
+rule for irreversible effect fences, and remaining production gates.
+A backup feature alone does **not** imply recovery after external
+provider actions or justify a SaaS production release.
