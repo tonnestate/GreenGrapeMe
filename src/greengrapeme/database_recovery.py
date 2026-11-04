@@ -57,6 +57,10 @@ _SCHEMA = {
         "reporter_ref state provider_kind provider_event_id "
         "provider_receipt_id provider_updated_at created_at updated_at",
         ("tenant", "pilot_id", "case_id", "booking_id")),
+    "sales_calendar_dispatch_attempts": (
+        "tenant pilot_id case_id booking_id provider_event_id event_id "
+        "intent_sha256 permission_ref state created_at updated_at",
+        ("tenant", "pilot_id", "case_id", "booking_id")),
     "sales_pilot_reply_effects": ("tenant pilot_id case_id reply_id opportunity_id "
                                   "recipient_ref content_ref content_sha256 "
                                   "case_source_sha256 effect_id state permission_receipt_ref "
@@ -98,6 +102,7 @@ _UNIQUE_BINDINGS = {
     "sales_pilot_appointments": (
         ("tenant", "provider_kind", "provider_event_id"),
         ("tenant", "provider_kind", "provider_receipt_id")),
+    "sales_calendar_dispatch_attempts": (("tenant", "provider_event_id"),),
     "sales_pilot_reply_effects": (("tenant", "effect_id"),),
     "dittofeed_sync_outbox": (("tenant", "workspace_id", "message_id"),),
     "dittofeed_pomelo_effects": (("tenant", "effect_id"),),
