@@ -258,7 +258,7 @@ class SalesInvoices:
                    invoice_id:str,movement_id:str,*,direction:str,
                    amount_cents:int,evidence_ref:str,
                    source:IndependentCashSource) -> dict:
-        """Independent cash/credit proof; invoice balance CAS and PilotLedger."""
+        """Independent bank cash proof; credit notes affect the separate invoice due."""
         invoice=self.get(tenant,pilot_id,case_id,invoice_id)
         movement_id=_id(movement_id,"movement_id")
         if direction not in _DIRECTIONS:
@@ -333,8 +333,17 @@ class SalesInvoices:
             paid=grouped.get("PAYMENT",0)
             refunded=grouped.get("REFUND",0)
             net=paid-refunded
-            if direction=="PAYMENT" and net+amount_cents>invoice["amount_cents"]:
-                raise ValueError("payment would exceed issued invoice balance")
+            credited=db.execute("""
+                SELECT coalesce(sum(amount_cents),0)
+                FROM sales_customer_credit_notes
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND invoice_id=?
+                  AND state='CREDITED_CONFIRMED'
+            """,key[:4]).fetchone()[0]
+            effective_due=invoice["amount_cents"]-credited
+            if effective_due<0:
+                raise ValueError("invoice has inconsistent confirmed credit total")
+            if direction=="PAYMENT" and net+amount_cents>effective_due:
+                raise ValueError("payment would exceed credited invoice balance")
             if direction=="REFUND" and amount_cents>net:
                 raise ValueError("refund would exceed independently paid balance")
             # This is a financial observation, not new contact permission.
@@ -383,14 +392,30 @@ class SalesInvoices:
                 WHERE tenant=? AND pilot_id=? AND case_id=? AND invoice_id=?
                 GROUP BY direction
             """,(tenant,pilot_id,case_id,invoice_id)).fetchall())
+            credits=db.execute("""
+                SELECT state,count(*),coalesce(sum(amount_cents),0)
+                FROM sales_customer_credit_notes
+                WHERE tenant=? AND pilot_id=? AND case_id=? AND invoice_id=?
+                GROUP BY state
+            """,(tenant,pilot_id,case_id,invoice_id)).fetchall()
+        credit_states={row[0]:(row[1],row[2]) for row in credits}
+        credited=credit_states.get("CREDITED_CONFIRMED",(0,0))[1]
+        pending_credits=credit_states.get("PREPARED",(0,0))[0]
+        effective_due=invoice["amount_cents"]-credited
         paid=grouped.get("PAYMENT",0)
         refunded=grouped.get("REFUND",0)
         net=paid-refunded
+        if effective_due<0 or net<0:
+            raise ValueError("inconsistent invoice credit or settlement balance")
         if invoice["state"]!="ISSUED_CONFIRMED":
             state="NOT_ISSUED"
+        elif net>effective_due:
+            state="REFUND_DUE"
+        elif effective_due==0:
+            state="CREDITED"
         elif net==0:
             state="UNPAID"
-        elif net==invoice["amount_cents"]:
+        elif net==effective_due:
             state="PAID"
         else:
             state="PARTIALLY_PAID"
@@ -400,9 +425,13 @@ class SalesInvoices:
             "contract_id":invoice["contract_id"],
             "state":state,"invoice_state":invoice["state"],
             "amount_cents":invoice["amount_cents"],"currency":"EUR",
+            "confirmed_credit_cents":credited,
+            "pending_credit_note_count":pending_credits,
+            "effective_invoice_amount_cents":effective_due,
             "gross_paid_cents":paid,"refunded_cents":refunded,
             "net_settled_cents":net,
-            "outstanding_cents":invoice["amount_cents"]-net,
+            "outstanding_cents":max(0,effective_due-net),
+            "refund_due_cents":max(0,net-effective_due),
             "independently_settled_only":True,
             "customer_cash_not_platform_revenue":True,
         }
