@@ -586,3 +586,25 @@ an instance of the right adapter class is insufficient. Any missing or
 denied policy, weak authority, swapped tenant or workspace fails closed
 without a GET or POST. Real PomeloMe integration tests cover missing
 capabilities and wrong adapter bindings.
+
+## Source-link consistency and malformed-input fixes (2026-11-04)
+
+The read-only Dittofeed lifecycle preview, frozen outbox preparation/read and
+final atomic HTTP admission now share one validator for the stored imported
+`Opportunity` record. Previously a truthy SQLite BLOB or a nonempty but
+malformed/mismatched JSON string could pass the projection eligibility check,
+then fail with `AttributeError` at `.encode()` during outbox preparation, or
+be counted as a preview-eligible event despite an invalid source.
+
+The shared check requires a parsed JSON object with the exact original
+`opportunity_id` and `offer_id`, nonblank company name, a structured
+evidence list and `suppressed is False`. This prevents a suppressed original
+import from becoming eligible merely because a separate suppression row was
+deleted. Invalid data is withheld with an explicit source-conflict count in
+the preview and rejected with `PermissionError` before any outbox claim or
+network request. Existing valid imported records are unchanged.
+
+Regression tests cover corrupt/non-object JSON, SQLite BLOB and scalar source
+values, and upstream-suppressed source rows without an opt-out row. This
+remains a local integrity check; lawful consent and external destination
+suppression still require an independent production provider.
