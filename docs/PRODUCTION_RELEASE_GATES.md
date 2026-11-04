@@ -132,3 +132,27 @@ actual host deployment, backups/offsite recovery, schema-versioned
 migrations for **existing** databases, secret rotation and real G1–G5
 provider/business acceptance. The explicit bootstrap is a safe initial
 schema creation operation, **not** a production-ready service on its own.
+
+## CLI entrypoints cannot bypass protected web/worker startup
+
+The first strict web `serve()` gate was necessary but insufficient:
+the CLI built a default `SalesWorkspace(db)` **before** dispatching to
+`serve()`. That default constructor creates a missing SQLite database.
+This gave `python -m greengrapeme.cli --db missing.sqlite --tenant T serve`
+a path to silently create local state even though the internal WSGI
+server would ultimately reject incomplete startup.
+
+The CLI now enters `serve()` **before** any default workspace
+construction. The effect-capable `discover-worker` command likewise
+opens exclusively in `bootstrap=False, require_operational=True`
+mode. Missing/incomplete databases stop execution before provider
+initialization, donor research, work admission or model calls.
+Regression tests cover the actual CLI (not only direct `serve()`
+calls), database paths that do not exist, partially initialized
+databases and a valid empty queue with no external activity.
+
+Other operator/development CLI commands retain their existing local
+auto-initializing behavior and are **not** a public service. Production
+orchestration must only use an explicitly provisioned operational
+database and separately authorize every external effect. An installed
+multi-tenant HTTP/IdP service is still required for public release.
