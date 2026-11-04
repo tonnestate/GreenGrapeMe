@@ -236,3 +236,31 @@ All changes preserve the existing intentionally non-sending role model.
 These checks are necessary **local database and result-integrity gates**,
 not evidence of live PlumMe/MangoMe deployment, trusted expense receipts
 or authorization for customer contact.
+
+## Discovery source handoff admission before first import (2026-11-04)
+
+The discovery worker's persisted `SOURCE_DONE` branch previously assumed
+that an authorized StarFruitMe donor would always return a complete
+`list[Opportunity]` within `max_accounts`. It immediately called
+`SalesWorkspace.ingest()` without independently checking returned
+container/record types, offer scope, duplicate account IDs, Boolean
+`verified_company`/`suppressed` flags or evidence structure. A
+nonconforming donor or stale adapter could crash the worker, import
+wrong-offer records into the tenant, or silently ingest more records
+than the request's admitted account limit. Duplicate IDs also leaked
+into later mission planning.
+
+A source snapshot is now validated **before any tenant database write**.
+An invalid snapshot is marked `BLOCKED_SOURCE_REVISION`, with a stable
+`SOURCE_SNAPSHOT_INVALID`, `SOURCE_RECORDS_INVALID` or
+`SOURCE_DUPLICATE_ACCOUNT_IDS` reason. A result larger than
+`max_accounts` is marked `BLOCKED_SOURCE_CAPACITY`, explicitly reporting
+`imported=0`. An altered or missing persisted external job ID is likewise
+blocked before any donor call. The existing empty-list behavior remains
+`BLOCKED_NO_SOURCE`, not a simulated discovery success.
+
+Offline regressions use deliberately faulty donor adapters and assert
+zero imported accounts, no sales missions and no downstream actions.
+These guards enforce the bounded local handoff but are not a substitute
+for a live StarFruitMe snapshot token, source-license compliance or
+independent authorization of real external operations.
