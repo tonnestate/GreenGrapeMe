@@ -14,6 +14,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import _id, _instant
 from .pilot_sales_flow import _reference
 from .sales_invoices import SalesInvoices
+from .provider_receipts import assert_unclaimed_receipt
 
 
 class IndependentCreditNoteSource(Protocol):
@@ -201,13 +202,9 @@ class SalesCreditNotes:
             self._invoice_still_issued(db,invoice)
             if self._credited(db,invoice)+row["amount_cents"]>invoice["amount_cents"]:
                 raise ValueError("cumulative credits exceed original invoice")
-            # An accounting reference cannot be reused as a confirmed invoice.
-            if db.execute("""
-                SELECT 1 FROM sales_customer_invoices
-                WHERE tenant=? AND invoice_provider='ACCOUNTING'
-                  AND invoice_receipt_id=?
-            """,(tenant,receipt_id)).fetchone():
-                raise ValueError("credit note receipt already belongs to an invoice")
+            # The same accounting receipt may not also confirm a different
+            # invoice, bank movement, pilot ledger event or credit note.
+            assert_unclaimed_receipt(db,tenant,"ACCOUNTING",receipt_id)
             try:
                 db.execute("""
                     UPDATE sales_customer_credit_notes
