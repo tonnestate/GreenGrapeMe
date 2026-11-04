@@ -129,14 +129,14 @@ class SalesContractsTests(unittest.TestCase):
         self.assertEqual(release_audit(self.db)[
             "prepared_or_unsigned_contract_count"],1)
         self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
-            "source_confirmed_revenue_cents"],0)
+            "client_payment_confirmed_cents"],0)
 
         host=HostQuoteApproval()
         approved=self.approve(host)
         self.assertEqual(approved["state"],"APPROVED")
         self.assertEqual(len(host.calls),1)
         self.assertEqual(host.calls[0]["terms_sha256"],quote["terms_sha256"])
-        self.assertEqual(self.approve(),"state" in approved and approved)
+        self.assertEqual(self.approve(),approved)
 
         signed=self.sign()
         self.assertEqual(signed["state"],"SIGNED_CONFIRMED")
@@ -169,7 +169,7 @@ class SalesContractsTests(unittest.TestCase):
         self.assertEqual(audit["prepared_or_unsigned_contract_count"],0)
         self.assertEqual(audit["status"],"NO_GO")
         self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
-            "source_confirmed_revenue_cents"],0)
+            "client_payment_confirmed_cents"],0)
         self.assertIn("sales_pilot_contracts",verify_database(self.db)[
             "schema_tables_verified"])
 
