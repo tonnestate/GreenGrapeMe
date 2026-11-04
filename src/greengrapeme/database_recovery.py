@@ -22,6 +22,7 @@ import tempfile
 # The column list is a minimum: additive, backward-compatible columns are
 # permitted, but a broken primary key or missing source/fence field is not.
 _SCHEMA = {
+    "greengrapeme_schema_migrations": ("version applied_at", ("version",)),
     "saas_tenants": ("tenant active created_at", ("tenant",)),
     "saas_memberships": ("tenant issuer subject role active updated_at",
                          ("tenant", "issuer", "subject")),
