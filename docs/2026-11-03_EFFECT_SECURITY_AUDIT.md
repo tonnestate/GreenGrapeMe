@@ -180,3 +180,27 @@ model actions occur after revocation.
 The permission flag remains a trusted-host input: deployment must not
 allow untrusted browser requests to set it to True, and donor hosts
 must independently enforce their permissions at each remote effect.
+
+## Sales work-queue corrupted-evidence isolation (2026-11-04)
+
+Previously `SalesWorkspace.run_cycle` read queued source records directly
+with `json.loads()` and then assumed an object with a list of complete
+evidence objects. A deleted, corrupted, non-text SQLite value, substituted
+account ID or updated `suppressed` value could raise `AttributeError`,
+`KeyError` or `TypeError` (rolling back the **whole** batch), or allow
+a stale review task to become `READY_FOR_REVIEW`.
+
+The queue now validates each independently persisted source record against
+the tenant-bound opportunity/offer/company row, checks the original
+suppression flag and the structure of all supporting evidence, and
+fail-closes **only that account's queued work** as `BLOCKED` under the
+existing transaction. Unaffected account tasks can still be triaged.
+A task with corrupted evidence never gets a manufactured
+`buying_signals` brief. Queue limits now exclude booleans and non-integers.
+Regression tests cover a non-text SQLite BLOB, invalid JSON, identity/offer
+substitution, original suppression without a separate suppression row,
+malformed evidence, mixed good/bad batches and restart idempotence.
+
+This protects deterministic **internal review**, not actual customer
+messaging. Neither queue readiness nor source evidence confers consent,
+verified legal identity or authority to send.
