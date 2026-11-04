@@ -509,7 +509,8 @@ function integers(id) {
 }
 function logout() {
   state.generation += 1;
-  sessionStorage.removeItem(LOGIN_TRANSACTION);
+  // Storage may be blocked by the browser; logout must still clear memory/DOM.
+  try { sessionStorage.removeItem(LOGIN_TRANSACTION); } catch (_) { /* no token persisted */ }
   state.token = null;
   state.expiresAt = 0;
   state.tenant = "";
