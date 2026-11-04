@@ -110,3 +110,52 @@ Pilot inbound intake, conditional operator transition, follow-up scheduling, mee
 Reply metadata preparation, immutable content hash and recipient ref, real PomeloMe model/authority contract, independent host permission check, opt-out/source revision fence, durable pre-dispatch state and read-only PomeloMe reconciliation are implemented. Tests use faithful stubs of PomeloMe request/response types and show no unapproved contact action. This does not constitute real consent, an installed mail adapter, a provider-accepted message or a live dispatch test. A second opt-out/recipient/payload check at the installed adapter's physical send boundary remains mandatory; the pilot DB and PomeloMe ledger do not share an atomic transaction.
 
 Der Remote-Reply-Gateway-Vertrag setzt für eine Aussage `PROVIDER_ACCEPTED` nicht nur einen Model-/Gateway-Rückgabewert voraus, sondern einen passenden **dauerhaften** PomeloMe-Ledger-Record über denselben Empfänger und Payload-Hash. Cross-Tenant-/Cross-Recipient-Receipts und fehlende persistierte Results bleiben `DISPATCH_UNCERTAIN`, ohne Re-Dispatch. Der tatsächliche SMTP/CRM-Provider und unabhängig geprüfte Contact-Policy sind noch nicht installiert.
+
+## G5 commercial evidence: consistent funnel-to-payment projection (2026-11-04)
+
+A cross-module review identified a **business accounting misclassification**:
+`PilotLedger.summary().pricing_validation` previously returned
+`PAID_PILOT_EVIDENCED` on **any** independently confirmed platform
+payment. A payment receipt alone does not establish that a contract,
+its negotiated price, invoice, billing period, renewal obligation or
+customer/deal attribution has been verified. This was particularly
+misleading when the client/payment event had no verified signature.
+
+The pilot summary now distinguishes:
+
+- `paid_pilot_evidence=CONFIRMED_PLATFORM_PAYMENT` only after an
+  independently source-confirmed platform receipt;
+- `pricing_validation=NOT_PROVEN` until an actual contracted
+  pricing/invoice mapping is implemented and independently evidenced;
+- `commercial_reconciliation` cross-checks locally **reported**
+  inbound case progression against independently `SOURCE_CONFIRMED`
+  account-level milestones and actual occurrence times. A *fully
+  confirmed* funnel requires lead accepted → held meeting → proposal
+  delivered → signed deal, with all four distinct provider receipts and
+  non-decreasing timestamps;
+- Real, independently confirmed customer payment remains visible even
+  without verified contract evidence, but is flagged
+  `CUSTOMER_PAYMENT_WITHOUT_CONFIRMED_CONTRACT` (or
+  `CUSTOMER_PAYMENT_PRECEDES_CONFIRMED_CONTRACT`) for human review.
+  Deposits and alternate sales paths may be legitimate: the indicator
+  is a **documentation gap**, not an allegation of invalid payment;
+- A signed case which is only `DEAL_SIGNED_REPORTED` never counts as a
+  provider-confirmed contract. Conflicts with `CLOSED_LOST` are flagged;
+- Verified platform money remains **unallocated to customers, contracts
+  and invoices**. It cannot be relabeled as closed-won customer turnover,
+  monthly recurring revenue, incremental revenue, realized gross margin
+  or causal uplift without the corresponding independent join/evidence.
+
+The read-only pilot API and local dashboard show the distinctions
+separately. Tests follow the full source → inbound → qualifying →
+meeting → proposal → signed report → provider-confirmed stages →
+confirmed customer and platform payments → restart/tenant separation.
+No real payment processor or external account evidence is simulated as
+live revenue.
+
+**Still blocked for G5 release:** authenticated real CRM/contracts,
+independent invoices and settlements, stable many-to-many fee/case
+identities, partial payments/refunds/chargebacks, accrual periods,
+complete per-campaign acquisition/fulfilment cost, valid revenue
+attribution and deployed provider acceptance. Local test fixtures are
+not substitutes for live commercial verification.

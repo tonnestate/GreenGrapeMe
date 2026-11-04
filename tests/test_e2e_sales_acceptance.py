@@ -134,7 +134,20 @@ class SalesEndToEndAcceptance(unittest.TestCase):
         self.assertEqual(final["client_payment_confirmed_cents"], 180000)
         self.assertEqual(final["platform_payment_confirmed_cents"], 12500)
         self.assertEqual(final["provider_cost_confirmed_cents"], 4000)
-        self.assertEqual(final["pricing_validation"], "PAID_PILOT_EVIDENCED")
+        self.assertEqual(final["pricing_validation"], "NOT_PROVEN")
+        self.assertEqual(final["paid_pilot_evidence"],
+                         "CONFIRMED_PLATFORM_PAYMENT")
+        business = final["commercial_reconciliation"]
+        self.assertEqual(business["reported_signed_cases"], 1)
+        self.assertEqual(business["independently_confirmed_contract_accounts"], 0)
+        self.assertEqual(business["fully_confirmed_funnel_accounts"], 0)
+        self.assertEqual(
+            business["customer_payment_without_prior_confirmed_contract_cents"],
+            180000)
+        self.assertEqual(
+            business["gap_counts"]["REPORTED_SIGNATURE_NOT_INDEPENDENTLY_CONFIRMED"], 1)
+        self.assertEqual(
+            business["gap_counts"]["CUSTOMER_PAYMENT_WITHOUT_CONFIRMED_CONTRACT"], 1)
         self.assertEqual(final["incremental_revenue_attribution"], "NOT_ESTABLISHED")
         self.assertEqual(
             final["profitability_status"], "NOT_PROVEN_COST_COMPLETENESS_UNKNOWN")
@@ -154,6 +167,8 @@ class SalesEndToEndAcceptance(unittest.TestCase):
             "state"], "DEAL_SIGNED_REPORTED")
         self.assertEqual(restored_ledger.summary(TENANT, PILOT)[
             "platform_payment_confirmed_cents"], 12500)
+        self.assertEqual(restored_ledger.summary(TENANT, PILOT)[
+            "commercial_reconciliation"], business)
         self.assertEqual(restored_ledger.summary("tenant-other", PILOT)[
             "platform_payment_confirmed_cents"], 0)
         with restored_store._db() as db:

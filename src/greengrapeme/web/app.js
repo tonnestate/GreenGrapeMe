@@ -63,16 +63,23 @@ async function pilots(){
  const out=$("pilots-list");out.replaceChildren();
  for(const p of data.items){
   const tr=document.createElement("tr");
+  const proof=p.commercial_reconciliation||{};
+  const signed=proof.independently_confirmed_contract_accounts||0;
+  const coherent=proof.fully_confirmed_funnel_accounts||0;
+  const gaps=proof.gap_total||0;
   for(const value of [
    p.label+" ("+p.pilot_id+")",p.offer_id,formatEuro(p.planned_monthly_fee_cents),
    p.reported_event_count+" unbestätigte Ereignisse",
    formatEuro(p.platform_payment_confirmed_cents),
    formatEuro(p.client_payment_confirmed_cents),
-   p.pricing_validation==="PAID_PILOT_EVIDENCED"?"Quellenbestätigte Zahlung":"Nicht nachgewiesen"
+   p.paid_pilot_evidence==="CONFIRMED_PLATFORM_PAYMENT"?
+     "Plattformzahlung bestätigt; Preis/Abo ungeprüft":"Keine Plattformzahlung bestätigt",
+   signed+" Verträge quellenbestätigt; "+coherent+
+     " vollständige Nachweisketten; "+gaps+" Klärfälle"
   ])cell(tr,value);
   out.appendChild(tr);
  }
- if(!data.items.length){const tr=document.createElement("tr"),td=text(tr,"td","Noch keine bezahlten Pilotprojekte erfasst");td.colSpan=7;out.appendChild(tr);}
+ if(!data.items.length){const tr=document.createElement("tr"),td=text(tr,"td","Noch keine bezahlten Pilotprojekte erfasst");td.colSpan=8;out.appendChild(tr);}
  const cases=$("pilot-cases-list");cases.replaceChildren();
  for(const pilot of data.items){
   const response=await request("/api/pilot-cases",{pilot:pilot.pilot_id});

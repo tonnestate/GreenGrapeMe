@@ -83,7 +83,12 @@ class PilotLedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
             "platform_payment_confirmed_cents"],79000)
         self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
-            "pricing_validation"],"PAID_PILOT_EVIDENCED")
+            "pricing_validation"],"NOT_PROVEN")
+        self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
+            "paid_pilot_evidence"],"CONFIRMED_PLATFORM_PAYMENT")
+        self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
+            "commercial_reconciliation"]["platform_payment_assignment_to_customer_or_invoice"],
+            "NOT_ESTABLISHED")
         self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
             "incremental_revenue_attribution"],"NOT_ESTABLISHED")
         self.assertEqual(self.ledger.reconcile("tenant-A","pilot-001",
