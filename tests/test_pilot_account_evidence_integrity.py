@@ -140,6 +140,7 @@ class PilotAccountEvidenceIntegrityTests(unittest.TestCase):
         confirmed = self.ledger.reconcile(
             TENANT, PILOT, "client-payment-0001", source=provider)
         self._mutate_evidence_only(confirmed)
+        self.assertEqual(self.financial(), confirmed)
         repeat = self.ledger.reconcile(
             TENANT, PILOT, "client-payment-0001", source=provider)
         self.assertEqual(repeat, confirmed)
