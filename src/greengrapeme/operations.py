@@ -30,8 +30,35 @@ _REPLY_SUPPRESSION_PRIORITY = {
 class SalesWorkspace:
     """Sales-domain state, not a duplicate enterprise CRM or agent truth store."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, bootstrap: bool = True,
+                 require_operational: bool = False):
+        """Open an explicitly initialized runtime store or a development store.
+
+        Production callers MUST use bootstrap=False. A missing or malformed
+        database is then rejected, not silently created or repaired.
+        require_operational=True also checks all currently known durable
+        workflow and irreversible-effect tables.
+        """
+        if type(bootstrap) is not bool or type(require_operational) is not bool:
+            raise ValueError("bootstrap flags must be boolean")
+        if require_operational and bootstrap:
+            raise ValueError("operational verification requires bootstrap=False")
+        if not isinstance(path, (str, Path)) or not str(path).strip():
+            raise ValueError("invalid database path")
         self.path = str(path)
+        self._allow_database_creation = bootstrap
+        if not bootstrap:
+            # Import only here to keep the normal workspace constructor
+            # free of release-operations dependencies.
+            from .database_recovery import verify_database
+            from .release_audit import _REQUIRED_OPERATIONS_TABLES
+            details = verify_database(self.path)
+            if require_operational:
+                missing = _REQUIRED_OPERATIONS_TABLES.difference(
+                    details["schema_tables_verified"])
+                if missing:
+                    raise ValueError("operational database schema incomplete")
+            return
         with self._db() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS opportunities (
@@ -65,7 +92,14 @@ class SalesWorkspace:
 
     @contextmanager
     def _db(self):
-        with closing(sqlite3.connect(self.path, timeout=5)) as db:
+        # Mode=rw prevents an accidental empty database appearing when a
+        # production database path is missing/renamed between requests.
+        connect_path = self.path
+        options = {"timeout": 5}
+        if not self._allow_database_creation:
+            connect_path = Path(self.path).absolute().as_uri() + "?mode=rw"
+            options["uri"] = True
+        with closing(sqlite3.connect(connect_path, **options)) as db:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA busy_timeout=5000")
             with db:
