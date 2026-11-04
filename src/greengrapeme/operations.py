@@ -16,6 +16,15 @@ from typing import Iterable
 from .intelligence import triage_reply, Signal, score_signals
 from .sales import Opportunity, SalesTeam
 
+# Safest classification wins when an existing transport message ID is
+# replayed with different content. Privacy requests, stop requests and
+# bounces may never be silently downgraded by a later normal reply.
+_REPLY_SUPPRESSION_PRIORITY = {
+    "BOUNCE": 1,
+    "OPT_OUT": 2,
+    "PRIVACY_REVIEW": 3,
+}
+
 
 class SalesWorkspace:
     """Sales-domain state, not a duplicate enterprise CRM or agent truth store."""
@@ -250,6 +259,29 @@ class SalesWorkspace:
             if old:
                 if old["opportunity_id"] != opportunity_id:
                     raise ValueError("message idempotency key reused for another opportunity")
+                # Message IDs are transport idempotency keys, not authority
+                # to ignore a newer safety-critical customer instruction.
+                # The original reply body is deliberately not persisted.
+                # On a conflicting replay, preserve the most restrictive
+                # classification and block further contact atomically.
+                if (_REPLY_SUPPRESSION_PRIORITY.get(category, 0) >
+                        _REPLY_SUPPRESSION_PRIORITY.get(old["result"], 0)):
+                    db.execute("""UPDATE inbox SET result=?
+                                  WHERE tenant=? AND message_id=?""",
+                               (category, tenant, message_id))
+                    db.execute("INSERT OR IGNORE INTO suppressions VALUES(?,?,?,?)",
+                               (tenant, opportunity_id, category, self._now()))
+                    db.execute("""UPDATE work_items SET state='BLOCKED'
+                                  WHERE tenant=? AND opportunity_id=?
+                                  AND state IN ('QUEUED','READY_FOR_REVIEW')""",
+                               (tenant, opportunity_id))
+                    self._audit(db, tenant, opportunity_id,
+                                "REPLAYED_REPLY_SAFETY_ESCALATED",
+                                {"message_id": message_id,
+                                 "previous": old["result"],
+                                 "current": category,
+                                 "contact_suppressed": True})
+                    return category
                 return old["result"]
             db.execute("INSERT INTO inbox VALUES(?,?,?,?,?)",
                        (tenant, message_id, opportunity_id, category, self._now()))
