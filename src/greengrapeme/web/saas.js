@@ -521,6 +521,47 @@ async function queueDiscovery(spec) {
   if (state.discoveryDraft === draft) state.discoveryDraft = null;
   return result;
 }
+// The appointment inputs are free-text ISO timestamps, not datetime-local.
+// Reject missing offsets and impossible dates before calling the durable API.
+function appointmentInstant(id) {
+  const raw = value(id);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/.exec(raw);
+  if (!match) throw new Error("Terminzeit benötigt ISO-Datum und Zeitzone (z. B. +01:00).");
+  const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw, milliRaw, zone] = match;
+  const year = Number(yearRaw), month = Number(monthRaw), day = Number(dayRaw);
+  const hour = Number(hourRaw), minute = Number(minuteRaw), second = Number(secondRaw || "0");
+  const millis = Number((milliRaw || "0").padEnd(3, "0"));
+  let offset = 0;
+  if (zone !== "Z") {
+    const hours = Number(zone.slice(1, 3)), minutes = Number(zone.slice(4, 6));
+    if (hours > 14 || minutes > 59 || (hours === 14 && minutes !== 0)) {
+      throw new Error("Ungültiger Zeitzonenversatz.");
+    }
+    offset = (zone[0] === "+" ? 1 : -1) * (hours * 60 + minutes);
+  }
+  const local = Date.UTC(year, month - 1, day, hour, minute, second, millis);
+  const verify = new Date(local);
+  if (!Number.isFinite(local) ||
+      verify.getUTCFullYear() !== year || verify.getUTCMonth() !== month - 1 ||
+      verify.getUTCDate() !== day || verify.getUTCHours() !== hour ||
+      verify.getUTCMinutes() !== minute || verify.getUTCSeconds() !== second) {
+    throw new Error("Terminzeit enthält ein ungültiges Kalenderdatum.");
+  }
+  return new Date(local - offset * 60000).toISOString();
+}
+function appointmentWindow() {
+  const slot_start_at = appointmentInstant("appointment-start");
+  const slot_end_at = appointmentInstant("appointment-end");
+  const start = Date.parse(slot_start_at), end = Date.parse(slot_end_at);
+  const duration = end - start, now = Date.now();
+  if (duration < 15 * 60000 || duration > 480 * 60000) {
+    throw new Error("Termindauer muss zwischen 15 und 480 Minuten liegen.");
+  }
+  if (start <= now || start > now + 365 * 24 * 60 * 60000) {
+    throw new Error("Terminbeginn muss innerhalb der nächsten 365 Tage liegen.");
+  }
+  return { slot_start_at, slot_end_at };
+}
 function integers(id) {
   const n = Number(value(id));
   if (!Number.isSafeInteger(n)) throw new Error("Ungültiger Cent-Betrag.");
@@ -648,8 +689,7 @@ async function main() {
         case_id: value("appointment-case"),
         booking_id: value("appointment-id"),
         calendar_ref: value("appointment-calendar"),
-        slot_start_at: value("appointment-start"),
-        slot_end_at: value("appointment-end"),
+        ...appointmentWindow(),
       },
     });
     if (value("crm-pilot-id") === value("appointment-pilot")) await crmWorklist();
