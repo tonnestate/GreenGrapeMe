@@ -14,7 +14,7 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _initialize_operational_schema(staging: Path) -> None:
@@ -29,6 +29,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     from .reply_effects import ReplyEffects
     from .calendar_bookings import CalendarBookings
     from .sales_contracts import SalesContracts
+    from .sales_terminations import SalesTerminations
     from .sales_invoices import SalesInvoices
     from .sales_credit_notes import SalesCreditNotes
     from .missions import SalesMissionEngine
@@ -42,6 +43,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     ReplyEffects(store)
     CalendarBookings(store, initialize=True)
     SalesContracts(store, initialize=True)
+    SalesTerminations(store, initialize=True)
     SalesInvoices(store, initialize=True)
     SalesCreditNotes(store, initialize=True)
     SalesMissionEngine(store)
