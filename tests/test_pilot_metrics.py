@@ -32,6 +32,16 @@ class Provider:
         }
 
 
+class BoundProvider(Provider):
+    """Simulated independent source that includes account/transaction binding."""
+    def __init__(self, bindings, *, receipt="external-bank-001"):
+        super().__init__(receipt=receipt, kind="BANK")
+        self.bindings = bindings
+
+    def verify(self, event):
+        return {**super().verify(event), **self.bindings}
+
+
 class PilotLedgerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -94,6 +104,59 @@ class PilotLedgerTests(unittest.TestCase):
         self.assertEqual(self.ledger.reconcile("tenant-A","pilot-001",
                                                 "payment-001",source=source),result)
         self.assertEqual(source.calls,1)
+
+    def test_explicit_foreign_provider_receipt_bindings_fail_closed(self):
+        self.report()
+        bad_values = (
+            ("tenant", "tenant-B"),
+            ("pilot_id", "pilot-another"),
+            ("event_id", "payment-another"),
+            ("opportunity_id", "opp-001"),
+            ("occurred_at", "2000-01-01T00:00:00+00:00"),
+            ("tenant", True),
+        )
+        for field, value in bad_values:
+            with self.subTest(field=field, value=value):
+                provider = BoundProvider({field: value})
+                with self.assertRaisesRegex(
+                        ValueError, "receipt (conflicts|has invalid)"):
+                    self.ledger.reconcile(
+                        "tenant-A", "pilot-001", "payment-001",
+                        source=provider)
+                self.assertEqual(provider.calls, 1)
+                self.assertEqual(self.ledger.event(
+                    "tenant-A", "pilot-001", "payment-001")["state"],
+                    "REPORTED")
+        self.assertEqual(self.ledger.summary(
+            "tenant-A", "pilot-001")["platform_payment_confirmed_cents"], 0)
+
+    def test_correct_explicit_provider_receipt_binding_is_accepted(self):
+        event = self.report()
+        bindings = {
+            field: event[field] for field in (
+                "tenant", "pilot_id", "event_id",
+                "opportunity_id", "occurred_at")
+        }
+        source = BoundProvider(bindings)
+        self.assertEqual(self.ledger.reconcile(
+            "tenant-A", "pilot-001", "payment-001",
+            source=source)["state"], "SOURCE_CONFIRMED")
+        self.assertEqual(source.calls, 1)
+        self.assertEqual(self.ledger.summary(
+            "tenant-A", "pilot-001")["platform_payment_confirmed_cents"], 79000)
+
+    def test_explicit_foreign_account_receipt_cannot_confirm_customer_money(self):
+        self.report(event_id="client-foreign",kind="CUSTOMER_PAYMENT_RECEIVED",
+                    opportunity_id="opp-001",amount_cents=300000)
+        source = BoundProvider(
+            {"opportunity_id": "opp-002"}, receipt="bank-client-foreign")
+        with self.assertRaisesRegex(ValueError, "conflicts with event identity"):
+            self.ledger.reconcile(
+                "tenant-A", "pilot-001", "client-foreign", source=source)
+        self.assertEqual(self.ledger.event(
+            "tenant-A", "pilot-001", "client-foreign")["state"], "REPORTED")
+        self.assertEqual(self.ledger.summary(
+            "tenant-A", "pilot-001")["client_payment_confirmed_cents"], 0)
 
     def test_untrusted_or_conflicting_amount_never_reconciles(self):
         self.report()
