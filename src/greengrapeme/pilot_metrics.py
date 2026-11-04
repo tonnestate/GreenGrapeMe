@@ -13,6 +13,7 @@ import re
 from typing import Protocol
 
 from .operations import SalesWorkspace
+from .commercial_reconciliation import commercial_evidence_review
 
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{5,119}$")
@@ -275,10 +276,23 @@ class PilotLedger:
     def summary(self, tenant: str, pilot_id: str) -> dict:
         pilot = self.get(tenant, pilot_id)
         with self.store._db() as db:
-            rows = db.execute("""SELECT event_kind,state,amount_cents,
-                      opportunity_id FROM sales_pilot_events
+            rows = db.execute("""SELECT event_id,event_kind,state,amount_cents,
+                      opportunity_id,occurred_at FROM sales_pilot_events
                       WHERE tenant=? AND pilot_id=?""",
                       (tenant,pilot_id)).fetchall()
+            cases_available = db.execute("""
+                SELECT 1 FROM sqlite_master WHERE type='table'
+                AND name='sales_pilot_cases'
+            """).fetchone() is not None
+            cases = db.execute("""
+                SELECT case_id,opportunity_id,state
+                FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=?
+                ORDER BY opportunity_id,case_id
+            """, (tenant,pilot_id)).fetchall() if cases_available else []
+        commercial = commercial_evidence_review(
+            [dict(row) for row in rows], [dict(case) for case in cases],
+            cases_available=cases_available)
         stages = {}
         for kind in sorted(_ACCOUNT - {"CUSTOMER_PAYMENT_RECEIVED"}):
             reported = {r["opportunity_id"] for r in rows if r["event_kind"] == kind}
@@ -306,7 +320,13 @@ class PilotLedger:
             "platform_payment_confirmed_cents":revenue_platform,
             "provider_cost_reported_cents":money("PROVIDER_COST_INCURRED","REPORTED"),
             "provider_cost_confirmed_cents":costs,
-            "pricing_validation":"PAID_PILOT_EVIDENCED" if revenue_platform>0 else "NOT_PROVEN",
+            # Receipt confirmation is not proof of price acceptance,
+            # contracted monthly cadence, invoice settlement or retention.
+            "pricing_validation":"NOT_PROVEN",
+            "paid_pilot_evidence":(
+                "CONFIRMED_PLATFORM_PAYMENT" if revenue_platform>0
+                else "NOT_PROVEN"),
+            "commercial_reconciliation":commercial,
             "incremental_revenue_attribution":"NOT_ESTABLISHED",
             "profitability_status":"NOT_PROVEN_COST_COMPLETENESS_UNKNOWN",
             "automatic_contact_effects":0,
