@@ -80,7 +80,7 @@ _STOP = re.compile(
     r"no more (?:emails?|e-mails?|marketing messages?)|"
     r"keine weiteren (?:e-mails?|mails?|nachrichten)|"
     r"ich (?:will|möchte) keine weiteren (?:e-mails?|mails?|nachrichten)|"
-    r"(?:schreiben|kontaktieren) sie mich nicht mehr|"
+    r"(?:schreiben sie mir|kontaktieren sie mich) nicht mehr|"
     r"keine werbung mehr)\b"
 )
 _STOP_NEGATION = re.compile(
