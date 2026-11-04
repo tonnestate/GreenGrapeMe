@@ -65,6 +65,8 @@ const response = (body, status = 200) => ({
   json: async () => body,
 });
 let held = null;
+let failNextDiscovery = false;
+const discoveryWrites = [];
 const fetch = (url, options) => {
   const tenant = options.headers["X-Green-Grape-Tenant"];
   if (held && tenant === held.tenant && url.startsWith(held.path)) {
@@ -72,6 +74,15 @@ const fetch = (url, options) => {
       held.release = (body, status) => resolve(response(body, status));
       held.started();
     });
+  }
+  if (url === "/api/discovery-jobs") {
+    const body = JSON.parse(options.body);
+    discoveryWrites.push({ tenant, request_id: body.request_id, spec: body.spec });
+    if (failNextDiscovery) {
+      failNextDiscovery = false;
+      return Promise.reject(new Error("Lost response after possible commit"));
+    }
+    return Promise.resolve(response({ state: "QUEUED", request_id: body.request_id }, 202));
   }
   if (url === "/api/me") return Promise.resolve(response({ role: "admin", tenant }));
   if (url === "/api/overview") {
@@ -112,14 +123,14 @@ const scriptPath = path.resolve(__dirname, "../src/greengrapeme/web/saas.js");
 const source = fs.readFileSync(scriptPath, "utf8");
 assert.match(source, /\nmain\(\);\s*$/, "expected SaaS script entrypoint");
 const sourceWithoutMain = source.replace(
-  /\nmain\(\);\s*$/, "\nglobalThis.__gg = { state, api, openTenant, logout, companies };\n"
+  /\nmain\(\);\s*$/, "\nglobalThis.__gg = { state, api, openTenant, logout, companies, queueDiscovery };\n"
 );
 const runtime = {
   document, fetch, sessionStorage, URLSearchParams, URL, crypto: webcrypto,
   TextEncoder, btoa, window: { location: { origin: "https://app.example" } },
 };
 vm.runInNewContext(sourceWithoutMain, runtime, { filename: scriptPath });
-const { state, api, openTenant, logout, companies } = runtime.__gg;
+const { state, api, openTenant, logout, companies, queueDiscovery } = runtime.__gg;
 
 async function admit(tenant) {
   element("tenant-id").value = tenant;
@@ -213,9 +224,36 @@ async function run() {
   assert.equal(element("disc-existing-fields").hidden, false);
   assert.equal(element("disc-job").required, true);
 
+  // A lost create response must reuse exactly the same idempotency key on
+  // retry. A confirmed new submission must allocate a new key instead.
+  const spec = {
+    mode: "existing", job_id: "starfruit-job-001",
+    offer_id: "offer-a", objective: "Lead discovery", icp: "B2B",
+  };
+  failNextDiscovery = true;
+  await assert.rejects(queueDiscovery(spec), /Lost response/);
+  await queueDiscovery(spec);
+  assert.equal(discoveryWrites[0].request_id, discoveryWrites[1].request_id);
+  assert.equal(discoveryWrites[0].tenant, "tenant-next");
+  await queueDiscovery(spec);
+  assert.notEqual(discoveryWrites[1].request_id, discoveryWrites[2].request_id);
+  failNextDiscovery = true;
+  await assert.rejects(queueDiscovery(spec), /Lost response/);
+  await queueDiscovery({ ...spec, objective: "Different target" });
+  assert.notEqual(discoveryWrites[3].request_id, discoveryWrites[4].request_id);
+
+  // Uncertain keys cannot be carried to another tenant.
+  failNextDiscovery = true;
+  await assert.rejects(queueDiscovery(spec), /Lost response/);
+  const oldRequestId = discoveryWrites.at(-1).request_id;
+  await admit("tenant-last");
+  await queueDiscovery(spec);
+  assert.notEqual(discoveryWrites.at(-1).request_id, oldRequestId);
+  assert.equal(discoveryWrites.at(-1).tenant, "tenant-last");
+
   // A live 401 destroys the active session and its confidential DOM.
   element("company-details").children = [new Element("last-secret")];
-  const active401 = holdRequest("tenant-next", "/api/company?id=active-401");
+  const active401 = holdRequest("tenant-last", "/api/company?id=active-401");
   const failed = api("/api/company?id=active-401");
   await active401.ready;
   active401.release({ error: "unauthorized" }, 401);
@@ -229,7 +267,7 @@ async function run() {
 
   // Browser storage failures must not interrupt the security-critical purge.
   state.token = "stale-token";
-  state.tenant = "tenant-next";
+  state.tenant = "tenant-last";
   element("company-details").children = [new Element("private-detail")];
   sessionStorage.blocked = true;
   logout();

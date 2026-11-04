@@ -201,8 +201,15 @@ class BrowserTests(unittest.TestCase):
                          "seed_km", "search_terms", "disc-rights",
                          "Number.isFinite(n)", "Number.isSafeInteger(max_searches)",
                          'mode === "existing"', 'mode === "new"',
-                         'api("/api/discovery-jobs"'):
+                         "const accepted = await queueDiscovery(spec)"):
             self.assertIn(required, submit)
+        submission = script[script.index("async function queueDiscovery(spec) {"):
+                            script.index("function integers(id) {")]
+        self.assertIn('api("/api/discovery-jobs"', submission)
+        self.assertIn("prior.specJson === specJson", submission)
+        self.assertIn("prior.generation === generation", submission)
+        self.assertIn("state.discoveryDraft = null", submission)
+        self.assertNotIn('api("/api/discovery-jobs"', submit)
         self.assertIn(r".split(/\r?\n/)", submit)
         self.assertNotIn("source_rights_acknowledged: false", submit)
         accepted = DiscoverySpec.parse({
