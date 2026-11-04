@@ -23,7 +23,6 @@ from .calendar_bookings import CalendarBookings, _ALLOWED_CASE_STATES, _instant
 from .google_calendar_source import (
     GoogleCalendarEvidenceSource, _ENDPOINT, _NoRedirect, _email, _host_string,
 )
-from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import _reference
 
 
@@ -208,16 +207,14 @@ class GoogleCalendarBookingDispatcher:
             )) or current["state"] != "REQUESTED":
                 raise PermissionError("appointment changed before dispatch")
             existing = db.execute("""
-                SELECT intent_sha256,event_id,provider_event_id,permission_ref
-                FROM sales_calendar_dispatch_attempts
+                SELECT * FROM sales_calendar_dispatch_attempts
                 WHERE tenant=? AND pilot_id=? AND case_id=? AND booking_id=?
             """, (tenant, pilot_id, case_id, booking_id)).fetchone()
             if existing:
                 if tuple(existing) != (request_hash, event_id, provider_id, permission_ref):
                     raise PermissionError("calendar attempt binding changed")
                 # A concurrent worker already took the one irreversible slot.
-                return {**self.get_attempt(tenant, pilot_id, case_id, booking_id),
-                        "http_post_attempted_now": False}
+                return {**dict(existing), "http_post_attempted_now": False}
             case = db.execute("""
                 SELECT opportunity_id,source_sha256,state
                 FROM sales_pilot_cases
@@ -231,8 +228,12 @@ class GoogleCalendarBookingDispatcher:
                 SELECT 1 FROM suppressions WHERE tenant=? AND opportunity_id=?
             """, (tenant, booking["opportunity_id"])).fetchone() is not None:
                 raise PermissionError("suppression blocks calendar invitation")
-            offer = PilotLedger(self.store).get(tenant, pilot_id)["offer_id"]
-            if not CalendarBookings._case_source_current(db, current, offer):
+            pilot = db.execute(
+                "SELECT offer_id FROM sales_pilots WHERE tenant=? AND pilot_id=?",
+                (tenant, pilot_id),
+            ).fetchone()
+            if (pilot is None or not CalendarBookings._case_source_current(
+                    db, current, pilot["offer_id"])):
                 raise PermissionError("calendar account evidence changed before dispatch")
             if datetime.fromisoformat(current["slot_start_at"]) <= datetime.now(timezone.utc):
                 raise ValueError("booking slot elapsed during authorization")
