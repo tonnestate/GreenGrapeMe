@@ -137,6 +137,59 @@ class IntegrationTests(unittest.TestCase):
             self.assertEqual(s.overview("tenant")["opportunities"], 1)
             self.assertEqual(s.run_cycle("tenant")["ready_for_review"], 2)
 
+    def test_corrupted_account_blocks_only_its_sales_tasks_and_survives_restart(self):
+        def qualified(oid):
+            return Opportunity(oid, "Example " + oid, "offer", (
+                Evidence("register", "https://example.org/" + oid,
+                         "Known account", "COMPANY_IDENTITY"),
+                Evidence("news", "https://example.org/news/" + oid,
+                         "Published source signal", "BUYING_SIGNAL"),
+            ), verified_company=True)
+
+        # SQLite TEXT affinities also accept BLOBs, and a database may be
+        # modified by another application after an otherwise valid import.
+        for mutation in (
+            b"\\x00invalid",
+            "{not-json",
+            "{}",
+            '{"opportunity_id":"foreign","offer_id":"offer","company_name":"Example bad","suppressed":false,"evidence":[]}',
+            '{"opportunity_id":"bad","offer_id":"another-offer","company_name":"Example bad","suppressed":false,"evidence":[]}',
+            '{"opportunity_id":"bad","offer_id":"offer","company_name":"Example bad","suppressed":true,"evidence":[]}',
+            '{"opportunity_id":"bad","offer_id":"offer","company_name":"Example bad","suppressed":false,"evidence":"not-an-array"}',
+            '{"opportunity_id":"bad","offer_id":"offer","company_name":"Example bad","suppressed":false,"evidence":[null]}',
+        ):
+            with self.subTest(mutation=repr(mutation)), TemporaryDirectory() as tmp:
+                path = Path(tmp) / "sales.db"
+                workspace = SalesWorkspace(path)
+                workspace.ingest("tenant", [qualified("bad"), qualified("good")])
+                with workspace._db() as db:
+                    db.execute(
+                        "UPDATE opportunities SET source_json=? WHERE tenant=? AND opportunity_id=?",
+                        (mutation, "tenant", "bad"))
+                result = workspace.run_cycle("tenant")
+                self.assertEqual(result, {
+                    "processed": 4, "ready_for_review": 2, "blocked": 2})
+                with workspace._db() as db:
+                    rows = db.execute(
+                        "SELECT opportunity_id,state,details_json FROM work_items "
+                        "WHERE tenant=? ORDER BY opportunity_id,work_id",
+                        ("tenant",)).fetchall()
+                self.assertEqual([r["state"] for r in rows if r["opportunity_id"] == "bad"],
+                                 ["BLOCKED", "BLOCKED"])
+                self.assertEqual([r["state"] for r in rows if r["opportunity_id"] == "good"],
+                                 ["READY_FOR_REVIEW", "READY_FOR_REVIEW"])
+                self.assertFalse(any(
+                    "buying_signals" in r["details_json"]
+                    for r in rows if r["opportunity_id"] == "bad"))
+                self.assertEqual(SalesWorkspace(path).run_cycle("tenant")["processed"], 0)
+
+    def test_work_cycle_requires_integral_bounded_limit(self):
+        with TemporaryDirectory() as tmp:
+            workspace = SalesWorkspace(Path(tmp) / "sales.db")
+            for invalid in (True, False, 1.5, "20", None, 0, 1001):
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    workspace.run_cycle("tenant", limit=invalid)
+
     def test_message_id_cannot_target_another_opportunity(self):
         with TemporaryDirectory() as tmp:
             store = SalesWorkspace(Path(tmp)/"s.db")
