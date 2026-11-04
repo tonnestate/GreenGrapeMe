@@ -71,6 +71,12 @@ _SCHEMA = {
         "setup_fee_cents currency reporter_ref state approval_ref approval_receipt_id "
         "signer_ref signature_provider signature_receipt_id signed_at created_at updated_at",
         ("tenant", "pilot_id", "case_id", "contract_id")),
+    "sales_contract_terminations": (
+        "tenant pilot_id case_id contract_id cancellation_id opportunity_id "
+        "terms_sha256 signer_ref original_signature_receipt_id cancellation_ref "
+        "reason_ref effective_at source_kind provider_receipt_id accepted_at "
+        "created_at",
+        ("tenant","pilot_id","case_id","contract_id")),
     "sales_customer_invoices": (
         "tenant pilot_id case_id invoice_id contract_id opportunity_id "
         "contract_terms_sha256 invoice_kind period_key invoice_ref "
@@ -134,6 +140,10 @@ _UNIQUE_BINDINGS = {
         ("tenant", "pilot_id", "case_id"),
         ("tenant", "approval_receipt_id"),
         ("tenant", "signature_provider", "signature_receipt_id"),
+    ),
+    "sales_contract_terminations": (
+        ("tenant", "provider_receipt_id"),
+        ("tenant", "cancellation_id"),
     ),
     "sales_customer_invoices": (
         ("tenant", "pilot_id", "case_id", "invoice_kind", "period_key"),

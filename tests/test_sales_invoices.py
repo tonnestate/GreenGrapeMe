@@ -16,6 +16,7 @@ from greengrapeme.pilot_sales_flow import PilotSalesFlow
 from greengrapeme.sales_contracts import SalesContracts
 from greengrapeme.sales_invoices import SalesInvoices
 from greengrapeme.sales_credit_notes import SalesCreditNotes
+from greengrapeme.sales_terminations import SalesTerminations
 from greengrapeme.production_database import bootstrap_operational_database
 from greengrapeme.database_recovery import verify_database
 from greengrapeme.release_audit import release_audit
@@ -88,6 +89,27 @@ class IssuedCredit:
         return result
 
 
+class TerminationSource:
+    """Intercepting trusted-host contract lookup; no external cancellation."""
+    def __init__(self, receipt="termination-receipt-001", mutation=None):
+        self.receipt=receipt
+        self.mutation=mutation
+        self.calls=[]
+
+    def verify(self,binding):
+        self.calls.append(dict(binding))
+        result={
+            **binding,"confirmed":True,"provider_kind":"CONTRACT",
+            "status":"CANCELLATION_ACCEPTED",
+            "provider_receipt_id":self.receipt,
+            "accepted_at":(datetime.now(timezone.utc)-
+                           timedelta(seconds=1)).isoformat(),
+        }
+        if self.mutation:
+            self.mutation(result)
+        return result
+
+
 class SalesInvoiceTests(unittest.TestCase):
     def setUp(self):
         temp=TemporaryDirectory()
@@ -133,6 +155,7 @@ class SalesInvoiceTests(unittest.TestCase):
             source=SignedAgreement())
         self.invoices=SalesInvoices(self.store)
         self.credits=SalesCreditNotes(self.store)
+        self.terminations=SalesTerminations(self.store)
         self.invoice_key=("tenant-01","pilot-0001","case-0001","invoice-0001")
         self.prepared_args=dict(
             contract_id="contract-0001",invoice_kind="MONTHLY",
@@ -319,11 +342,169 @@ class SalesInvoiceTests(unittest.TestCase):
     def test_credit_schema_is_checked_on_backup_verification(self):
         self.prepare();self.confirm();self.credit_prepare();self.credit_confirm()
         verified=verify_database(self.path)
-        self.assertEqual(verified["user_version"],7)
+        self.assertEqual(verified["user_version"],8)
         self.assertIn("sales_customer_credit_notes",
                       verified["schema_tables_verified"])
         self.assertEqual(release_audit(self.path)[
             "confirmed_customer_credit_note_count"],1)
+
+    def terminate(self, *, effective_at=None, source=None, cancellation_id="cancel-0001"):
+        if effective_at is None:
+            effective_at=(datetime.now(timezone.utc)+timedelta(days=5)).isoformat()
+        return self.terminations.reconcile(
+            "tenant-01","pilot-0001","case-0001","contract-0001",
+            cancellation_id,cancellation_ref="urn:contract:termination:0001",
+            reason_ref="urn:legal:mutual-termination:0001",
+            effective_at=effective_at,source=source or TerminationSource())
+
+    def test_scheduled_termination_blocks_new_future_and_overlapping_billing(self):
+        now=datetime.now(timezone.utc)
+        effective=(now+timedelta(days=45)).isoformat()
+        record=self.terminate(effective_at=effective)
+        self.assertEqual(record["source_kind"],"CONTRACT")
+        self.assertEqual(record["provider_receipt_id"],"termination-receipt-001")
+        self.assertEqual(self.terminations.status(
+            "tenant-01","pilot-0001","case-0001","contract-0001")["state"],
+            "TERMINATION_SCHEDULED")
+        effective_month=(now+timedelta(days=45)).strftime("%Y-%m")
+        earlier_month=now.strftime("%Y-%m")
+        self.invoices.prepare(
+            *self.invoice_key,
+            **{**self.prepared_args,"period_key":earlier_month})
+        blocked=("tenant-01","pilot-0001","case-0001","invoice-block-001")
+        with self.assertRaisesRegex(PermissionError,"overlaps"):
+            self.invoices.prepare(
+                *blocked,
+                **{**self.prepared_args,"period_key":effective_month,
+                   "invoice_ref":"urn:accounting:blocked-001"})
+        with self.assertRaisesRegex(PermissionError,"setup billing blocked"):
+            self.invoices.prepare(
+                "tenant-01","pilot-0001","case-0001","setup-blocked-001",
+                **{**self.prepared_args,"invoice_kind":"SETUP",
+                   "period_key":"once",
+                   "invoice_ref":"urn:accounting:setup-blocked-001"})
+        self.assertEqual(self.terminations.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"),record)
+        self.assertEqual(release_audit(self.path)[
+            "scheduled_contract_cancellation_count"],1)
+
+    def test_unissued_invoice_cannot_be_issued_after_later_cancellation(self):
+        now=datetime.now(timezone.utc)
+        future=(now+timedelta(days=35))
+        self.invoices.prepare(
+            *self.invoice_key,
+            **{**self.prepared_args,"period_key":future.strftime("%Y-%m")})
+        self.terminate(effective_at=future.isoformat())
+        accounting=IssuedInvoice("accounting-invoice-0001")
+        with self.assertRaisesRegex(PermissionError,"overlaps"):
+            self.confirm(accounting)
+        self.assertEqual(accounting.calls,[])
+        self.assertEqual(self.invoices.get(*self.invoice_key)["state"],"PREPARED")
+        # Replaying the same prepared draft does not create another invoice.
+        self.assertEqual(self.invoices.prepare(
+            *self.invoice_key,
+            **{**self.prepared_args,
+               "period_key":future.strftime("%Y-%m")})["state"],"PREPARED")
+
+    def test_existing_invoice_can_still_receive_credit_and_bank_refund(self):
+        self.prepare();self.confirm()
+        self.cash("movement-3100","PAYMENT",89000,"bank-payment-3100")
+        signed=self.contracts.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001")
+        accepted=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
+        self.terminate(effective_at=accepted)
+        self.assertEqual(self.terminations.status(
+            "tenant-01","pilot-0001","case-0001","contract-0001")["state"],
+            "TERMINATED")
+        with self.assertRaisesRegex(PermissionError,"overlaps"):
+            self.invoices.prepare(
+                "tenant-01","pilot-0001","case-0001","invoice-3111",
+                **{**self.prepared_args,"invoice_ref":"urn:accounting:invoice-3111"})
+        self.credit_prepare(amount=89000)
+        self.credit_confirm()
+        due=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(due["refund_due_cents"],89000)
+        self.assertEqual(due["state"],"REFUND_DUE")
+        self.assertEqual(due["net_settled_cents"],89000)
+        self.cash("movement-3101","REFUND",89000,"bank-refund-3101")
+        cleared=self.invoices.summary(*self.invoice_key)
+        self.assertEqual(cleared["state"],"CREDITED")
+        self.assertEqual(cleared["net_settled_cents"],0)
+        self.assertEqual(cleared["refund_due_cents"],0)
+        self.assertEqual(self.contracts.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"
+        )["signature_receipt_id"],signed["signature_receipt_id"])
+        self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
+            "client_refund_confirmed_cents"],89000)
+        self.assertEqual(release_audit(self.path)[
+            "independently_terminated_contract_count"],1)
+
+    def test_unverified_termination_does_not_stop_invoicing(self):
+        from datetime import datetime, timezone, timedelta
+        when=(datetime.now(timezone.utc)+timedelta(days=5)).isoformat()
+        for mutate in (
+            lambda x:x.update(confirmed=False),
+            lambda x:x.update(tenant="other-tenant"),
+            lambda x:x.update(terms_sha256="f"*64),
+            lambda x:x.update(signer_ref="urn:signer:wrong-0001"),
+            lambda x:x.update(status="PENDING"),
+            lambda x:x.update(provider_kind="ACCOUNTING"),
+            lambda x:x.update(provider_receipt_id="x"),
+            lambda x:x.update(effective_at="2099-12-31T00:00:00+00:00"),
+            lambda x:x.update(accepted_at="2099-12-31T00:00:00+00:00"),
+        ):
+            with self.subTest(mutation=mutate),self.assertRaises(
+                (ValueError,TypeError)):
+                self.terminate(effective_at=when,
+                               source=TerminationSource(mutation=mutate))
+            self.assertIsNone(self.terminations.get(
+                "tenant-01","pilot-0001","case-0001","contract-0001"))
+        self.prepare()
+        self.assertEqual(self.invoices.get(*self.invoice_key)["state"],
+                         "PREPARED")
+
+    def test_termination_receipt_replay_is_idempotent_and_immutable(self):
+        now=(datetime.now(timezone.utc)+timedelta(days=5)).isoformat()
+        first=self.terminate(effective_at=now)
+        untrusted=TerminationSource("forged-second-termination-001")
+        second=self.terminate(effective_at=now,source=untrusted)
+        self.assertEqual(first,second)
+        self.assertEqual(untrusted.calls,[])
+        with self.assertRaisesRegex(ValueError,"different terms"):
+            self.terminate(effective_at=now,
+                           cancellation_id="cancel-different-002")
+        with self.assertRaisesRegex(ValueError,"different terms"):
+            self.terminate(effective_at=(
+                datetime.now(timezone.utc)+timedelta(days=6)).isoformat())
+        with self.assertRaises(LookupError):
+            self.terminations.get(
+                "tenant-other","pilot-0001","case-0001","contract-0001")
+        self.assertIn("sales_contract_terminations",
+                      verify_database(self.path)["schema_tables_verified"])
+
+    def test_termination_must_be_after_signed_at_and_have_own_receipt(self):
+        contract=self.contracts.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001")
+        signed=datetime.fromisoformat(contract["signed_at"])
+        with self.assertRaisesRegex(ValueError,"before it was signed"):
+            self.terminate(effective_at=(
+                signed-timedelta(seconds=1)).isoformat())
+        with self.assertRaisesRegex(ValueError,"own provider receipt"):
+            self.terminate(source=TerminationSource(
+                contract["signature_receipt_id"]))
+        self.assertIsNone(self.terminations.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"))
+
+    def test_termination_provider_race_rechecks_contract_and_rolls_back(self):
+        def tamper(proof):
+            with self.store._db() as db:
+                db.execute("UPDATE sales_pilots SET planned_setup_fee_cents=1 "
+                           "WHERE tenant='tenant-01' AND pilot_id='pilot-0001'")
+        with self.assertRaises(ValueError):
+            self.terminate(source=TerminationSource(
+                "termination-race-001",mutation=tamper))
+        self.assertIsNone(self.terminations.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"))
 
     def test_end_to_end_partial_settlement_refund_and_repayment(self):
         draft=self.prepare()

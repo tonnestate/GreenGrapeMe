@@ -190,6 +190,8 @@ class SalesInvoices:
                 if any(old[k]!=v for k,v in frozen.items()):
                     raise ValueError("invoice ID reused with changed signed terms")
                 return dict(old)
+            from .sales_terminations import SalesTerminations
+            SalesTerminations._billing_allowed(db, frozen)
             now=self.store._now()
             try:
                 db.execute("""
@@ -222,6 +224,8 @@ class SalesInvoices:
             raise PermissionError("independent invoice source required")
         with self.store._db() as db:
             self._current_contract(db,invoice)
+            from .sales_terminations import SalesTerminations
+            SalesTerminations._billing_allowed(db, invoice)
         proof=self._receipt(source.verify(dict(self._binding(invoice))),
                             self._binding(invoice),"issued invoice")
         if proof.get("status")!="ISSUED" or proof.get("provider_kind")!="ACCOUNTING":
@@ -237,6 +241,8 @@ class SalesInvoices:
             if old is None or any(old[k]!=invoice[k] for k in invoice):
                 raise ValueError("invoice changed during source verification")
             self._current_contract(db,invoice)
+            from .sales_terminations import SalesTerminations
+            SalesTerminations._billing_allowed(db, invoice)
             try:
                 db.execute("""
                     UPDATE sales_customer_invoices

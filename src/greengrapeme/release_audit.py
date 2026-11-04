@@ -18,7 +18,8 @@ _REQUIRED_OPERATIONS_TABLES = frozenset({
     "saas_tenants", "saas_memberships",
     "sales_pilots", "sales_pilot_events", "sales_pilot_cases",
     "sales_pilot_case_steps", "sales_pilot_reply_effects",
-    "sales_pilot_contracts", "sales_customer_invoices",
+    "sales_pilot_contracts", "sales_contract_terminations",
+    "sales_customer_invoices",
     "sales_customer_movements",
     "sales_customer_credit_notes",
     "sales_pilot_appointments", "sales_calendar_dispatch_attempts",
@@ -95,6 +96,8 @@ def release_audit(path: str | Path) -> dict:
         "source_confirmed_cancellation_count": 0,
         "prepared_or_unsigned_contract_count": 0,
         "independently_signed_contract_count": 0,
+        "independently_terminated_contract_count": 0,
+        "scheduled_contract_cancellation_count": 0,
         "confirmed_customer_invoice_count": 0,
         "unissued_customer_invoice_count": 0,
         "unconfirmed_customer_credit_note_count": 0,
@@ -153,6 +156,17 @@ def release_audit(path: str | Path) -> dict:
                 report["unissued_customer_invoice_count"] = (
                     invoice_counts.get("PREPARED",0)
                 )
+            if "sales_contract_terminations" in verified:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                for term in db.execute(
+                    "SELECT effective_at FROM sales_contract_terminations"
+                ):
+                    when = datetime.fromisoformat(term[0])
+                    if when <= now:
+                        report["independently_terminated_contract_count"] += 1
+                    else:
+                        report["scheduled_contract_cancellation_count"] += 1
             if "sales_pilot_contracts" in verified:
                 contract_counts = dict(db.execute(
                     "SELECT state,count(*) FROM sales_pilot_contracts GROUP BY state"
