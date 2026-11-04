@@ -157,3 +157,26 @@ These checks protect **stage entry** and do not establish a distributed
 authorization transaction across external calls. Separately deployed donor
 hosts remain responsible for independently enforcing revocation at their
 actual operation boundary.
+
+## New StarFruitMe job rights revalidation after creation (2026-11-04)
+
+The new-job mode used a host-supplied `allow_external_source` permission
+flag before `create` and `run`, but did not re-evaluate that permission
+when resuming a persisted `SOURCE_DONE` job. This meant a revoked host
+could still read and ingest candidates. The same omission affected
+`AWAITING_BLACKBERRY`, `AWAITING_CANONICAL_WORK`, `ADMITTED` and the
+three multi-batch stages. A creation-time source-rights acknowledgement
+is not a standing authorization for future operation.
+
+Each such stage now requires **current** `allow_external_source` as well
+as the original `source_rights_acknowledged` value. Denied progression
+moves to `BLOCKED_SOURCE_POLICY` with reason
+`NEW_SOURCE_RIGHTS_REVOKED` *before* source reads, research, MangoMe
+canonical admission or Neuron execution. New regression tests check
+revocation after an interrupted source read, before single-account
+research/admission and before 26-account batch research; no donor or
+model actions occur after revocation.
+
+The permission flag remains a trusted-host input: deployment must not
+allow untrusted browser requests to set it to True, and donor hosts
+must independently enforce their permissions at each remote effect.
