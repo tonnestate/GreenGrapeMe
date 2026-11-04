@@ -608,3 +608,31 @@ Regression tests cover corrupt/non-object JSON, SQLite BLOB and scalar source
 values, and upstream-suppressed source rows without an opt-out row. This
 remains a local integrity check; lawful consent and external destination
 suppression still require an independent production provider.
+
+## Exact frozen-event and cross-workspace receipt validation (2026-11-04)
+
+The outbox previously checked the stored JSON payload SHA-256, message ID,
+event type and (separately) event name. If both a payload and its recorded
+SHA-256 were modified in a local database corruption, a JSON object with
+missing/altered user ID, message properties or other required fields could
+still be reported as `PREPARED`. A missing `event` field could cause a
+`KeyError` while reading the outbox. This could make preview/outbox/provider
+admission disagree.
+
+GreenGrapeMe now has a single deterministic `_track_payload` builder,
+reused for the preview, outbox preparation and frozen-outbox validation.
+Every read checks the **entire canonical payload** against the currently
+source-bound tenant/pilot/event/account/kind, verifies the canonical stored
+serialization and its checksum, and fails closed as
+`BLOCKED_SOURCE_REVISION` if any field is missing, changed or malformed.
+Recomputing the stored checksum alone cannot make a modified payload valid.
+Regression tests cover wrong user, wrong event, altered contact authority,
+missing event fields and non-object properties.
+
+The optional read-only Dittofeed Admin event lookup also rejects an
+explicitly returned `workspaceId` that differs from the authenticated
+lookup workspace, even if the message/user/event fields otherwise match.
+The Admin event schema may omit `workspaceId`; such omissions are handled
+by the existing fixed workspace query and are not treated as mismatches.
+This is additional local integrity defense, not proof of Dittofeed
+multi-tenant isolation or real customer delivery.
