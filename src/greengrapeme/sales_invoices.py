@@ -342,7 +342,7 @@ class SalesInvoices:
             try:
                 db.execute("""
                     INSERT INTO sales_customer_movements VALUES
-                    (?,?,?,?,?,?,?,'EUR',?,?,?,?,?)
+                    (?,?,?,?,?,?,?,'EUR',?,?,?,?,?,?)
                 """,(
                     tenant,pilot_id,case_id,invoice_id,movement_id,
                     direction,amount_cents,evidence_ref,provider,
