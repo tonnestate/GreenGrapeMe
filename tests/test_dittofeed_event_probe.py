@@ -80,6 +80,7 @@ class AdminLookupTests(unittest.TestCase):
     def test_foreign_user_event_and_wrong_type_are_unknown(self):
         for changed in (
             {"userId": "other-tenant-user"},
+            {"workspaceId": "other-tenant-workspace"},
             {"messageId": "00000000-0000-4000-a000-000000000000"},
             {"event": "Other campaign"},
             {"eventType": "identify"},

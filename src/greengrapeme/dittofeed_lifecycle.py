@@ -54,6 +54,29 @@ def _valid_source_link(source_json: object, opportunity_id: str, offer_id: str) 
 
 
 
+def _track_payload(tenant: str, pilot_id: str, event_id: str,
+                   opportunity_id: str, event_kind: str) -> dict:
+    """One canonical, pseudonymous and deliberately non-sending track event.
+
+    Reused for previews, frozen outbox creation and validation so a rewritten
+    stored digest cannot make an altered event appear source-authorized.
+    """
+    if event_kind not in _EVENT_NAMES:
+        raise ValueError("unsupported Dittofeed track event kind")
+    return {
+        "type": "track",
+        "event": _EVENT_NAMES[event_kind],
+        "userId": _opaque_id("account", tenant, opportunity_id),
+        "messageId": _opaque_id("event", tenant, pilot_id, event_id),
+        "properties": {
+            "origin": "GreenGrapeMe",
+            "evidenceStatus": "SOURCE_CONFIRMED",
+            "financialAttribution": "NOT_ESTABLISHED",
+            "contactAuthority": "NONE",
+        },
+    }
+
+
 class DittofeedLifecycleProjection:
     """Read-only source for Dittofeed track/batch payloads on a future trusted host."""
 
@@ -115,18 +138,9 @@ class DittofeedLifecycleProjection:
                                                pilot["offer_id"])):
                 withheld_source += 1
                 continue
-            batch.append({
-                "type": "track",
-                "event": _EVENT_NAMES[row["event_kind"]],
-                "userId": _opaque_id("account", tenant, row["opportunity_id"]),
-                "messageId": _opaque_id("event", tenant, pilot_id, row["event_id"]),
-                "properties": {
-                    "origin": "GreenGrapeMe",
-                    "evidenceStatus": "SOURCE_CONFIRMED",
-                    "financialAttribution": "NOT_ESTABLISHED",
-                    "contactAuthority": "NONE",
-                },
-            })
+            batch.append(_track_payload(
+                tenant, pilot_id, row["event_id"],
+                row["opportunity_id"], row["event_kind"]))
         return {
             "state": "PREVIEW_ONLY",
             "batch": batch,

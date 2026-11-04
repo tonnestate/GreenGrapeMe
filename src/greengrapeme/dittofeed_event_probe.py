@@ -88,7 +88,8 @@ class DittofeedAdminEventLookup:
                 or event.get("messageId") != message_id
                 or event.get("userId") != user_id
                 or event.get("event") != event_name
-                or event.get("eventType") != "track"):
+                or event.get("eventType") != "track"
+                or event.get("workspaceId", self.workspace_id) != self.workspace_id):
             return None
         # No user/customer event data is returned or persisted by this reader.
         return True

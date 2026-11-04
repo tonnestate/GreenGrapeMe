@@ -166,6 +166,30 @@ class DittofeedOutboxTests(unittest.TestCase):
         self.assertEqual(result["state"],"BLOCKED_SOURCE_REVISION")
         self.assertIsNone(result["payload"])
 
+    def test_rewritten_digest_cannot_authorize_tampered_frozen_event(self):
+        self.verified()
+        original = self.prepare()
+        untouched = original["payload"]
+        for changed in (
+            {"type": "track", "messageId":original["message_id"]},
+            {**untouched,"userId":"another-tenant-user"},
+            {**untouched,"event":"GreenGrapeMe Deal Signed"},
+            {**untouched,"properties":{"contactAuthority":"ALLOW"}},
+            {**untouched,"properties":None},
+        ):
+            with self.subTest(payload=changed):
+                encoded=json.dumps(changed,sort_keys=True,separators=(",",":"))
+                digest=hashlib.sha256(encoded.encode()).hexdigest()
+                with self.store._db() as db:
+                    db.execute("""UPDATE dittofeed_sync_outbox
+                        SET payload_json=?,payload_sha256=?
+                        WHERE tenant=? AND pilot_id=? AND event_id=?""",
+                        (encoded,digest,"tenant-a","pilot-001","event-001"))
+                current=self.outbox.get("tenant-a","pilot-001","event-001")
+                self.assertEqual(current["state"],"BLOCKED_SOURCE_REVISION")
+                self.assertFalse(current["data_sync_authorized"])
+        self.assertEqual(self.outbox.list("tenant-a","pilot-001")["total"],1)
+
     def test_suppressed_account_cannot_stage_and_existing_intent_blocked(self):
         self.verified()
         with self.store._db() as db:

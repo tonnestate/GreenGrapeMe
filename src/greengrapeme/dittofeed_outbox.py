@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 
-from .dittofeed_lifecycle import _EVENT_NAMES, _opaque_id, _valid_source_link
+from .dittofeed_lifecycle import _EVENT_NAMES, _track_payload, _valid_source_link
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger, _id
 
@@ -74,19 +74,10 @@ class DittofeedOutbox:
                                                pilot["offer_id"])):
                 raise PermissionError("Dittofeed lifecycle source/account link invalid")
             source_sha = hashlib.sha256(row["source_json"].encode()).hexdigest()
-            message_id = _opaque_id("event", tenant, pilot_id, event_id)
-            payload = {
-                "type": "track",
-                "event": _EVENT_NAMES[row["event_kind"]],
-                "userId": _opaque_id("account", tenant, row["opportunity_id"]),
-                "messageId": message_id,
-                "properties": {
-                    "origin": "GreenGrapeMe",
-                    "evidenceStatus": "SOURCE_CONFIRMED",
-                    "financialAttribution": "NOT_ESTABLISHED",
-                    "contactAuthority": "NONE",
-                },
-            }
+            payload = _track_payload(
+                tenant, pilot_id, event_id,
+                row["opportunity_id"], row["event_kind"])
+            message_id = payload["messageId"]
             encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             digest = hashlib.sha256(encoded.encode()).hexdigest()
             old = db.execute("""
@@ -144,13 +135,28 @@ class DittofeedOutbox:
             payload = json.loads(row["payload_json"])
         except (TypeError, ValueError):
             payload = None
+        # The stored digest alone is insufficient: a damaged/tampered
+        # payload and digest can both change together. Match the entire
+        # canonical event against the current source-bound identity.
+        expected = None
+        if (event is not None and
+                isinstance(event["event_kind"], str) and
+                event["event_kind"] in _EVENT_NAMES and
+                isinstance(row["opportunity_id"], str) and
+                bool(row["opportunity_id"])):
+            expected = _track_payload(
+                tenant, pilot_id, event_id, row["opportunity_id"],
+                event["event_kind"])
         payload_current = (
             isinstance(payload, dict) and
+            expected is not None and
+            payload == expected and
             isinstance(row["payload_json"], str) and
+            row["payload_json"] == json.dumps(
+                expected, sort_keys=True, separators=(",", ":")) and
             hashlib.sha256(row["payload_json"].encode()).hexdigest()
                 == row["payload_sha256"] and
-            payload.get("messageId") == row["message_id"] and
-            payload.get("type") == "track")
+            row["message_id"] == expected["messageId"])
         source_current = bool(
             payload_current and source and event and
             isinstance(source["source_json"], str) and
@@ -162,7 +168,7 @@ class DittofeedOutbox:
                 == row["source_sha256"] and
             event["state"] == "SOURCE_CONFIRMED" and
             event["opportunity_id"] == row["opportunity_id"] and
-            _EVENT_NAMES.get(event["event_kind"]) == payload["event"])
+            _EVENT_NAMES.get(event["event_kind"]) == payload.get("event"))
         return {
             "tenant": tenant, "pilot_id": pilot_id, "event_id": event_id,
             "workspace_id": row["workspace_id"],
