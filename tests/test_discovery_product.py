@@ -188,7 +188,7 @@ class DiscoveryProductTests(unittest.TestCase):
             "tenant-one", query="Source Blocked")
         self.assertTrue(listed["items"][0]["suppressed"])
         self.assertEqual(listed["items"][0]["suppression_reason"],
-                         "UPSTREAM_SUPPRESSION")
+                         "UPSTREAM_SUPPRESSED")
         with self.store._db() as db:
             db.execute("""UPDATE opportunities SET source_json='{}'
                 WHERE tenant=? AND opportunity_id=?""",
