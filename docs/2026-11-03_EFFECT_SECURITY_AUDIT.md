@@ -264,3 +264,26 @@ zero imported accounts, no sales missions and no downstream actions.
 These guards enforce the bounded local handoff but are not a substitute
 for a live StarFruitMe snapshot token, source-license compliance or
 independent authorization of real external operations.
+
+## Direct CLI source allowlist parity (2026-11-04)
+
+The durable Discovery worker and read-only host preflight require that an
+existing StarFruitMe source job be explicitly present in the trusted host's
+`GG_ALLOWED_EXISTING_STARFRUIT_JOBS` configuration before any read.
+Two older direct CLI entry points, `discover-starfruit` and `sales-run`,
+had no matching local allowlist check and could query any syntactically
+valid existing job ID accessible to the installed donor.
+
+Both direct commands now reject missing, unrelated or malformed job IDs
+**before opening a local database or contacting any donor**. An authorized
+job ID must be a 24-character lowercase hexadecimal source identity and
+must be present in the comma-separated host allowlist. Regression tests
+verify both denied paths have zero database creation and zero source or
+pipeline execution, and verify that an explicitly admitted job is passed
+unchanged to the existing workflows.
+
+This is an operator-controlled **local CLI allowlist**, not a remotely
+authenticated multi-tenant authorization system. The host must protect
+the process environment and enforce tenant permissions independently.
+A publicly exposed SaaS still requires a distinct authenticated API,
+tenant-bound permissions and external host integration acceptance.
