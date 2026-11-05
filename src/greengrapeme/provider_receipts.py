@@ -12,30 +12,30 @@ from __future__ import annotations
 # These are constant SQL definitions, never derived from customer input.
 _QUERIES = {
     "CONTRACT": (
-        ("signed agreement", """
+        ("signed agreement", "sales_pilot_contracts", """
             SELECT 1 FROM sales_pilot_contracts
             WHERE tenant=? AND signature_provider=?
                   AND signature_receipt_id=? LIMIT 1"""),
-        ("accepted contract cancellation", """
+        ("accepted contract cancellation", "sales_contract_terminations", """
             SELECT 1 FROM sales_contract_terminations
             WHERE tenant=? AND source_kind=? AND provider_receipt_id=? LIMIT 1"""),
     ),
     "ACCOUNTING": (
-        ("issued invoice", """
+        ("issued invoice", "sales_customer_invoices", """
             SELECT 1 FROM sales_customer_invoices
             WHERE tenant=? AND invoice_provider=?
                   AND invoice_receipt_id=? LIMIT 1"""),
-        ("issued credit note", """
+        ("issued credit note", "sales_customer_credit_notes", """
             SELECT 1 FROM sales_customer_credit_notes
             WHERE tenant=? AND provider_kind=?
                   AND provider_receipt_id=? LIMIT 1"""),
-        ("settled customer cash", """
+        ("settled customer cash", "sales_customer_movements", """
             SELECT 1 FROM sales_customer_movements
             WHERE tenant=? AND provider_kind=?
                   AND provider_receipt_id=? LIMIT 1"""),
     ),
     "BANK": (
-        ("settled customer cash", """
+        ("settled customer cash", "sales_customer_movements", """
             SELECT 1 FROM sales_customer_movements
             WHERE tenant=? AND provider_kind=?
                   AND provider_receipt_id=? LIMIT 1"""),
@@ -49,7 +49,8 @@ _LEDGER_QUERY = """
 
 
 def assert_unclaimed_receipt(db, tenant: str, provider_kind: str,
-                             receipt_id: str) -> None:
+                             receipt_id: str, *,
+                             allow_standalone_ledger: bool = False) -> None:
     """Fail closed on provider-wide receipt collisions.
 
     Caller must already have validated the tenant, provider kind and receipt,
@@ -61,7 +62,19 @@ def assert_unclaimed_receipt(db, tenant: str, provider_kind: str,
     if (not isinstance(receipt_id, str) or not receipt_id
             or not isinstance(tenant, str) or not tenant):
         raise ValueError("provider receipt requires exact tenant and ID")
-    for label, query in _QUERIES[provider_kind]:
+    # PilotLedger also supports legacy, non-operational standalone stores.
+    # They have PRAGMA user_version=0 and may not provision the G4/G5 tables.
+    # Scan every financial table that exists, but do not assume an absent
+    # domain means no receipt in an operational (versioned) database.
+    existing_tables = None
+    if (allow_standalone_ledger
+            and db.execute("PRAGMA user_version").fetchone()[0] == 0):
+        existing_tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+    for label, table, query in _QUERIES[provider_kind]:
+        if existing_tables is not None and table not in existing_tables:
+            continue
         if db.execute(query,(tenant,provider_kind,receipt_id)).fetchone():
             raise ValueError(
                 "provider receipt already claimed as " + label)
