@@ -257,23 +257,48 @@ class GoogleCalendarBookingDispatcher:
             # overlapping invitations on the SAME host calendar reference.
             # A previously uncertain POST still reserves this window until
             # independently reconciled, never assume the send failed.
-            collision = db.execute("""
-                SELECT 1 FROM sales_calendar_dispatch_attempts d
+            # ISO timestamps are stored with their original timezone offsets.
+            # Lexical TEXT comparison is NOT chronological ordering; SQL
+            # julianday() normalizes the offset first. Use inclusive bounds
+            # to include adjacent/sub-millisecond candidates, then compare
+            # Python datetimes at full microsecond precision (half-open).
+            # A malformed existing calendar timestamp fails closed.
+            candidates = db.execute("""
+                SELECT a.slot_start_at, a.slot_end_at
+                FROM sales_calendar_dispatch_attempts d
                 JOIN sales_pilot_appointments a ON
                     a.tenant=d.tenant AND a.pilot_id=d.pilot_id
                     AND a.case_id=d.case_id AND a.booking_id=d.booking_id
                 WHERE d.tenant=? AND a.calendar_ref=?
                   AND d.state!='CANCELLED_CONFIRMED'
-                  AND a.slot_start_at<? AND a.slot_end_at>?
+                  AND (
+                    julianday(a.slot_start_at) IS NULL
+                    OR julianday(a.slot_end_at) IS NULL
+                    OR (julianday(a.slot_start_at)<=julianday(?)
+                        AND julianday(a.slot_end_at)>=julianday(?))
+                  )
                   AND NOT (a.pilot_id=? AND a.case_id=? AND a.booking_id=?)
-                LIMIT 1
             """, (
                 tenant, self.calendar_ref,
                 booking["slot_end_at"], booking["slot_start_at"],
                 pilot_id, case_id, booking_id,
-            )).fetchone()
-            if collision:
-                raise ValueError("conflicting locally dispatched calendar slot")
+            )).fetchall()
+            proposed_start = datetime.fromisoformat(booking["slot_start_at"])
+            proposed_end = datetime.fromisoformat(booking["slot_end_at"])
+            for candidate in candidates:
+                try:
+                    start = datetime.fromisoformat(candidate["slot_start_at"])
+                    end = datetime.fromisoformat(candidate["slot_end_at"])
+                    if (start.tzinfo is None or end.tzinfo is None
+                            or start.utcoffset() is None
+                            or end.utcoffset() is None or start >= end):
+                        raise ValueError("invalid calendar interval")
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "cannot verify existing calendar interval"
+                    ) from exc
+                if start < proposed_end and proposed_start < end:
+                    raise ValueError("conflicting locally dispatched calendar slot")
             stamp = self.store._now()
             db.execute("""
                 INSERT INTO sales_calendar_dispatch_attempts
