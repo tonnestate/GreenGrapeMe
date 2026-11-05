@@ -276,6 +276,75 @@ class CalendarDispatchTests(unittest.TestCase):
         self.assertIsNone(self.dispatcher.get_attempt(
             "tenant-01", "pilot-0001", "case-0002", "booking-0002"))
 
+    def _prepare_second_case(self, start, end):
+        flow = PilotSalesFlow(self.store)
+        flow.open_inbound(
+            "tenant-01", "pilot-0001", "case-0002",
+            company_name="Timezone Example GmbH", channel="CRM_INBOUND",
+            evidence_ref="urn:crm:calendar:timezone:inbound-002",
+            reporter_ref="operator-001")
+        flow.step(
+            "tenant-01", "pilot-0001", "case-0002",
+            step_id="qualified-timezone-002",
+            expected_state="INBOUND_REVIEW",
+            to_state="QUALIFIED_REPORTED",
+            evidence_ref="urn:crm:calendar:timezone:qualified-002",
+            reporter_ref="operator-001")
+        key = ("tenant-01", "pilot-0001", "case-0002", "booking-0002")
+        self.bookings.prepare(
+            *key, calendar_ref="urn:calendar:tenant:owned-001",
+            slot_start_at=start.isoformat(), slot_end_at=end.isoformat(),
+            reporter_ref="operator-001")
+        return key
+
+    def test_overlap_across_timezone_offsets_does_not_dispatch_twice(self):
+        self.policy.allowed = True
+        self.send()
+        foreign_timezone = timezone(timedelta(hours=-12))
+        key = self._prepare_second_case(
+            (self.begin+timedelta(minutes=15)).astimezone(foreign_timezone),
+            (self.end+timedelta(minutes=15)).astimezone(foreign_timezone))
+        # Text comparison wrongly places the second booking on the previous
+        # date, but the two UTC intervals overlap for 30 real minutes.
+        with self.assertRaisesRegex(ValueError, "conflicting locally dispatched"):
+            self.dispatcher.book(*key, permission_ref=self.policy_ref)
+        self.assertIsNone(self.dispatcher.get_attempt(*key))
+        self.assertEqual([method for method, _, _ in self.transport.calls],
+                         ["POST"])
+
+    def test_submillisecond_overlap_is_not_lost_to_sqlite_date_rounding(self):
+        self.policy.allowed = True
+        self.send()
+        key = self._prepare_second_case(
+            self.end-timedelta(microseconds=100),
+            self.end+timedelta(minutes=45))
+        with self.assertRaisesRegex(ValueError, "conflicting locally dispatched"):
+            self.dispatcher.book(*key, permission_ref=self.policy_ref)
+        self.assertIsNone(self.dispatcher.get_attempt(*key))
+        self.assertEqual([method for method, _, _ in self.transport.calls],
+                         ["POST"])
+
+    def test_adjacent_slot_with_different_timezone_is_not_false_collision(self):
+        self.policy.allowed = True
+        self.send()
+        foreign_timezone = timezone(timedelta(hours=-12))
+        key = self._prepare_second_case(
+            self.end.astimezone(foreign_timezone),
+            (self.end+timedelta(minutes=45)).astimezone(foreign_timezone))
+        result = self.dispatcher.book(*key, permission_ref=self.policy_ref)
+        self.assertTrue(result["http_post_attempted_now"])
+        self.assertEqual([method for method, _, _ in self.transport.calls],
+                         ["POST", "POST"])
+
+    def test_appointment_list_orders_instants_not_offset_text(self):
+        foreign_timezone = timezone(timedelta(hours=14))
+        key = self._prepare_second_case(
+            (self.begin-timedelta(minutes=30)).astimezone(foreign_timezone),
+            (self.end-timedelta(minutes=30)).astimezone(foreign_timezone))
+        items = self.bookings.list("tenant-01", "pilot-0001")["items"]
+        self.assertEqual([row["booking_id"] for row in items],
+                         [key[3], self.keys[3]])
+
     def test_timeout_after_provider_creation_never_reposts_even_after_restart(self):
         self.policy.allowed = True
         self.transport.timeout_after_insert = True

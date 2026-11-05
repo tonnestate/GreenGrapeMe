@@ -154,7 +154,7 @@ class CalendarBookings:
             rows = db.execute("""
                 SELECT * FROM sales_pilot_appointments
                 WHERE tenant=? AND pilot_id=?
-                ORDER BY slot_start_at,case_id,booking_id LIMIT ?
+                ORDER BY julianday(slot_start_at),case_id,booking_id LIMIT ?
             """, (tenant,pilot_id,limit)).fetchall()
         return {"items":[dict(row) for row in rows],
                 "total":total, "count_shown":len(rows),
