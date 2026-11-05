@@ -232,7 +232,7 @@ class PilotLedgerTests(unittest.TestCase):
         self.report()
         self.report(event_id="payment-002")
         self.ledger.reconcile("tenant-A","pilot-001","payment-001",source=Provider())
-        with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaisesRegex(ValueError, "already claimed by sales ledger"):
             self.ledger.reconcile("tenant-A","pilot-001","payment-002",source=Provider())
         self.assertEqual(self.ledger.summary("tenant-A","pilot-001")[
             "platform_payment_confirmed_cents"],79000)

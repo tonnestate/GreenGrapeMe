@@ -118,6 +118,30 @@ class TerminationSource:
         return result
 
 
+class GenericLedgerReceipt:
+    """Intercepted independent event source with an exact provider receipt."""
+    def __init__(self, provider_kind, provider_receipt_id):
+        self.kind=provider_kind
+        self.receipt_id=provider_receipt_id
+        self.calls=[]
+
+    def verify(self, event):
+        self.calls.append(dict(event))
+        return {
+            "confirmed":True,
+            "tenant":event["tenant"],"pilot_id":event["pilot_id"],
+            "event_id":event["event_id"],
+            "opportunity_id":event["opportunity_id"],
+            "occurred_at":event["occurred_at"],
+            "event_kind":event["event_kind"],
+            "amount_cents":event["amount_cents"],
+            "currency":event["currency"],
+            "evidence_ref":event["evidence_ref"],
+            "provider_kind":self.kind,
+            "provider_receipt_id":self.receipt_id,
+        }
+
+
 class SalesInvoiceTests(unittest.TestCase):
     def setUp(self):
         temp=TemporaryDirectory()
@@ -559,6 +583,75 @@ class SalesInvoiceTests(unittest.TestCase):
             "net_settled_cents"],1000)
         self.assertEqual(self.credits.get(
             *self.invoice_key,"credit-second-012")["state"],"PREPARED")
+
+    def test_generic_pilot_ledger_cannot_claim_issued_invoice_receipt(self):
+        self.prepare();self.confirm()
+        self.ledger.record(
+            "tenant-01","pilot-0001","generic-provider-cost-001",
+            "PROVIDER_COST_INCURRED",
+            amount_cents=3000,
+            evidence_ref="urn:accounting:generic-cost-0001",
+            reporter_ref="operator-001")
+        source=GenericLedgerReceipt("ACCOUNTING","accounting-invoice-0001")
+        with self.assertRaisesRegex(ValueError,"already claimed as issued invoice"):
+            self.ledger.reconcile(
+                "tenant-01","pilot-0001","generic-provider-cost-001",
+                source=source)
+        self.assertEqual(len(source.calls),1)
+        self.assertEqual(self.ledger.event(
+            "tenant-01","pilot-0001","generic-provider-cost-001")["state"],
+            "REPORTED")
+        self.assertEqual(self.ledger.summary("tenant-01","pilot-0001")[
+            "provider_cost_confirmed_cents"],0)
+
+    def test_generic_pilot_ledger_cannot_claim_existing_bank_payment_receipt(self):
+        self.prepare();self.confirm()
+        self.cash("movement-5001","PAYMENT",1000,"bank-settlement-5001")
+        company=self.contracts.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"
+        )["opportunity_id"]
+        self.ledger.record(
+            "tenant-01","pilot-0001","generic-duplicate-payment-001",
+            "CUSTOMER_PAYMENT_RECEIVED",opportunity_id=company,
+            amount_cents=1000,evidence_ref="urn:bank:generic-payment-0001",
+            reporter_ref="operator-001")
+        source=GenericLedgerReceipt("BANK","bank-settlement-5001")
+        with self.assertRaisesRegex(ValueError,"already claimed as settled customer cash"):
+            self.ledger.reconcile(
+                "tenant-01","pilot-0001","generic-duplicate-payment-001",
+                source=source)
+        self.assertEqual(self.ledger.event(
+            "tenant-01","pilot-0001","generic-duplicate-payment-001")["state"],
+            "REPORTED")
+        summary=self.ledger.summary("tenant-01","pilot-0001")
+        self.assertEqual(summary["client_payment_confirmed_cents"],1000)
+        self.assertEqual(self.invoices.summary(*self.invoice_key)[
+            "net_settled_cents"],1000)
+
+    def test_generic_pilot_deal_cannot_reuse_verified_contract_signature(self):
+        company=self.contracts.get(
+            "tenant-01","pilot-0001","case-0001","contract-0001"
+        )["opportunity_id"]
+        self.ledger.record(
+            "tenant-01","pilot-0001","generic-duplicate-contract-001",
+            "DEAL_SIGNED",opportunity_id=company,amount_cents=0,
+            evidence_ref="urn:contract:duplicate-signature-0001",
+            reporter_ref="operator-001")
+        source=GenericLedgerReceipt("CONTRACT","signature-for-invoice-001")
+        with self.assertRaisesRegex(ValueError,"already claimed as signed agreement"):
+            self.ledger.reconcile(
+                "tenant-01","pilot-0001","generic-duplicate-contract-001",
+                source=source)
+        self.assertEqual(self.ledger.event(
+            "tenant-01","pilot-0001","generic-duplicate-contract-001")["state"],
+            "REPORTED")
+        with self.store._db() as db:
+            confirmed=db.execute("""
+                SELECT count(*) FROM sales_pilot_events
+                WHERE tenant='tenant-01'
+                  AND event_kind='DEAL_SIGNED' AND state='SOURCE_CONFIRMED'
+            """).fetchone()[0]
+        self.assertEqual(confirmed,1)
 
     def test_end_to_end_partial_settlement_refund_and_repayment(self):
         draft=self.prepare()
