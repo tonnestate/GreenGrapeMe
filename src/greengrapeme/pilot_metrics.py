@@ -15,6 +15,7 @@ from typing import Protocol
 
 from .operations import SalesWorkspace
 from .commercial_reconciliation import commercial_evidence_review
+from .provider_receipts import assert_unclaimed_receipt
 
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{5,119}$")
@@ -355,6 +356,16 @@ class PilotLedger:
                     self._require_current_account_link(
                         db, tenant, pilot_id, pilot_row["offer_id"],
                         old["opportunity_id"])
+                # One independently authenticated provider receipt must
+                # never confirm both a standalone pilot event and a signed
+                # contract, issued invoice, credit note, or cash movement.
+                # Standalone v0 ledger tests have no G4/G5 tables; operational
+                # stores must have the full schema and fail closed otherwise.
+                if provider in ("CONTRACT", "ACCOUNTING", "BANK"):
+                    assert_unclaimed_receipt(
+                        db, tenant, provider, receipt_id,
+                        allow_standalone_ledger=True,
+                    )
                 now = self.store._now()
                 db.execute("""UPDATE sales_pilot_events
                     SET state='SOURCE_CONFIRMED',provider_kind=?,
