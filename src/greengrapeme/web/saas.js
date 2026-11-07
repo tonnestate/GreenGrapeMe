@@ -7,7 +7,8 @@ const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
-                companyDetailRevision: 0, discoveryDraft: null };
+                journeyQueryRevision: 0, companyDetailRevision: 0,
+                discoveryDraft: null };
 const LOGIN_TRANSACTION = "gg-oidc-pkce-transaction";
 const PAGE_SIZE = 40;
 
@@ -322,9 +323,53 @@ async function pilots() {
   }
   if (!result.items?.length) emptyRow(out, 6, "Noch keine Pilotprojekte.");
 }
+function clearJourney() {
+  state.journeyQueryRevision += 1;
+  $("journey-list").replaceChildren();
+  $("journey-summary").textContent = "";
+  $("journey-financials").textContent = "";
+}
+async function customerJourney() {
+  const generation = state.generation;
+  const revision = ++state.journeyQueryRevision;
+  const pilot = value("crm-pilot-id");
+  const caseId = value("journey-case");
+  if (!pilot || !caseId) throw new Error("Pilot-ID und CRM-Vorgangs-ID sind erforderlich.");
+  $("journey-list").replaceChildren();
+  $("journey-summary").textContent = "";
+  $("journey-financials").textContent = "";
+  const result = await api("/api/pilot-journey?pilot=" +
+    encodeURIComponent(pilot) + "&case=" + encodeURIComponent(caseId));
+  assertGeneration(generation);
+  if (revision !== state.journeyQueryRevision) return;
+  const rows = document.createDocumentFragment();
+  for (const item of result.milestones || []) {
+    const row = document.createElement("tr");
+    td(row, item.name);
+    td(row, item.state);
+    rows.appendChild(row);
+  }
+  $("journey-list").replaceChildren(rows);
+  $("journey-summary").textContent = result.company_name +
+    " | CRM: " + result.crm_state +
+    " | Nächste Prüfung: " + result.next_action +
+    " | Kontaktberechtigung: " + result.contact_authority +
+    " | Sperren: " + (result.blocking_reasons || []).join(", ");
+  const financial = result.financials;
+  $("journey-financials").textContent =
+    "Bestätigte Kunden-Zahlungseingänge netto: " +
+    euro(financial.confirmed_customer_net_cash_cents) +
+    " | Offene bestätigte Forderungen: " +
+    euro(financial.confirmed_outstanding_cents) +
+    " | Zu klärende Rückerstattungen: " +
+    euro(financial.refund_due_cents) +
+    " | Kein Nachweis für Plattformumsatz oder verursachten Mehrumsatz.";
+}
+
 async function crmWorklist() {
   const generation = state.generation;
   const revision = ++state.crmQueryRevision;
+  clearJourney();
   const pilot = value("crm-pilot-id");
   if (!pilot) throw new Error("Bitte eine Pilot-ID eingeben.");
   const filter = "?pilot=" + encodeURIComponent(pilot);
@@ -385,6 +430,8 @@ async function crmWorklist() {
 }
 function clearCrmWorklist() {
   state.crmQueryRevision += 1;
+  clearJourney();
+  $("journey-case").value = "";
   $("crm-pilot-id").value = "";
   $("crm-case-list").replaceChildren();
   $("crm-followup-list").replaceChildren();
@@ -592,6 +639,13 @@ async function main() {
     event.preventDefault();
     try { await crmWorklist(); say(""); }
     catch (error) { say(error.message); }
+  });
+  $("journey-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await customerJourney(); say(""); }
+    catch (error) {
+      if (!(error instanceof StaleContextError)) say(error.message);
+    }
   });
   $("logout-button").addEventListener("click", logout);
   document.querySelectorAll('nav[aria-label="Produktbereiche"] button')

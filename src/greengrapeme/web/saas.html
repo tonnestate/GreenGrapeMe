@@ -118,6 +118,20 @@
           <div><label for="crm-pilot-id">Pilot-ID für CRM-Arbeitsliste</label><input id="crm-pilot-id" required maxlength="120"></div>
           <button type="submit">Vorgänge und Wiedervorlagen laden</button>
         </form>
+        <h3>Vertriebsverlauf eines Kunden</h3>
+        <p>Zeigt den echten CRM- und Belegstand. Gemeldete Termine und Angebote sind kein unabhängiger Erfolgsnachweis.</p>
+        <form id="journey-form" class="filters">
+          <div><label for="journey-case">CRM-Vorgangs-ID (Pilot-ID aus der Arbeitsliste)</label><input id="journey-case" maxlength="120" required></div>
+          <button type="submit">Vertriebsverlauf anzeigen</button>
+        </form>
+        <p id="journey-summary" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Schritt</th><th>Belegstatus</th></tr></thead>
+            <tbody id="journey-list"></tbody>
+          </table>
+        </div>
+        <p id="journey-financials"></p>
         <p id="crm-case-count" aria-live="polite"></p>
         <div class="table-wrap">
           <table>
