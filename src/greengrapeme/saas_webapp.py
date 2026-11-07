@@ -194,7 +194,13 @@ def create_saas_app(
     browser: BrowserOIDCConfig | None = None,
 ):
     origin = urlsplit(allowed_origin)
-    if (not isinstance(allowed_origin, str) or
+    try:
+        origin_port = origin.port
+    except ValueError:
+        raise ValueError("invalid SaaS HTTPS port") from None
+    if (origin.netloc.endswith(":") or
+            origin_port == 0 or
+            not isinstance(allowed_origin, str) or
             origin.scheme != "https" or not origin.hostname or
             origin.username is not None or origin.password is not None or
             origin.path not in ("", "/") or origin.query or origin.fragment or
