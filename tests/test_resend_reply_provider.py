@@ -272,7 +272,7 @@ class ResendProviderTests(unittest.TestCase):
             db.execute("UPDATE opportunities SET source_json='{}' "
                        "WHERE tenant=? AND opportunity_id=?",
                        ("tenant-01",self.case["opportunity_id"]))
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(RuntimeError):
             self.send()
         self.assertEqual(self.transport.calls,[])
 
