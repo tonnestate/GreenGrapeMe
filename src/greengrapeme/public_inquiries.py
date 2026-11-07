@@ -71,6 +71,16 @@ def _field(value: str, field: str, max_len: int) -> str:
     return value.strip()
 
 
+def _message(value: str) -> str:
+    if not isinstance(value,str) or not 1 <= len(value.strip()) <= 800:
+        raise ValueError("invalid pilot inquiry")
+    normalized=value.replace("\r\n","\n").replace("\r","\n").strip()
+    if any((ord(ch)<32 and ch not in "\n\t") or ord(ch)==127
+           for ch in normalized):
+        raise ValueError("invalid pilot inquiry")
+    return normalized
+
+
 class PublicPilotInbox:
     def __init__(self, path: str | Path, *, tenant: str,
                  signing_key: str | None = None):
@@ -150,7 +160,7 @@ class PublicPilotInbox:
         email = _field(contact_email,"contact email",254).lower()
         if not _EMAIL.fullmatch(email):
             raise ValueError("invalid contact email")
-        details = _field(message,"pilot inquiry",800)
+        details = _message(message)
         if privacy_ack != "on":
             raise ValueError("privacy information acknowledgement required")
         if (not isinstance(remote_addr,str) or not remote_addr
