@@ -252,9 +252,37 @@ class PublicInquiryJourneyTests(unittest.TestCase):
         self.assertEqual(record["contact_email"],"")
         self.assertEqual(record["message"],"")
         self.assertEqual(record["state"],"ADOPTED")
+        with self.inbox._db() as db:
+            retained=db.execute(
+                "SELECT request_sha256,rate_bucket FROM public_pilot_inquiries "
+                "WHERE tenant=? AND inquiry_id=?",("tenant-a",iid)).fetchone()
+        self.assertEqual(retained["request_sha256"],"")
+        self.assertEqual(retained["rate_bucket"],"")
         self.assertEqual(self.flow.get("tenant-a","pilot-0001",
                          adopted["case_id"])["state"],"INBOUND_REVIEW")
         self.assertEqual(self.inbox.purge_expired()["personal_fields_scrubbed"],0)
+
+    def test_expired_declined_inquiry_scrubs_all_identifying_fields(self):
+        self.request("/pilot-anfrage",method="POST",form=self.form())
+        iid=self.inbox.list("tenant-a")["items"][0]["inquiry_id"]
+        self.inbox.decline("tenant-a",iid,reviewer_ref="operator-001")
+        with self.inbox._db() as db:
+            db.execute("UPDATE public_pilot_inquiries SET submitted_at=? "
+                "WHERE tenant=? AND inquiry_id=?",(
+                (datetime.now(timezone.utc)-timedelta(days=31)).isoformat(),
+                "tenant-a",iid))
+        result=self.inbox.purge_expired()
+        self.assertEqual(result["personal_fields_scrubbed"],1)
+        with self.inbox._db() as db:
+            row=db.execute(
+                "SELECT company_name,contact_email,message,request_sha256,"
+                "rate_bucket,state FROM public_pilot_inquiries "
+                "WHERE tenant=? AND inquiry_id=?",("tenant-a",iid)).fetchone()
+        for field in ("company_name","contact_email","message",
+                      "request_sha256","rate_bucket"):
+            self.assertEqual(row[field],"",field)
+        self.assertEqual(row["state"],"DECLINED")
+        self.assertEqual(self.inbox.list("tenant-a")["total"],0)
 
     def test_isolated_inbox_reopens_and_never_bootstraps_implicitly(self):
         with self.assertRaises(FileExistsError):
