@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from html import escape
 from importlib import resources
 from os import environ
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
+
+from .public_inquiries import PublicPilotInbox
 import json
 import re
 
@@ -344,7 +346,42 @@ def _json_ld(document: dict) -> str:
                       allow_nan=False).replace("<","\\u003c").replace(">", "\\u003e").replace("&","\\u0026")
 
 
-def _html(config: PublicSiteConfig, page: Page) -> bytes:
+def _pilot_form(config: PublicSiteConfig, inbox: PublicPilotInbox) -> str:
+    e=lambda value:escape(value,quote=True)
+    return (
+        '<section class="marketing-section"><h2>Unverbindliche Pilotanfrage</h2>'
+        '<p>Beschreiben Sie Ihren konkreten B2B-Vertriebsauftrag. '
+        'Die Anfrage wird zur manuellen Prüfung gespeichert. '
+        'Es erfolgt keine automatische Kontaktaufnahme oder CRM-Qualifizierung.</p>'
+        '<form id="pilot-inquiry-form" action="/pilot-anfrage" method="post" '
+        'accept-charset="UTF-8">'
+        '<input type="hidden" name="form_token" value="'+e(inbox.issue_token())+'">'
+        '<div><label for="inquiry-company">Unternehmen</label>'
+        '<input id="inquiry-company" name="unternehmen" required maxlength="160" '
+        'autocomplete="organization"></div>'
+        '<div><label for="inquiry-email">Geschäftliche Kontakt-E-Mail</label>'
+        '<input id="inquiry-email" type="email" name="email" required '
+        'maxlength="254" autocomplete="email"></div>'
+        '<div><label for="inquiry-message">Vertriebsziel und Zielgruppe</label>'
+        '<textarea id="inquiry-message" name="anliegen" rows="5" '
+        'maxlength="800" required></textarea></div>'
+        '<div class="marketing-honeypot" aria-hidden="true">'
+        '<label for="inquiry-website">Bitte nicht ausfüllen</label>'
+        '<input id="inquiry-website" name="website" tabindex="-1" '
+        'autocomplete="off"></div>'
+        '<label><input type="checkbox" name="datenschutz" value="on" required>'
+        ' Ich habe die <a href="'+e(config.privacy_url)+'">Datenschutzhinweise</a> '
+        'zur Bearbeitung meiner Anfrage gelesen. '
+        'Dies ist keine Einwilligung in Werbung.</label>'
+        '<p>Keine Zugangsdaten oder personenbezogenen Kundendatensätze eintragen. '
+        'Nicht bearbeitete Anfragen werden nach der festgelegten Frist bereinigt.</p>'
+        '<button type="submit">Pilotanfrage zur Prüfung einreichen</button>'
+        '</form></section>'
+    )
+
+
+def _html(config: PublicSiteConfig, page: Page,
+          inbox: PublicPilotInbox | None = None) -> bytes:
     canonical = _canonical(config, page.path)
     e = lambda value: escape(value, quote=True)
     nav = (
@@ -377,6 +414,8 @@ def _html(config: PublicSiteConfig, page: Page) -> bytes:
             '<p>E-Mail: <a href="mailto:'+e(config.contact_email)+'">'+
             e(config.contact_email)+'</a></p></section>'
         )
+    if page.path == "/pilotprojekt" and inbox is not None:
+        sections += _pilot_form(config,inbox)
     related = "".join(
         f'<li><a href="{e(path)}">{e(PAGES[path].heading)}</a></li>'
         for path in page.related
