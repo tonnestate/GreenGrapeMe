@@ -106,6 +106,7 @@ in-process WSGI GETs, non-indexable SaaS login, anonymous API refusal,
 isolated inbox and an active operator membership. It does NOT contact
 DNS, real TLS, the IdP, email, calendar, bank or any customer. The report
 contains check IDs only, never paths, emails, PII, tokens or credentials.
+The field `production_ready=false` is deliberate even when all local checks pass.
 A local preflight failure returns exit 2 with blocked check IDs.
 
 `release-audit` returns exit **2 / NO_GO** even when local checks pass,
