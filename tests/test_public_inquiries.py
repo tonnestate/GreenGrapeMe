@@ -121,6 +121,57 @@ class PublicInquiryJourneyTests(unittest.TestCase):
             "400 Bad Request")
         self.assertEqual(self.inbox.list("tenant-a")["total"],1)
 
+    def test_public_form_to_operator_qualification_and_sales_journey(self):
+        from greengrapeme.sales_journey import SalesJourney
+        response=self.request("/pilot-anfrage",method="POST",form=self.form())
+        self.assertEqual(response["status"],"303 See Other")
+        items=self.inbox.list("tenant-a")["items"]
+        self.assertEqual(len(items),1)
+        inquiry=items[0]["inquiry_id"]
+        self.assertEqual(self.flow.list("tenant-a","pilot-0001")["total"],0)
+
+        adopted=self.inbox.adopt(
+            "tenant-a",inquiry,pilot_id="pilot-0001",
+            reviewer_ref="operator-001",crm_flow=self.flow)
+        case_id=adopted["case_id"]
+        review=self.flow.review("tenant-a","pilot-0001",case_id)
+        self.assertEqual(review["state"],"INBOUND_REVIEW")
+        self.assertEqual(review["reported_channel"],"WEB_FORM")
+        self.assertEqual(review["contact_authority"],"NONE")
+        self.assertEqual(review["available_transitions"],
+                         ["CLOSED_LOST","QUALIFIED_REPORTED"])
+
+        result=self.flow.step(
+            "tenant-a","pilot-0001",case_id,
+            step_id="web-qualify-001",
+            expected_state=review["state"],
+            to_state="QUALIFIED_REPORTED",
+            reporter_ref="operator-001",
+            evidence_ref="urn:crm:review:website-qualification-001")
+        self.assertEqual(result["state"],"QUALIFIED_REPORTED")
+        after=self.flow.review("tenant-a","pilot-0001",case_id)
+        self.assertEqual(after["step_history_total"],1)
+        self.assertEqual(after["step_history"][0]["step_id"],"web-qualify-001")
+        journey=SalesJourney(self.store).get(
+            "tenant-a","pilot-0001",case_id)
+        self.assertEqual(journey["crm_state"],"QUALIFIED_REPORTED")
+        self.assertEqual(journey["origin"],"WEB_FORM")
+        self.assertEqual(journey["contact_authority"],"NONE")
+        self.assertEqual(journey["financials"][
+            "confirmed_customer_net_cash_cents"],0)
+        self.assertFalse(journey["next_action_is_automatic_effect"])
+        # The actual durable CRM step is replay-safe after a lost response.
+        replay=self.flow.step(
+            "tenant-a","pilot-0001",case_id,
+            step_id="web-qualify-001",
+            expected_state="INBOUND_REVIEW",
+            to_state="QUALIFIED_REPORTED",
+            reporter_ref="operator-001",
+            evidence_ref="urn:crm:review:website-qualification-001")
+        self.assertEqual(replay["state"],"QUALIFIED_REPORTED")
+        self.assertEqual(self.flow.review("tenant-a","pilot-0001",case_id)[
+            "step_history_total"],1)
+
     def test_manual_handoff_is_idempotent_and_never_grants_communication(self):
         form=self.form()
         self.request("/pilot-anfrage",method="POST",form=form)
