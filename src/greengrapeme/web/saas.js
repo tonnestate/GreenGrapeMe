@@ -946,6 +946,7 @@ async function main() {
       " (kein Kalendertermin erstellt, keine Einladung versandt).";
   });
   onForm("public-inquiry-review-form", async () => {
+    const generation=state.generation;
     if (!state.publicInboxEnabled) throw new Error("Pilotanfragen sind nicht freigeschaltet.");
     const decision=value("inquiry-review-decision");
     const pilotId=decision==="ADOPT" ? value("inquiry-review-pilot") : "";
@@ -955,6 +956,7 @@ async function main() {
         inquiry_id:value("inquiry-review-id"), decision, pilot_id:pilotId,
       },
     });
+    assertGeneration(generation);
     let refreshFailed=false;
     try { await publicInquiries(); }
     catch (error) {
@@ -1004,6 +1006,7 @@ async function main() {
     return "Eingang dokumentiert: " + result.state;
   });
   onForm("sales-step-form", async () => {
+    const generation=state.generation;
     const selected=state.caseReview;
     if (!selected || !["operator","admin"].includes(state.role) ||
         selected.pilot!==value("step-pilot") ||
@@ -1036,6 +1039,7 @@ async function main() {
     const result=await api("/api/pilot-step", {
       method:"POST",body:{...spec,step_id:draft.step_id},
     });
+    assertGeneration(generation);
     state.caseStepDraft=null;
     let refreshFailed=false;
     try {
