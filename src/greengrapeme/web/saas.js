@@ -503,6 +503,7 @@ function clearTenantWorkspace() {
   $("public-inquiry-section").hidden = true;
   $("public-inquiry-review-form").hidden = true;
   for (const form of document.querySelectorAll("#workspace form")) form.reset();
+  $("inquiry-review-pilot").required = true;
   // A reset() does not fire "change". Restore the dependent Discovery fields.
   const creating = value("disc-mode") === "new";
   $("disc-existing-fields").hidden = creating;
