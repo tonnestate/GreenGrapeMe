@@ -1,0 +1,52 @@
+# Replace every @@...@@ token with the validated production value.
+# Two distinct HTTPS names, certs and a default-deny vhost are required.
+# Both Gunicorn services bind only to loopback. No direct public 8081/8082.
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_certificate @@PUBLIC_TLS_CERT@@;
+    ssl_certificate_key @@PUBLIC_TLS_KEY@@;
+    return 444;
+}
+server {
+    listen 443 ssl;
+    server_name @@PUBLIC_HOST@@;
+    ssl_certificate @@PUBLIC_TLS_CERT@@;
+    ssl_certificate_key @@PUBLIC_TLS_KEY@@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 3000;
+    add_header X-Content-Type-Options nosniff always;
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        proxy_set_header Host @@PUBLIC_HOST@@;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 25s;
+        proxy_send_timeout 25s;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name @@SAAS_HOST@@;
+    ssl_certificate @@SAAS_TLS_CERT@@;
+    ssl_certificate_key @@SAAS_TLS_KEY@@;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 8192;
+    add_header X-Content-Type-Options nosniff always;
+    location / {
+        proxy_pass http://127.0.0.1:8082;
+        proxy_http_version 1.1;
+        proxy_set_header Host @@SAAS_HOST@@;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Connection "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 25s;
+        proxy_send_timeout 25s;
+    }
+}
