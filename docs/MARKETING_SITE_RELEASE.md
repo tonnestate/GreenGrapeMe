@@ -58,6 +58,85 @@ geprüfter TLS-Terminierung setzen. Nicht per ungeprüftem
 `X-Forwarded-Proto` aus dem Internet durchreichen. Kein gemeinsamer
 WSGI-Origin mit der SaaS-API.
 
+## Durchgängige Conversion: Landingpage → Pilotanfrage → Operator → CRM
+
+Die Pilotprojekt-Seite enthält bei vollständig konfiguriertem öffentlichen
+Dienst ein echtes HTML-Formular (Unternehmen, Geschäfts-E-Mail, begrenztes
+Anliegen und Kenntnisnahme der verlinkten Datenschutzhinweise). Es ist
+barrierearm ohne JavaScript und ohne Drittanbieter-Tracker nutzbar.
+
+`POST /pilot-anfrage` ist ausschließlich same-origin,
+`application/x-www-form-urlencoded`, auf **3.000 Bytes** begrenzt und
+fordert ein kurzlebiges HMAC-signiertes Formular-Token. Wiederholungen
+desselben Formulars werden nicht erneut gespeichert. Duplicate-Felder,
+fremde Origins, ungültiges UTF-8, nicht bestätigte Datenschutzhinweise,
+Honeypot-Spam und übermäßige Einreichungen werden abgewiesen bzw. sicher
+begrenzt. Die Erfolgsmeldung enthält keine personenbezogenen Daten, ist
+`noindex` und wird nicht zwischengespeichert. Die indexierbare
+Pilotprojekt-Seite mit einem frischen Formular-Token hat
+`Cache-Control: no-store` und darf nicht per CDN statisch gecacht werden.
+
+**Besonderes Sicherheitsmerkmal:** Der öffentliche Webprozess hat **keinen
+Zugriff auf die operativen CRM-, Zahlungs- oder Mandantendatenbanken**.
+Die Anfragen werden ausschließlich in einer separaten, explizit
+provisionierten SQLite-Datei mit eingeschränkten Dateirechten gespeichert.
+Ein Eintrag ist zunächst `NEW`, weder verifizierte Unternehmensidentität
+noch Einwilligung zu Werbung.
+
+### Einrichtung auf einem echten Host
+
+1. Betreiber/Datenschutz-URLs und Domain müssen gemäß obiger
+   Konfiguration vollständig vorliegen.
+2. Separate Datei, **nicht** die operative SaaS-SQLite-Datei:
+   `python -m greengrapeme.cli --db /srv/gg/public-inquiries.sqlite public-inbox-bootstrap`.
+3. Öffentlicher WSGI-Prozess benötigt zusätzlich
+   `GG_PUBLIC_INBOX_DB` (genau diese Datei),
+   `GG_PUBLIC_INQUIRY_TENANT` (fest zugeordneter SaaS-Mandant) und
+   `GG_PUBLIC_FORM_KEY` (starker zufälliger, geheimer Server-Schlüssel
+   mit mindestens 40 druckbaren Zeichen). **Nicht in Git oder Browser
+   ausgeben.** Für mehrere öffentliche Domains eigene Inbox/Schlüssel.
+4. Der OIDC-geschützte SaaS-Prozess benötigt nur
+   `GG_SAAS_PUBLIC_INBOX_DB` (dieselbe separate Datei) und
+   `GG_PUBLIC_INQUIRY_TENANT`. Der Formularschlüssel gehört **nicht**
+   in den SaaS-Prozess. Der Zielmandant muss existieren und Operatoren
+   mit Serverrollen versehen sein.
+5. Im CRM erscheint für berechtigte Operatoren eine eigene Warteschlange
+   für öffentliche Anfragen. `ADOPT` bindet eine Anfrage nach manueller
+   Prüfung an einen bereits existierenden Pilot. `DECLINE` lehnt sie ohne
+   CRM-Erstellung ab. Die Übernahme verwendet die bestehende
+   `PilotSalesFlow.open_inbound`-Fachlogik mit Ursprung `WEB_FORM`,
+   unveränderlicher `urn:gg:public-inquiry:<id>` und deterministischer
+   CRM-Vorgangs-ID. Es wird **keine** Nachricht, Termin- oder Zahlaktion
+   automatisch ausgelöst. Ein Neustart nach Unterbrechung zwischen den
+   Datenbanken kann denselben Pilot ohne doppelten CRM-Fall übernehmen.
+6. Der Reverse Proxy muss die tatsächlich geprüfte Client-IP als
+   WSGI-`REMOTE_ADDR` bereitstellen und darf nie
+   `X-Forwarded-For` aus ungeprüfter Quelle übernehmen. Die lokale
+   Rate-Begrenzung beträgt drei neue Anfragen je Client-Adresse und
+   UTC-Stunde (nur HMAC-gehashte Stunden-Buckets). Zusätzlich braucht die
+   öffentliche Instanz ein Edge-Rate-Limit/WAF, Monitoring sowie
+   Postfach- und Betriebsverfügbarkeitstests.
+
+### Aufbewahrung und Datenschutz
+
+Das Postfach speichert Name, Geschäfts-E-Mail und Anfrageinhalt nur für
+die manuelle Bearbeitung. **Es ist keine Kontakt- oder Werbedatenbank.**
+Die getrennte Datei muss auf einem verschlüsselten Datenträger mit
+rollenbegrenztem Zugriff liegen; Zugriff und Backups dürfen personenbezogene
+Daten nicht in öffentliche Logs oder Git bringen.
+
+Ein täglicher, vom Host einzurichtender Aufbewahrungsjob muss
+`python -m greengrapeme.cli --db /srv/gg/public-inquiries.sqlite --tenant <echter-mandant> public-inbox-purge --max-age-days 30`
+ausführen. Dieser entfernt Kontakt-E-Mail und Freitext nach Ablauf
+der Frist. Unerledigte Anfragen werden `EXPIRED`; bereits ins CRM
+übernommene Fälle behalten nur minimale Zuordnungsmetadaten.
+`ADOPTING`-Fälle sind absichtlich von automatischer Löschung
+ausgenommen, bis ein Operator den offenen Übergang sicher aufgelöst hat.
+Die konkrete Datenschutzerklärung muss diese Verarbeitung, Empfänger,
+Zweck, Rechtsgrundlage und Löschfristen abdecken; Betroffenenanfragen
+können zusätzliche Löschmaßnahmen in CRM und Backups erfordern.
+Dieser Mechanismus allein **beweist keine DSGVO-Konformität**.
+
 ## SEO und maschinenlesbare Inhalte
 
 Jede Landingpage hat einen individuellen deutschen Titel, Meta-Description,
