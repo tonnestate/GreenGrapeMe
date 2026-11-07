@@ -258,6 +258,25 @@ class BrowserTests(unittest.TestCase):
         self.assertNotIn('api("/api/pilot-appointment-reconcile"',js)
         self.assertNotIn("innerHTML",section)
 
+    def test_evidence_led_customer_journey_is_read_only_and_tenant_safe(self):
+        html=self.get("/")["body"].decode()
+        js=self.get("/saas.js")["body"].decode()
+        for identifier in ("journey-form","journey-case","journey-list",
+                           "journey-summary","journey-financials"):
+            self.assertIn('id="'+identifier+'"',html)
+        ui=js[js.index("async function customerJourney() {"):
+              js.index("async function crmWorklist() {")]
+        self.assertIn('api("/api/pilot-journey?pilot="',ui)
+        self.assertIn("assertGeneration(generation)",ui)
+        self.assertIn("revision !== state.journeyQueryRevision",ui)
+        self.assertIn("textContent",ui)
+        self.assertNotIn("innerHTML",ui)
+        self.assertNotIn('method: "POST"',ui)
+        self.assertIn("financial.confirmed_customer_net_cash_cents",ui)
+        self.assertIn("Kein Nachweis für Plattformumsatz",ui)
+        self.assertIn("clearJourney();",js[js.index("function clearCrmWorklist()"):
+                                            js.index("async function openTenant(")])
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),
