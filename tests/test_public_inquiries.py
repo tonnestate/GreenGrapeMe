@@ -4,13 +4,15 @@ from html import unescape
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 from urllib.parse import urlencode
 from wsgiref.util import setup_testing_defaults
 import re
 import sqlite3
 import unittest
 
-from greengrapeme.marketing_site import PublicSiteConfig,create_marketing_app
+from greengrapeme.marketing_site import (
+    PublicSiteConfig,create_marketing_app,create_marketing_service_from_env)
 from greengrapeme.public_inquiries import (
     PublicPilotInbox,bootstrap_public_inbox)
 from greengrapeme.operations import SalesWorkspace
@@ -283,6 +285,40 @@ class PublicInquiryJourneyTests(unittest.TestCase):
             self.assertEqual(row[field],"",field)
         self.assertEqual(row["state"],"DECLINED")
         self.assertEqual(self.inbox.list("tenant-a")["total"],0)
+
+    def test_production_public_factory_requires_separate_inbox_and_signer(self):
+        settings={
+            "GG_PUBLIC_ORIGIN":ORIGIN,
+            "GG_PUBLIC_OPERATOR_NAME":"Test Operator GmbH",
+            "GG_PUBLIC_CONTACT_EMAIL":"kontakt@example.org",
+            "GG_PUBLIC_IMPRINT_URL":ORIGIN+"/impressum",
+            "GG_PUBLIC_PRIVACY_URL":ORIGIN+"/datenschutz",
+            "GG_PUBLIC_APP_URL":"https://app.example.org/",
+            "GG_PUBLIC_INBOX_DB":str(self.public_db),
+            "GG_PUBLIC_INQUIRY_TENANT":"tenant-a",
+            "GG_PUBLIC_FORM_KEY":"secure-"+"x"*64,
+        }
+        with patch.dict("os.environ",settings,clear=True):
+            deployed=create_marketing_service_from_env()
+        env={"REQUEST_METHOD":"GET","PATH_INFO":"/pilotprojekt",
+             "wsgi.url_scheme":"https","wsgi.input":BytesIO(b"")}
+        setup_testing_defaults(env)
+        output={}
+        def start(status,headers):
+            output["status"]=status
+        html=b"".join(deployed(env,start))
+        self.assertEqual(output["status"],"200 OK")
+        self.assertIn(b'name="form_token"',html)
+        self.assertIn(b'action="/pilot-anfrage"',html)
+        with patch.dict("os.environ",{
+            **settings,"GG_PUBLIC_FORM_KEY":""},clear=True):
+            with self.assertRaises(ValueError):
+                create_marketing_service_from_env()
+        with patch.dict("os.environ",{
+            key:val for key,val in settings.items()
+            if key!="GG_PUBLIC_INBOX_DB"},clear=True):
+            with self.assertRaises(KeyError):
+                create_marketing_service_from_env()
 
     def test_isolated_inbox_reopens_and_never_bootstraps_implicitly(self):
         with self.assertRaises(FileExistsError):
