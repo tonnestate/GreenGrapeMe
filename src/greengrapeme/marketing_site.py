@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
+from ipaddress import ip_address
 from importlib import resources
 from os import environ
 from urllib.parse import urlsplit, parse_qs
@@ -537,6 +538,20 @@ def create_marketing_app(config: PublicSiteConfig, *,
                          "datenschutz","website"}
                 if set(values)!=allowed or any(len(v)!=1 for v in values.values()):
                     raise ValueError("ambiguous form")
+                # Local Nginx overwrites X-Real-IP with its socket
+                # peer. Trust it ONLY when the direct WSGI peer is loopback;
+                # never use unsanitized X-Forwarded-For from the internet.
+                peer=environ.get("REMOTE_ADDR","")
+                effective_peer=peer
+                if peer in ("127.0.0.1","::1"):
+                    real=environ.get("HTTP_X_REAL_IP")
+                    if real is not None:
+                        if not isinstance(real,str) or len(real)>45:
+                            raise ValueError("invalid reverse proxy client IP")
+                        try:
+                            effective_peer=str(ip_address(real))
+                        except ValueError:
+                            raise ValueError("invalid reverse proxy client IP") from None
                 inbox.submit(
                     token=values["form_token"][0],
                     company_name=values["unternehmen"][0],
@@ -544,7 +559,7 @@ def create_marketing_app(config: PublicSiteConfig, *,
                     message=values["anliegen"][0],
                     privacy_ack=values["datenschutz"][0],
                     honeypot=values["website"][0],
-                    remote_addr=environ.get("REMOTE_ADDR",""))
+                    remote_addr=effective_peer)
             except PermissionError:
                 return _response(start_response,"429 Too Many Requests",
                                  b"Please retry later",
