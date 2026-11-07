@@ -6,6 +6,22 @@
 
 Status: **P0 development / not deployed**. This repository is currently **public**; it must contain no proprietary FruitStack implementation, private configuration, credentials, sales contacts, provider secrets, or customer data.
 
+## Public product website, SEO and E-E-A-T (development)
+
+The authenticated SaaS screen is **not** the public homepage. The repository
+also contains a standalone public WSGI website with 12 German B2B landing,
+workflow, trust, FAQ and contact pages: `greengrapeme.marketing_site`.
+It serves semantic HTML, individual canonical metadata, crawlable
+`/sitemap.xml`, `/robots.txt` and a strictly grounded Schema.org JSON-LD
+graph. The original SaaS login is explicitly `noindex`.
+
+**Nothing has been deployed or indexed by this code change alone.** The
+public service intentionally refuses to start without a real legal operator,
+contact, working imprint and privacy URLs, public site HTTPS origin and
+separate SaaS URL. Do not fabricate legal identities or performance claims.
+Deployment and manual E-E-A-T/SEO/GEO review requirements are in
+[`docs/MARKETING_SITE_RELEASE.md`](docs/MARKETING_SITE_RELEASE.md).
+
 ## Mission
 
 Deliver one complete, governed B2B revenue process: target-market strategy -> opportunity discovery -> company/person resolution -> buying-signal assessment -> personalized, substantiated outreach plans -> interactive qualification funnels -> conversation/appointment handling -> proposal and deal progression -> onboarding/retention -> measured realized revenue and contribution margin.

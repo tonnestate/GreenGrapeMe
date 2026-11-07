@@ -66,6 +66,9 @@ def _asset(start_response, path: str, token_endpoint: str):
         ("Content-Type", content_type),
         ("Content-Length", str(len(body))),
         ("Cache-Control", "no-store, max-age=0"),
+        # Authentication screens and internal SaaS assets must not compete
+        # with the separate, indexable public marketing website.
+        ("X-Robots-Tag", "noindex, nofollow, noarchive"),
         ("Strict-Transport-Security", "max-age=31536000"),
         ("X-Content-Type-Options", "nosniff"),
         ("X-Frame-Options", "DENY"),

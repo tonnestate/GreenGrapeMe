@@ -68,6 +68,10 @@ class BrowserTests(unittest.TestCase):
                 self.assertEqual(
                     result["headers"]["Cache-Control"],
                     "no-store, max-age=0")
+                # Index the dedicated public site, never the SSO login.
+                self.assertEqual(
+                    result["headers"]["X-Robots-Tag"],
+                    "noindex, nofollow, noarchive")
                 self.assertIn("script-src 'self'",
                               result["headers"]["Content-Security-Policy"])
                 self.assertIn("frame-ancestors 'none'",
