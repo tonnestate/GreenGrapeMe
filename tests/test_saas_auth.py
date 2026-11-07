@@ -162,7 +162,7 @@ class SaasIdentityAPITests(unittest.TestCase):
             "float_overflow": valid.replace(b'10000', b'1e10000'),
             "unpaired_surrogate": valid.replace(
                 b'"label":"Pilot"', b'"label":"\\uD800"'),
-            "invalid_utf8": valid.replace(b'Pilot', b'\\xff'),
+            "invalid_utf8": valid.replace(b'Pilot', bytes([0xff])),
             "truncated_json": valid[:-3],
             "excess_nesting": valid.replace(
                 b'"label":"Pilot"', b'"label":' + b'[' * 40 +
@@ -229,6 +229,9 @@ class SaasIdentityAPITests(unittest.TestCase):
             "https://app.greengrapeme.example/",
             "https://app.greengrapeme.example?next=other",
             "https://app.greengrapeme.example#fragment",
+            "https://app.greengrapeme.example:99999",
+            "https://app.greengrapeme.example:",
+            "https://app.greengrapeme.example:invalid",
         ):
             with self.subTest(origin=malicious_origin):
                 with self.assertRaises(ValueError):
