@@ -119,6 +119,7 @@ class ProductionReleaseAuditTests(unittest.TestCase):
             "discovery_product_jobs": 1,
             "sales_mission_steps": 1,
             "sales_pilot_reply_effects": 1,
+            "sales_reply_provider_attempts": 0,
         })
         self.assertIn("UNRECONCILED_EXECUTION_OR_EFFECTS", report["blockers"])
         self.assertIn("PROVIDER_ATTEMPT_WITHOUT_EFFECT_CLAIM", report["blockers"])
