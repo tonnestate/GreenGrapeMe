@@ -41,6 +41,70 @@ class PilotSalesFlowTests(unittest.TestCase):
         params.update(kwargs)
         return self.flow.step("tenant-01","pilot-0001",self.case,**params)
 
+    def test_case_review_shows_reply_and_calendar_status_without_inventing_success(self):
+        from greengrapeme.reply_effects import ReplyEffects
+        from greengrapeme.calendar_bookings import CalendarBookings
+        self.open()
+        reply=ReplyEffects(self.store)
+        reply.prepare(
+            "tenant-01","pilot-0001",self.case,"reply-0001",
+            recipient_ref="urn:crm:verified-recipient-ref-0001",
+            content_ref="urn:content:independently-approved-0001",
+            content_sha256="a"*64)
+        before=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertTrue(before["can_prepare_reply_metadata"])
+        self.assertFalse(before["can_prepare_appointment_intent"])
+        self.assertEqual(before["reply_total"],1)
+        self.assertEqual(before["replies"][0]["state"],"PREPARED")
+        self.assertIsNone(before["replies"][0]["provider_delivery_state"])
+        self.assertEqual(before["appointment_total"],0)
+        self.assertEqual(before["contact_authority"],"NONE")
+
+        self.step("QUALIFIED_REPORTED","INBOUND_REVIEW","qualify-0001")
+        bookings=CalendarBookings(self.store,initialize=True)
+        start=(datetime.now(timezone.utc)+timedelta(days=3)).isoformat()
+        end=(datetime.now(timezone.utc)+timedelta(days=3,minutes=45)).isoformat()
+        bookings.prepare(
+            "tenant-01","pilot-0001",self.case,"booking-0001",
+            calendar_ref="urn:calendar:approved-account-0001",
+            slot_start_at=start,slot_end_at=end,reporter_ref=self.actor)
+        after=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertTrue(after["can_prepare_appointment_intent"])
+        self.assertEqual(after["appointment_total"],1)
+        self.assertEqual(after["appointments"][0]["state"],"REQUESTED")
+        self.assertIsNone(after["appointments"][0]["provider_event_id"])
+        self.assertTrue(after["calendar_intent_is_not_provider_booking"])
+        self.assertTrue(after["reply_requires_independent_permission"])
+        self.assertEqual(self.flow.review(
+            "tenant-01","pilot-0001",self.case)["reply_total"],1)
+        with self.assertRaises(LookupError):
+            self.flow.review("tenant-02","pilot-0001",self.case)
+
+        with self.store._db() as db:
+            row=db.execute("""
+                SELECT opportunity_id FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+            """,("tenant-01","pilot-0001",self.case)).fetchone()
+            db.execute("INSERT INTO suppressions VALUES (?,?,?,?)",
+                       ("tenant-01",row["opportunity_id"],"OPT_OUT",
+                        self.store._now()))
+        revoked=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertFalse(revoked["can_prepare_reply_metadata"])
+        self.assertFalse(revoked["can_prepare_appointment_intent"])
+        self.assertEqual(revoked["reply_total"],1)
+        self.assertEqual(revoked["appointment_total"],1)
+        with self.assertRaises(PermissionError):
+            reply.prepare(
+                "tenant-01","pilot-0001",self.case,"reply-0002",
+                recipient_ref="urn:crm:verified-recipient-ref-0001",
+                content_ref="urn:content:independently-approved-0001",
+                content_sha256="b"*64)
+        with self.assertRaises(PermissionError):
+            bookings.prepare(
+                "tenant-01","pilot-0001",self.case,"booking-0002",
+                calendar_ref="urn:calendar:approved-account-0001",
+                slot_start_at=start,slot_end_at=end,reporter_ref=self.actor)
+
     def test_case_review_follows_actual_steps_and_never_grants_authority(self):
         self.open()
         with self.store._db() as db:

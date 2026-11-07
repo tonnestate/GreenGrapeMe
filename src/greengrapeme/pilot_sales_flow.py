@@ -298,7 +298,70 @@ class PilotSalesFlow:
                 SELECT count(*) FROM sales_pilot_case_steps
                 WHERE tenant=? AND pilot_id=? AND case_id=?
             """,(tenant,pilot_id,case_id)).fetchone()[0]
+            # In explicitly provisioned production every table is mandatory.
+            # Development's legacy SalesWorkspace fixture intentionally has
+            # fewer optional domain tables; never mutate it during a GET.
+            tables={row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            engagement_tables={
+                "sales_pilot_reply_effects","sales_reply_provider_attempts",
+                "sales_pilot_appointments",
+            }
+            if (not self.store._allow_database_creation and
+                    not engagement_tables.issubset(tables)):
+                raise ValueError("operational engagement schema incomplete")
+            replies=[]
+            reply_total=0
+            if "sales_pilot_reply_effects" in tables:
+                if "sales_reply_provider_attempts" in tables:
+                    replies=db.execute("""
+                        SELECT r.reply_id,r.recipient_ref,r.content_ref,r.state,
+                               r.created_at,p.state AS provider_delivery_state
+                        FROM sales_pilot_reply_effects AS r
+                        LEFT JOIN sales_reply_provider_attempts AS p
+                          ON p.tenant=r.tenant AND p.pilot_id=r.pilot_id
+                         AND p.case_id=r.case_id AND p.reply_id=r.reply_id
+                         AND p.effect_id=r.effect_id
+                        WHERE r.tenant=? AND r.pilot_id=? AND r.case_id=?
+                        ORDER BY r.created_at DESC,r.reply_id DESC LIMIT 50
+                    """,(tenant,pilot_id,case_id)).fetchall()
+                else:
+                    replies=db.execute("""
+                        SELECT reply_id,recipient_ref,content_ref,state,
+                               created_at,NULL AS provider_delivery_state
+                        FROM sales_pilot_reply_effects
+                        WHERE tenant=? AND pilot_id=? AND case_id=?
+                        ORDER BY created_at DESC,reply_id DESC LIMIT 50
+                    """,(tenant,pilot_id,case_id)).fetchall()
+                reply_total=db.execute("""
+                    SELECT count(*) FROM sales_pilot_reply_effects
+                    WHERE tenant=? AND pilot_id=? AND case_id=?
+                """,(tenant,pilot_id,case_id)).fetchone()[0]
+            bookings=[]
+            booking_total=0
+            if "sales_pilot_appointments" in tables:
+                bookings=db.execute("""
+                    SELECT booking_id,calendar_ref,slot_start_at,slot_end_at,
+                           state,provider_event_id,created_at
+                    FROM sales_pilot_appointments
+                    WHERE tenant=? AND pilot_id=? AND case_id=?
+                    ORDER BY created_at DESC,booking_id DESC LIMIT 50
+                """,(tenant,pilot_id,case_id)).fetchall()
+                booking_total=db.execute("""
+                    SELECT count(*) FROM sales_pilot_appointments
+                    WHERE tenant=? AND pilot_id=? AND case_id=?
+                """,(tenant,pilot_id,case_id)).fetchone()[0]
 
+        # Import at call-time to avoid circular imports: ReplyEffects already
+        # depends on PilotSalesFlow. These are the exact domain eligibility
+        # rules, never the browser's interpretation of a state label.
+        from .reply_effects import _STATES_READY as reply_states
+        from .calendar_bookings import _ALLOWED_CASE_STATES as booking_states
+        can_reply=bool(source_current and not suppressed
+                       and case["reported_channel"] in _CHANNELS
+                       and case["state"] in reply_states)
+        can_book=bool(source_current and not suppressed
+                      and case["state"] in booking_states)
         available=sorted(_STEPS.get(case["state"],set()))
         if not source_current:
             available=[]
@@ -321,6 +384,16 @@ class PilotSalesFlow:
             "step_history":[dict(row) for row in steps],
             "step_history_total":step_total,
             "history_truncated":step_total>len(steps),
+            "replies":[dict(row) for row in replies],
+            "reply_total":reply_total,
+            "replies_truncated":reply_total>len(replies),
+            "appointments":[dict(row) for row in bookings],
+            "appointment_total":booking_total,
+            "appointments_truncated":booking_total>len(bookings),
+            "can_prepare_reply_metadata":can_reply,
+            "can_prepare_appointment_intent":can_book,
+            "reply_requires_independent_permission":True,
+            "calendar_intent_is_not_provider_booking":True,
             "can_record_manual_step":bool(available),
             "external_effects_executed":0,
         }

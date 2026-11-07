@@ -443,10 +443,18 @@ function clearCaseReview() {
   $("crm-review-evidence").textContent = "";
   $("crm-review-history").replaceChildren();
   $("crm-review-history-count").textContent = "";
+  for (const id of ["crm-reply-list","crm-booking-list"]) $(id).replaceChildren();
+  for (const id of ["crm-reply-count","crm-booking-count"]) $(id).textContent = "";
+  $("reply-metadata-form").hidden = true;
+  $("appointment-form").hidden = true;
+  $("reply-id").value = "";
+  for (const id of ["reply-recipient","reply-content","reply-content-sha"]) $(id).value = "";
   $("sales-step-form").hidden = true;
   $("step-to").replaceChildren();
   for (const id of ["step-pilot","step-case","step-from",
     "step-evidence","step-followup"]) $(id).value = "";
+  for (const id of ["appointment-pilot","appointment-case","appointment-id",
+    "appointment-calendar","appointment-start","appointment-end"]) $(id).value = "";
 }
 async function openCrmCase(pilot, caseId) {
   const generation=state.generation;
@@ -485,11 +493,55 @@ async function openCrmCase(pilot, caseId) {
     String(review.step_history_total || 0) +
     " dokumentierte Schritte" + (review.history_truncated
       ? " (nur 100 jüngste angezeigt)." : ".");
+  const replyRows=document.createDocumentFragment();
+  for (const item of review.replies || []) {
+    const row=document.createElement("tr");
+    td(row,item.reply_id);
+    td(row,item.recipient_ref);
+    td(row,item.state);
+    td(row,item.provider_delivery_state || "KEIN PROVIDER-NACHWEIS");
+    replyRows.appendChild(row);
+  }
+  $("crm-reply-list").replaceChildren(replyRows);
+  if (!(review.replies || []).length) {
+    emptyRow($("crm-reply-list"),4,"Keine Antwort vorbereitet oder bestätigt.");
+  }
+  $("crm-reply-count").textContent=String(review.reply_total ?? 0)+
+    " Antwortdatensätze" + (review.replies_truncated
+      ? " (50 jüngste angezeigt)." : ".") +
+    " Eine Providerannahme ist keine Zustellung.";
+  const bookingRows=document.createDocumentFragment();
+  for (const item of review.appointments || []) {
+    const row=document.createElement("tr");
+    for (const value of [item.booking_id,item.slot_start_at,
+      item.slot_end_at,item.state,item.calendar_ref]) td(row,value);
+    bookingRows.appendChild(row);
+  }
+  $("crm-booking-list").replaceChildren(bookingRows);
+  if (!(review.appointments || []).length) {
+    emptyRow($("crm-booking-list"),5,"Noch keine Buchungsabsicht.");
+  }
+  $("crm-booking-count").textContent=String(review.appointment_total ?? 0)+
+    " Terminabsichten/Buchungen" + (review.appointments_truncated
+      ? " (50 jüngste angezeigt)." : ".") +
+    " Eine Buchung beweist keine Teilnahme.";
   $("journey-case").value = caseId;
   $("appointment-pilot").value = pilot;
   $("appointment-case").value = caseId;
   const authorized=["operator","admin"].includes(state.role);
   $("sales-step-form").hidden = !authorized || !review.can_record_manual_step;
+  $("reply-metadata-form").hidden =
+    !authorized || !review.can_prepare_reply_metadata;
+  $("appointment-form").hidden =
+    !authorized || !review.can_prepare_appointment_intent;
+  if (authorized && review.can_prepare_reply_metadata) {
+    $("reply-id").value = "reply-"+crypto.randomUUID();
+  }
+  if (authorized && review.can_prepare_appointment_intent) {
+    $("appointment-id").value = "booking-"+crypto.randomUUID();
+  }
+  state.caseReview.canPrepareReply = authorized && review.can_prepare_reply_metadata;
+  state.caseReview.canPrepareAppointment = authorized && review.can_prepare_appointment_intent;
   $("step-pilot").value = pilot;
   $("step-case").value = caseId;
   $("step-from").value = review.state;
@@ -675,7 +727,7 @@ async function openTenant(event) {
     $("discovery-form").hidden = !operates;
     $("inbound-form").hidden = !operates;
     $("source-case-form").hidden = !operates;
-    $("appointment-form").hidden = !operates;
+    $("appointment-form").hidden = true;
     $("sales-step-form").hidden = true;
     $("public-inquiry-section").hidden = !operates || !state.publicInboxEnabled;
     $("public-inquiry-review-form").hidden = !operates || !state.publicInboxEnabled;
@@ -931,19 +983,88 @@ async function main() {
     return "Discovery-Auftrag " + accepted.request_id +
       " in Queue aufgenommen (Host-Freigabe für externe Ausführung bleibt erforderlich).";
   });
-  onForm("appointment-form", async () => {
-    const result = await api("/api/pilot-appointment-prepare", {
-      method: "POST", body: {
-        pilot_id: value("appointment-pilot"),
-        case_id: value("appointment-case"),
-        booking_id: value("appointment-id"),
-        calendar_ref: value("appointment-calendar"),
-        ...appointmentWindow(),
-      },
+  // Changing a previously submitted or uncertain intent creates a NEW
+  // immutable draft. An identical retry keeps the original identifier.
+  for (const id of ["reply-recipient","reply-content","reply-content-sha"]) {
+    $(id).addEventListener("input",() => {
+      if (state.caseReview?.canPrepareReply) {
+        $("reply-id").value="reply-"+crypto.randomUUID();
+      }
     });
-    if (value("crm-pilot-id") === value("appointment-pilot")) await crmWorklist();
-    return "Lokale Terminabsicht: " + result.state +
-      " (kein Kalendertermin erstellt, keine Einladung versandt).";
+  }
+  for (const id of ["appointment-calendar","appointment-start","appointment-end"]) {
+    $(id).addEventListener("input",() => {
+      if (state.caseReview?.canPrepareAppointment) {
+        $("appointment-id").value="booking-"+crypto.randomUUID();
+      }
+    });
+  }
+  onForm("reply-metadata-form", async () => {
+    const generation=state.generation;
+    const revision=state.caseReviewRevision;
+    const selected=state.caseReview;
+    if (!selected?.canPrepareReply || !["operator","admin"].includes(state.role)) {
+      throw new Error("Diese Kundenanfrage ist nicht für eine Antwortvorbereitung freigegeben.");
+    }
+    const sha=value("reply-content-sha");
+    if (!/^[0-9a-f]{64}$/.test(sha)) {
+      throw new Error("Der Inhaltsfingerabdruck muss 64 kleine Hex-Zeichen enthalten.");
+    }
+    const metadata={
+      pilot_id:selected.pilot,case_id:selected.caseId,
+      reply_id:value("reply-id"),
+      recipient_ref:value("reply-recipient"),
+      content_ref:value("reply-content"),content_sha256:sha,
+    };
+    const result=await api("/api/pilot-reply-prepare",{
+      method:"POST",body:metadata,
+    });
+    assertGeneration(generation);
+    if (revision !== state.caseReviewRevision) {
+      return "Antwortdatensatz "+result.reply_id+" gespeichert. Die inzwischen geöffnete Akte bleibt unverändert.";
+    }
+    let refreshFailed=false;
+    try { await openCrmCase(selected.pilot,selected.caseId); }
+    catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      refreshFailed=true;
+    }
+    return "Antwortdatensatz "+result.reply_id+" ist "+result.state+
+      ". Keine Nachricht versandt, keine Einwilligung erteilt."+
+      (refreshFailed ? " Der Status konnte nicht neu geladen werden." : "");
+  });
+  onForm("appointment-form", async () => {
+    const generation=state.generation;
+    const revision=state.caseReviewRevision;
+    const selected=state.caseReview;
+    if (!selected?.canPrepareAppointment ||
+        !["operator","admin"].includes(state.role) ||
+        selected.pilot!==value("appointment-pilot") ||
+        selected.caseId!==value("appointment-case")) {
+      throw new Error("Der ausgewählte CRM-Vorgang erlaubt keine Terminabsicht.");
+    }
+    const metadata={
+      pilot_id:selected.pilot,case_id:selected.caseId,
+      booking_id:value("appointment-id"),
+      calendar_ref:value("appointment-calendar"),
+      ...appointmentWindow(),
+    };
+    const result=await api("/api/pilot-appointment-prepare", {
+      method:"POST",body:metadata,
+    });
+    assertGeneration(generation);
+    if (revision !== state.caseReviewRevision) {
+      return "Terminabsicht "+result.booking_id+" gespeichert. Die inzwischen geöffnete Akte bleibt unverändert.";
+    }
+    let refreshFailed=false;
+    try { await openCrmCase(selected.pilot,selected.caseId); }
+    catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      refreshFailed=true;
+    }
+    return "Terminabsicht "+result.booking_id+": "+result.state+
+      " (keine Kalenderbuchung und keine Einladung)."+
+      (refreshFailed ? " Der Status konnte nicht neu geladen werden." : "");
   });
   onForm("public-inquiry-review-form", async () => {
     const generation=state.generation;

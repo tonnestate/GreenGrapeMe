@@ -252,12 +252,12 @@ class BrowserTests(unittest.TestCase):
             "appointment-end","crm-appointments-list",
             "crm-appointments-count"):
             self.assertIn('id="'+identifier+'"',html)
-        self.assertIn('$("appointment-form").hidden = !operates;',js)
+        self.assertIn('$("appointment-form").hidden = true;',js)
         self.assertIn('api("/api/pilot-appointments" + filter)',js)
         section=js[js.index('onForm("appointment-form"'):
                    js.index('onForm("source-case-form"')]
         self.assertIn('api("/api/pilot-appointment-prepare"',section)
-        self.assertIn("kein Kalendertermin erstellt",section)
+        self.assertIn("keine Kalenderbuchung",section)
         self.assertNotIn("BOOKED_CONFIRMED",section)
         self.assertNotIn('api("/api/pilot-appointment-reconcile"',js)
         self.assertNotIn("innerHTML",section)
@@ -280,6 +280,46 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("Kein Nachweis für Plattformumsatz",ui)
         self.assertIn("clearJourney();",js[js.index("function clearCrmWorklist()"):
                                             js.index("async function openTenant(")])
+
+    def test_per_case_reply_delivery_and_calendar_preparation_stay_local(self):
+        html=self.get("/")["body"].decode()
+        js=self.get("/saas.js")["body"].decode()
+        for element in (
+            "crm-reply-list","crm-reply-count",
+            "crm-booking-list","crm-booking-count",
+            "reply-metadata-form","reply-id","reply-recipient",
+            "reply-content","reply-content-sha"):
+            self.assertIn('id="'+element+'"',html)
+        self.assertIn('id="appointment-pilot" required readonly',html)
+        self.assertIn('id="appointment-case" required readonly',html)
+        self.assertIn('id="appointment-id" required readonly',html)
+        self.assertIn('id="reply-id" readonly required',html)
+        review=js[js.index("async function openCrmCase("):
+                  js.index("async function crmWorklist()")]
+        self.assertIn("review.replies",review)
+        self.assertIn("provider_delivery_state",review)
+        self.assertIn("KEIN PROVIDER-NACHWEIS",review)
+        self.assertIn("review.appointments",review)
+        self.assertIn("item.state",review)
+        self.assertIn("review.can_prepare_reply_metadata",review)
+        self.assertIn("review.can_prepare_appointment_intent",review)
+        self.assertIn("textContent",review)
+        self.assertNotIn("innerHTML",review)
+        reply=js[js.index('onForm("reply-metadata-form"'):
+                 js.index('onForm("appointment-form"')]
+        self.assertIn('api("/api/pilot-reply-prepare"',reply)
+        self.assertIn("assertGeneration(generation)",reply)
+        self.assertIn("Keine Nachricht versandt",reply)
+        self.assertNotIn('api("/api/pilot-reply-dispatch"',reply)
+        booking=js[js.index('onForm("appointment-form"'):
+                   js.index('onForm("public-inquiry-review-form"')]
+        self.assertIn('api("/api/pilot-appointment-prepare"',booking)
+        self.assertIn("assertGeneration(generation)",booking)
+        self.assertIn("keine Kalenderbuchung",booking)
+        self.assertNotIn("reconcile",booking)
+        self.assertNotIn("innerHTML",reply+booking)
+        self.assertIn("revision !== state.caseReviewRevision",reply)
+        self.assertIn("revision !== state.caseReviewRevision",booking)
 
     def test_guided_case_workbench_links_manual_handoff_to_current_step(self):
         html=self.get("/")["body"].decode()

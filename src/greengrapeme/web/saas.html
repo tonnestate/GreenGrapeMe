@@ -150,6 +150,32 @@
             </table>
           </div>
           <p id="crm-review-history-count"></p>
+          <h3>Kommunikation – unabhängige Zustellnachweise</h3>
+          <p>Ein vorbereiteter Antwortdatensatz ist keine versandte Nachricht. Providerannahme, Zustellung und Ablehnung bleiben getrennt; allein der autorisierte Host kann eine geprüfte Inbound-Antwort versenden.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Antwort</th><th>Empfängerreferenz</th><th>Lokaler Status</th><th>Provider-Zustellung</th></tr></thead>
+              <tbody id="crm-reply-list"></tbody>
+            </table>
+          </div>
+          <p id="crm-reply-count"></p>
+          <form id="reply-metadata-form" class="discovery-form" hidden>
+            <h3>Genehmigten Antwortdatensatz zur Host-Prüfung vorbereiten</h3>
+            <p>Nur nachweislich erlaubte Antworten auf eine eingegangene Anfrage. Empfänger und Inhalt müssen bereits im freigegebenen Host-Speicher existieren. Hier werden keine Texte verfasst oder E-Mails versendet.</p>
+            <div><label for="reply-id">Antwort-ID</label><input id="reply-id" readonly required maxlength="120"></div>
+            <div><label for="reply-recipient">Freigegebene Empfängerreferenz (URN/HTTPS)</label><input id="reply-recipient" required maxlength="1024" placeholder="urn:crm:recipient:…"></div>
+            <div><label for="reply-content">Freigegebene Inhaltsreferenz (URN/HTTPS)</label><input id="reply-content" required maxlength="1024" placeholder="urn:content:approved:…"></div>
+            <div><label for="reply-content-sha">SHA-256 des freigegebenen Inhalts (64 Hex-Zeichen)</label><input id="reply-content-sha" required maxlength="64" minlength="64" pattern="[0-9a-f]{64}"></div>
+            <button type="submit">Antwort nur vorbereiten</button>
+          </form>
+          <h3>Kalender – Buchung und Stornierung getrennt nachgewiesen</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Buchungsabsicht</th><th>Terminbeginn</th><th>Terminende</th><th>Status</th><th>Kalender</th></tr></thead>
+              <tbody id="crm-booking-list"></tbody>
+            </table>
+          </div>
+          <p id="crm-booking-count"></p>
         </section>
         <h3>Vertriebsverlauf eines Kunden</h3>
         <p>Zeigt den echten CRM- und Belegstand. Gemeldete Termine und Angebote sind kein unabhängiger Erfolgsnachweis.</p>
@@ -191,9 +217,10 @@
         <p id="crm-appointments-count" aria-live="polite"></p>
         <form id="appointment-form" class="discovery-form" hidden>
           <h3>Terminabsicht ohne externe Buchung erfassen</h3>
-          <div><label for="appointment-pilot">Pilot-ID</label><input id="appointment-pilot" required maxlength="120"></div>
-          <div><label for="appointment-case">CRM-Vorgangs-ID</label><input id="appointment-case" required maxlength="120"></div>
-          <div><label for="appointment-id">Buchungsabsichts-ID</label><input id="appointment-id" required maxlength="120"></div>
+          <p>Den zulässigen CRM-Vorgang zuvor über „Bearbeiten“ öffnen. Die Absicht wird nur lokal gespeichert; der Provider muss die echte Buchung unabhängig bestätigen.</p>
+          <div><label for="appointment-pilot">Pilot-ID</label><input id="appointment-pilot" required readonly maxlength="120"></div>
+          <div><label for="appointment-case">CRM-Vorgangs-ID</label><input id="appointment-case" required readonly maxlength="120"></div>
+          <div><label for="appointment-id">Buchungsabsichts-ID</label><input id="appointment-id" required readonly maxlength="120"></div>
           <div><label for="appointment-calendar">Kalender-Referenz (URN/HTTPS)</label><input id="appointment-calendar" required maxlength="1024"></div>
           <div><label for="appointment-start">Beginn (ISO mit Zeitzone)</label><input id="appointment-start" required placeholder="2026-11-12T10:00:00+01:00"></div>
           <div><label for="appointment-end">Ende (ISO mit Zeitzone)</label><input id="appointment-end" required placeholder="2026-11-12T10:45:00+01:00"></div>
