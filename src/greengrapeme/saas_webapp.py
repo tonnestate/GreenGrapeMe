@@ -24,6 +24,7 @@ from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
 from .sales_journey import SalesJourney
+from .public_inquiries import PublicPilotInbox
 from .reply_effects import ReplyEffects
 from .calendar_bookings import CalendarBookings
 from .tenant_access import TenantMemberships
@@ -196,6 +197,7 @@ def create_saas_app(
     catalog: DiscoveryCatalog, memberships: TenantMemberships,
     verifier: OIDCTokenVerifier, *, allowed_origin: str,
     browser: BrowserOIDCConfig | None = None,
+    public_inbox: PublicPilotInbox | None = None,
 ):
     origin = urlsplit(allowed_origin)
     try:
@@ -214,6 +216,8 @@ def create_saas_app(
         raise ValueError("SaaS API must have a canonical HTTPS origin")
     if browser is not None and not isinstance(browser, BrowserOIDCConfig):
         raise ValueError("invalid browser OIDC configuration")
+    if public_inbox is not None and not isinstance(public_inbox,PublicPilotInbox):
+        raise ValueError("invalid public inquiry inbox configuration")
     store = catalog.store
     jobs = DiscoveryJobQueue(store)
 
@@ -258,7 +262,10 @@ def create_saas_app(
             return _reply(start_response, "401 Unauthorized",
                           {"error": "unauthorized"})
         tenant = environ.get("HTTP_X_GREEN_GRAPE_TENANT", "")
-        required = "read" if method == "GET" else (
+        required = (
+            "operate" if method == "GET" and
+            path == "/api/public-pilot-inquiries" else
+            "read" if method == "GET" else
             "finance" if path in {"/api/pilots", "/api/pilot-record"} else
             "operate")
         if not memberships.permitted(principal, tenant, required):
@@ -273,6 +280,10 @@ def create_saas_app(
                         "subject": principal.subject,
                         "tenant": tenant,
                         "role": memberships.role(principal, tenant),
+                        "public_inquiry_enabled":bool(
+                            public_inbox is not None and
+                            public_inbox.tenant==tenant and
+                            memberships.permitted(principal,tenant,"operate")),
                     }
                 elif path == "/api/overview":
                     data = catalog.overview(tenant)
@@ -300,6 +311,9 @@ def create_saas_app(
                 elif path == "/api/pilot-journey":
                     data = SalesJourney(store).get(
                         tenant, arg("pilot"), arg("case"))
+                elif path == "/api/public-pilot-inquiries" and public_inbox is not None:
+                    data = public_inbox.list(
+                        tenant, limit=int(arg("limit","50")))
                 elif path == "/api/pilot-appointments":
                     data = CalendarBookings(store).list(
                         tenant, arg("pilot"),limit=int(arg("limit","100")))
@@ -344,6 +358,22 @@ def create_saas_app(
                     slot_start_at=values["slot_start_at"],
                     slot_end_at=values["slot_end_at"],
                     reporter_ref=_reporter_ref(principal))
+            elif path == "/api/public-pilot-inquiry-review" and public_inbox is not None:
+                values = _request_json(environ, frozenset({
+                    "inquiry_id","decision","pilot_id",
+                }))
+                decision=values["decision"]
+                if decision=="ADOPT":
+                    result=public_inbox.adopt(
+                        tenant,values["inquiry_id"],pilot_id=values["pilot_id"],
+                        reviewer_ref=_reporter_ref(principal),
+                        crm_flow=PilotSalesFlow(store))
+                elif decision=="DECLINE" and values["pilot_id"]=="":
+                    result=public_inbox.decline(
+                        tenant,values["inquiry_id"],
+                        reviewer_ref=_reporter_ref(principal))
+                else:
+                    raise ValueError("invalid inquiry review decision")
             elif path == "/api/pilot-inbound":
                 values = _request_json(environ, frozenset({
                     "pilot_id", "case_id", "company_name", "channel",
@@ -444,7 +474,15 @@ def create_service_from_env():
         token_endpoint=environ[browser_fields[1]],
         client_id=environ[browser_fields[2]],
     ) if all(configured) else None
+    public_fields=("GG_SAAS_PUBLIC_INBOX_DB","GG_PUBLIC_INQUIRY_TENANT")
+    public_enabled=[bool(environ.get(key)) for key in public_fields]
+    if any(public_enabled) and not all(public_enabled):
+        raise ValueError("public pilot inbox requires database and tenant")
+    public_inbox=(PublicPilotInbox(
+        environ[public_fields[0]],tenant=environ[public_fields[1]])
+        if all(public_enabled) else None)
     return create_saas_app(
         DiscoveryCatalog(store), memberships, OIDCTokenVerifier(config),
         allowed_origin=environ["GG_SAAS_ORIGIN"], browser=browser,
+        public_inbox=public_inbox,
     )

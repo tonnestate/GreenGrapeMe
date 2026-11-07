@@ -15,6 +15,14 @@ It serves semantic HTML, individual canonical metadata, crawlable
 `/sitemap.xml`, `/robots.txt` and a strictly grounded Schema.org JSON-LD
 graph. The original SaaS login is explicitly `noindex`.
 
+The public `/pilotprojekt` landing page now supports an actual server-side
+pilot inquiry workflow: signed short-lived HTML forms → an isolated, durable
+PII-limited inbox → authenticated operator review → deterministic, recoverable
+`WEB_FORM` intake through the existing CRM. It does not automatically send
+customer messages or imply verified consent. The inbox needs separate
+one-time bootstrap and daily retention scrubbing; see the deployment
+requirements in `docs/MARKETING_SITE_RELEASE.md`.
+
 **Nothing has been deployed or indexed by this code change alone.** The
 public service intentionally refuses to start without a real legal operator,
 contact, working imprint and privacy URLs, public site HTTPS origin and

@@ -83,3 +83,28 @@
 @media (prefers-reduced-motion: reduce) {
   .marketing-body, .marketing-body * { scroll-behavior: auto; }
 }
+
+/* The pilot form inherits existing GreenGrapeMe square-edged controls. */
+#pilot-inquiry-form {
+  display: grid;
+  gap: 15px;
+  max-width: 660px;
+}
+#pilot-inquiry-form > div:not(.marketing-honeypot) > input,
+#pilot-inquiry-form textarea {
+  display: block;
+  width: 100%;
+}
+#pilot-inquiry-form label { font-size: 13px; }
+#pilot-inquiry-form button {
+  justify-self: start;
+  border-color: var(--green-strong);
+  color: var(--green);
+}
+.marketing-honeypot {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}

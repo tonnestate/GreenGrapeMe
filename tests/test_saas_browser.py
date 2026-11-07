@@ -281,6 +281,32 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("clearJourney();",js[js.index("function clearCrmWorklist()"):
                                             js.index("async function openTenant(")])
 
+    def test_public_inquiry_review_ui_is_private_operator_only_and_no_auto_send(self):
+        html=self.get("/")["body"].decode()
+        js=self.get("/saas.js")["body"].decode()
+        for control in (
+            "public-inquiry-section","public-inquiry-title",
+            "public-inquiry-refresh","public-inquiry-count",
+            "public-inquiry-list","public-inquiry-review-form",
+            "inquiry-review-id","inquiry-review-decision",
+            "inquiry-review-pilot"):
+            self.assertIn('id="'+control+'"',html)
+        self.assertIn('me.public_inquiry_enabled === true',js)
+        self.assertIn('$("public-inquiry-section").hidden = !operates',js)
+        self.assertIn("state.publicInboxEnabled = false;",js)
+        self.assertIn('api("/api/public-pilot-inquiries")',js)
+        review=js[js.index('onForm("public-inquiry-review-form"'):
+                  js.index('onForm("source-case-form"')]
+        self.assertIn('api("/api/public-pilot-inquiry-review"',review)
+        self.assertIn('decision==="ADOPT"',review)
+        self.assertIn('kontaktfreigabe',review.lower())
+        self.assertNotIn("innerHTML",review)
+        self.assertNotIn('api("/api/pilot-reply',review)
+        self.assertNotIn('api("/api/pilot-step',review)
+        self.assertIn('clearPublicInquiries();',js[
+            js.index("function clearTenantWorkspace()"):
+            js.index("async function openTenant(")])
+
     def test_bad_client_id_and_insecure_browser_urls_rejected(self):
         for authorization, token, client in (
             ("http://idp.example.org/login", TOKEN_ENDPOINT, "browser-client"),

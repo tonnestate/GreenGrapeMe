@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
+                publicInquiryRevision: 0, publicInboxEnabled: false,
                 journeyQueryRevision: 0, companyDetailRevision: 0,
                 discoveryDraft: null };
 const LOGIN_TRANSACTION = "gg-oidc-pkce-transaction";
@@ -366,6 +367,39 @@ async function customerJourney() {
     " | Kein Nachweis für Plattformumsatz oder verursachten Mehrumsatz.";
 }
 
+function clearPublicInquiries() {
+  state.publicInquiryRevision += 1;
+  $("public-inquiry-list").replaceChildren();
+  $("public-inquiry-count").textContent = "";
+  for (const id of ["inquiry-review-id", "inquiry-review-pilot"]) $(id).value = "";
+}
+
+async function publicInquiries() {
+  const generation=state.generation;
+  const revision=++state.publicInquiryRevision;
+  $("public-inquiry-list").replaceChildren();
+  $("public-inquiry-count").textContent = "";
+  if (!state.publicInboxEnabled) return;
+  const data=await api("/api/public-pilot-inquiries");
+  assertGeneration(generation);
+  if (revision !== state.publicInquiryRevision) return;
+  const fragment=document.createDocumentFragment();
+  for (const item of data.items || []) {
+    const row=document.createElement("tr");
+    for (const field of [item.inquiry_id, item.company_name,
+      item.contact_email, item.message, item.submitted_at, item.state,
+      item.case_id ? (item.pilot_id + " / " + item.case_id) : "–"]) td(row, field);
+    fragment.appendChild(row);
+  }
+  $("public-inquiry-list").replaceChildren(fragment);
+  if (!data.items?.length) {
+    emptyRow($("public-inquiry-list"),7,"Keine öffentlichen Pilotanfragen.");
+  }
+  $("public-inquiry-count").textContent =
+    String(data.pending ?? 0) + " neue oder in Übernahme befindliche Anfragen; " +
+    String(data.total ?? 0) + " insgesamt sichtbar (maximal 50).";
+}
+
 async function crmWorklist() {
   const generation = state.generation;
   const revision = ++state.crmQueryRevision;
@@ -464,7 +498,12 @@ function clearTenantWorkspace() {
   $("company-details").replaceChildren();
   $("company-details").hidden = true;
   clearCrmWorklist();
+  clearPublicInquiries();
+  state.publicInboxEnabled = false;
+  $("public-inquiry-section").hidden = true;
+  $("public-inquiry-review-form").hidden = true;
   for (const form of document.querySelectorAll("#workspace form")) form.reset();
+  $("inquiry-review-pilot").required = true;
   // A reset() does not fire "change". Restore the dependent Discovery fields.
   const creating = value("disc-mode") === "new";
   $("disc-existing-fields").hidden = creating;
@@ -497,6 +536,7 @@ async function openTenant(event) {
     const me = await api("/api/me");
     assertGeneration(attempt);
     state.role = me.role || "";
+    state.publicInboxEnabled = me.public_inquiry_enabled === true;
     // Do not expose the workspace until initial tenant-scoped queries pass.
     // An authorization failure must leave the previous tenant's view closed.
     $("workspace").hidden = true;
@@ -511,6 +551,8 @@ async function openTenant(event) {
     $("source-case-form").hidden = !operates;
     $("appointment-form").hidden = !operates;
     $("sales-step-form").hidden = !operates;
+    $("public-inquiry-section").hidden = !operates || !state.publicInboxEnabled;
+    $("public-inquiry-review-form").hidden = !operates || !state.publicInboxEnabled;
     $("pilot-form").hidden = !finance;
     $("payment-form").hidden = !finance;
     renderView("companies-view");
@@ -541,8 +583,17 @@ function onForm(id, operation) {
     try {
       const message = await operation();
       assertGeneration(generation);
-      say(message || "Vorgang gespeichert.");
-      await overview();
+      const confirmed=message || "Vorgang gespeichert.";
+      say(confirmed);
+      // A successful mutation must not become a false failure just because
+      // the subsequent, independent dashboard refresh cannot be fetched.
+      try { await overview(); }
+      catch (refreshError) {
+        if (refreshError instanceof StaleContextError) throw refreshError;
+        if (generation === state.generation) {
+          say(confirmed + " Die Übersicht konnte nicht aktualisiert werden.");
+        }
+      }
     } catch (error) {
       if (generation === state.generation && !(error instanceof StaleContextError)) {
         say(error.message);
@@ -635,6 +686,17 @@ function logout() {
 async function main() {
   $("login-button").addEventListener("click", beginLogin);
   $("tenant-form").addEventListener("submit", openTenant);
+  $("public-inquiry-refresh").addEventListener("click", async () => {
+    try { await publicInquiries(); say(""); }
+    catch (error) {
+      if (!(error instanceof StaleContextError)) say(error.message);
+    }
+  });
+  $("inquiry-review-decision").addEventListener("change", () => {
+    const adopting=value("inquiry-review-decision")==="ADOPT";
+    $("inquiry-review-pilot").required=adopting;
+    if (!adopting) $("inquiry-review-pilot").value="";
+  });
   $("crm-case-filter").addEventListener("submit", async (event) => {
     event.preventDefault();
     try { await crmWorklist(); say(""); }
@@ -655,6 +717,9 @@ async function main() {
         if (button.dataset.view === "companies-view") await companies();
         if (button.dataset.view === "discovery-view") await discovery();
         if (button.dataset.view === "pilots-view") await pilots();
+        if (button.dataset.view === "sales-view" && state.publicInboxEnabled) {
+          await publicInquiries();
+        }
       } catch (error) { say(error.message); }
     }));
   $("company-search").addEventListener("submit", async (event) => {
@@ -749,6 +814,32 @@ async function main() {
     if (value("crm-pilot-id") === value("appointment-pilot")) await crmWorklist();
     return "Lokale Terminabsicht: " + result.state +
       " (kein Kalendertermin erstellt, keine Einladung versandt).";
+  });
+  onForm("public-inquiry-review-form", async () => {
+    if (!state.publicInboxEnabled) throw new Error("Pilotanfragen sind nicht freigeschaltet.");
+    const decision=value("inquiry-review-decision");
+    const pilotId=decision==="ADOPT" ? value("inquiry-review-pilot") : "";
+    if (decision==="ADOPT" && !pilotId) throw new Error("Pilot-ID erforderlich.");
+    const result=await api("/api/public-pilot-inquiry-review", {
+      method:"POST", body:{
+        inquiry_id:value("inquiry-review-id"), decision, pilot_id:pilotId,
+      },
+    });
+    let refreshFailed=false;
+    try { await publicInquiries(); }
+    catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      refreshFailed=true;
+    }
+    const suffix=refreshFailed
+      ? " Die Liste konnte nicht aktualisiert werden; Speicherung ist bestätigt."
+      : "";
+    if (result.state==="ADOPTED") {
+      $("crm-pilot-id").value=result.pilot_id;
+      return "Anfrage als gemeldeter CRM-Vorgang übernommen: " +
+        result.case_id + ". Keine automatische Kontaktfreigabe." + suffix;
+    }
+    return "Pilotanfrage abgelehnt. Kein CRM-Vorgang angelegt." + suffix;
   });
   onForm("source-case-form", async () => {
     const result = await api("/api/pilot-discovery", {

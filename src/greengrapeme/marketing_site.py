@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from html import escape
 from importlib import resources
 from os import environ
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
+
+from .public_inquiries import PublicPilotInbox
 import json
 import re
 
@@ -344,7 +346,42 @@ def _json_ld(document: dict) -> str:
                       allow_nan=False).replace("<","\\u003c").replace(">", "\\u003e").replace("&","\\u0026")
 
 
-def _html(config: PublicSiteConfig, page: Page) -> bytes:
+def _pilot_form(config: PublicSiteConfig, inbox: PublicPilotInbox) -> str:
+    e=lambda value:escape(value,quote=True)
+    return (
+        '<section class="marketing-section"><h2>Unverbindliche Pilotanfrage</h2>'
+        '<p>Beschreiben Sie Ihren konkreten B2B-Vertriebsauftrag. '
+        'Die Anfrage wird zur manuellen Prüfung gespeichert. '
+        'Es erfolgt keine automatische Kontaktaufnahme oder CRM-Qualifizierung.</p>'
+        '<form id="pilot-inquiry-form" action="/pilot-anfrage" method="post" '
+        'accept-charset="UTF-8">'
+        '<input type="hidden" name="form_token" value="'+e(inbox.issue_token())+'">'
+        '<div><label for="inquiry-company">Unternehmen</label>'
+        '<input id="inquiry-company" name="unternehmen" required maxlength="160" '
+        'autocomplete="organization"></div>'
+        '<div><label for="inquiry-email">Geschäftliche Kontakt-E-Mail</label>'
+        '<input id="inquiry-email" type="email" name="email" required '
+        'maxlength="254" autocomplete="email"></div>'
+        '<div><label for="inquiry-message">Vertriebsziel und Zielgruppe</label>'
+        '<textarea id="inquiry-message" name="anliegen" rows="5" '
+        'maxlength="800" required></textarea></div>'
+        '<div class="marketing-honeypot" aria-hidden="true">'
+        '<label for="inquiry-website">Bitte nicht ausfüllen</label>'
+        '<input id="inquiry-website" name="website" tabindex="-1" '
+        'autocomplete="off"></div>'
+        '<label><input type="checkbox" name="datenschutz" value="on" required>'
+        ' Ich habe die <a href="'+e(config.privacy_url)+'">Datenschutzhinweise</a> '
+        'zur Bearbeitung meiner Anfrage gelesen. '
+        'Dies ist keine Einwilligung in Werbung.</label>'
+        '<p>Keine Zugangsdaten oder personenbezogenen Kundendatensätze eintragen. '
+        'Nicht bearbeitete Anfragen werden nach der festgelegten Frist bereinigt.</p>'
+        '<button type="submit">Pilotanfrage zur Prüfung einreichen</button>'
+        '</form></section>'
+    )
+
+
+def _html(config: PublicSiteConfig, page: Page,
+          inbox: PublicPilotInbox | None = None) -> bytes:
     canonical = _canonical(config, page.path)
     e = lambda value: escape(value, quote=True)
     nav = (
@@ -377,6 +414,8 @@ def _html(config: PublicSiteConfig, page: Page) -> bytes:
             '<p>E-Mail: <a href="mailto:'+e(config.contact_email)+'">'+
             e(config.contact_email)+'</a></p></section>'
         )
+    if page.path == "/pilotprojekt" and inbox is not None:
+        sections += _pilot_form(config,inbox)
     related = "".join(
         f'<li><a href="{e(path)}">{e(PAGES[path].heading)}</a></li>'
         for path in page.related
@@ -414,7 +453,7 @@ def _html(config: PublicSiteConfig, page: Page) -> bytes:
         '<section class="marketing-next"><h2>Nächster Schritt</h2>'+
         '<p>Ein begrenzter Pilot klärt Anforderungen, externe Freigaben und die überprüfbaren Erfolgskriterien.</p>'+
         '<a href="/pilotprojekt">Pilotablauf ansehen</a> · '+
-        '<a href="/kontakt">Pilotprojekt anfragen</a></section>'+
+        '<a href="/pilotprojekt">Pilotprojekt anfragen</a></section>'+
         (('<aside class="marketing-related"><h2>Weiterführende Informationen</h2><ul>'+
           related+'</ul></aside>') if related else "")+
         '</article></main>'+
@@ -432,48 +471,119 @@ def _html(config: PublicSiteConfig, page: Page) -> bytes:
 
 
 def _response(start_response, status: str, payload: bytes, mimetype: str,
-              *, indexable: bool = False, head: bool = False):
+              *, indexable: bool = False, head: bool = False,
+              private: bool = False, forms: bool = False,
+              location: str | None = None):
     headers = [
         ("Content-Type",mimetype),
         ("Content-Length",str(len(payload))),
-        ("Cache-Control","public, max-age=300" if indexable else "public, max-age=3600"),
+        ("Cache-Control","no-store, max-age=0" if private else
+         "public, max-age=300" if indexable else "public, max-age=3600"),
         ("Strict-Transport-Security","max-age=31536000"),
         ("X-Content-Type-Options","nosniff"),
         ("X-Frame-Options","DENY"),
         ("Referrer-Policy","strict-origin-when-cross-origin"),
         ("Content-Security-Policy",
          "default-src 'none'; style-src 'self'; script-src 'none'; "
-         "img-src 'self'; base-uri 'none'; form-action 'none'; "
+         "img-src 'self'; base-uri 'none'; form-action "+
+         ("'self'" if forms else "'none'")+"; "
          "frame-ancestors 'none'; connect-src 'none'"),
         ("Content-Language","de-DE"),
     ]
     if not indexable:
         headers.append(("X-Robots-Tag","noindex, nofollow"))
+    if location is not None:
+        headers.append(("Location",location))
     start_response(status,headers)
     return [] if head else [payload]
 
 
-def create_marketing_app(config: PublicSiteConfig):
+def create_marketing_app(config: PublicSiteConfig, *,
+                         inbox: PublicPilotInbox | None = None):
     """Standalone public WSGI app: deploy at GG_PUBLIC_ORIGIN, NOT SaaS origin."""
     if not isinstance(config,PublicSiteConfig):
         raise ValueError("verified public site configuration required")
+    if inbox is not None and not isinstance(inbox,PublicPilotInbox):
+        raise ValueError("verified separate public inquiry inbox required")
 
     def app(environ,start_response):
         if environ.get("wsgi.url_scheme") != "https":
             return _response(start_response,"403 Forbidden",b"TLS required",
                              "text/plain; charset=utf-8")
         method = environ.get("REQUEST_METHOD")
+        path = environ.get("PATH_INFO","")
+        if path == "/pilot-anfrage" and method == "POST" and inbox is not None:
+            # Same-origin HTML form only. No cookies, CORS or access to SaaS.
+            if (environ.get("HTTP_ORIGIN") != config.origin or
+                    environ.get("HTTP_SEC_FETCH_SITE","same-origin")
+                        not in ("same-origin","none")):
+                return _response(start_response,"403 Forbidden",b"Origin denied",
+                                 "text/plain; charset=utf-8",private=True)
+            mime=environ.get("CONTENT_TYPE","").split(";")[0].strip().lower()
+            size=environ.get("CONTENT_LENGTH","")
+            if (mime!="application/x-www-form-urlencoded" or
+                    not isinstance(size,str) or not size.isdecimal()
+                    or len(size)>5 or not 1<=int(size)<=3000):
+                return _response(start_response,"400 Bad Request",b"Invalid form",
+                                 "text/plain; charset=utf-8",private=True)
+            try:
+                raw=environ["wsgi.input"].read(int(size))
+                if not isinstance(raw,bytes) or len(raw)!=int(size):
+                    raise ValueError("incomplete form")
+                values=parse_qs(raw.decode("utf-8"),keep_blank_values=True,
+                    strict_parsing=True,encoding="utf-8",errors="strict",
+                    max_num_fields=8)
+                allowed={"form_token","unternehmen","email","anliegen",
+                         "datenschutz","website"}
+                if set(values)!=allowed or any(len(v)!=1 for v in values.values()):
+                    raise ValueError("ambiguous form")
+                inbox.submit(
+                    token=values["form_token"][0],
+                    company_name=values["unternehmen"][0],
+                    contact_email=values["email"][0],
+                    message=values["anliegen"][0],
+                    privacy_ack=values["datenschutz"][0],
+                    honeypot=values["website"][0],
+                    remote_addr=environ.get("REMOTE_ADDR",""))
+            except PermissionError:
+                return _response(start_response,"429 Too Many Requests",
+                                 b"Please retry later",
+                                 "text/plain; charset=utf-8",private=True)
+            except (ValueError,UnicodeError,OverflowError):
+                return _response(start_response,"400 Bad Request",b"Invalid form",
+                                 "text/plain; charset=utf-8",private=True)
+            return _response(start_response,"303 See Other",b"",
+                             "text/plain; charset=utf-8",private=True,
+                             location="/anfrage-erhalten")
         if method not in ("GET","HEAD"):
             return _response(start_response,"405 Method Not Allowed",
                              b"Method not allowed","text/plain; charset=utf-8")
-        path = environ.get("PATH_INFO","")
+
         if not isinstance(path,str) or len(path)>_PAGE_LIMIT:
             return _response(start_response,"404 Not Found",b"Not found",
                              "text/plain; charset=utf-8",head=method=="HEAD")
+        if path == "/anfrage-erhalten" and inbox is not None:
+            payload=(
+                '<!doctype html><html lang="de"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<meta name="robots" content="noindex,nofollow">'
+                '<title>Pilotanfrage eingegangen | GreenGrapeMe</title>'
+                '<link rel="stylesheet" href="/app.css">'
+                '<link rel="stylesheet" href="/marketing.css"></head>'
+                '<body class="marketing-body"><main><h1>Anfrage zur Prüfung eingegangen</h1>'
+                '<p>Die Übermittlung wurde angenommen. Es wurde noch kein '
+                'Vertriebsauftrag gestartet und keine Kontaktfreigabe erteilt.</p>'
+                '<a href="/">Zur Startseite</a></main></body></html>'
+            ).encode("utf-8")
+            return _response(start_response,"200 OK",payload,
+                             "text/html; charset=utf-8",
+                             private=True,head=method=="HEAD")
         if path in PAGES:
+            form_enabled=path=="/pilotprojekt" and inbox is not None
             return _response(
-                start_response,"200 OK",_html(config,PAGES[path]),
-                "text/html; charset=utf-8",indexable=True,head=method=="HEAD")
+                start_response,"200 OK",_html(config,PAGES[path],inbox),
+                "text/html; charset=utf-8",indexable=True,
+                private=form_enabled,forms=form_enabled,head=method=="HEAD")
         if path in ("/marketing.css","/app.css"):
             filename = "marketing.css" if path=="/marketing.css" else "app.css"
             content = (resources.files("greengrapeme") / "web" / filename).read_bytes()
@@ -508,5 +618,11 @@ def create_marketing_service_from_env():
         "privacy_url":"GG_PUBLIC_PRIVACY_URL",
         "app_url":"GG_PUBLIC_APP_URL",
     }
+    # Public web process only holds access to its own narrow PII inbox.
+    # The SaaS business database and OIDC credentials never enter this host.
+    inbox=PublicPilotInbox(
+        environ["GG_PUBLIC_INBOX_DB"],
+        tenant=environ["GG_PUBLIC_INQUIRY_TENANT"],
+        signing_key=environ["GG_PUBLIC_FORM_KEY"])
     return create_marketing_app(PublicSiteConfig(
-        **{key:environ[name] for key,name in keys.items()}))
+        **{key:environ[name] for key,name in keys.items()}),inbox=inbox)
