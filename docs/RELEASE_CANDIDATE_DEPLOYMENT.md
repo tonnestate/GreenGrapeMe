@@ -149,6 +149,40 @@ contain precisely `GG_PUBLIC_INBOX_DB` and
 Independent monitoring must alert on failed units, stalled retention
 jobs, SQLite disk exhaustion and uncertain provider effects.
 
+## 4a. Security CI and mandatory repository controls
+
+The new security workflow evaluates the **resolved production dependency
+graph** including Gunicorn, not only direct dependencies in pyproject.toml.
+It installs the actual application with the serve extra in separate fresh
+Python 3.11 and 3.12 virtual environments, runs pip check and freezes the
+installed dependency versions. pip-audit 2.10.1 checks the frozen graph
+against OSV. Known vulnerabilities and unavailable audits fail the
+workflow, with no exceptions. Bandit 1.9.4 scans the complete
+src/greengrapeme Python package and fails on HIGH-severity,
+HIGH-confidence findings. Machine-readable audit outputs are retained
+for 30 days, including failed scans.
+
+Both scan types run on pull requests, main pushes, nightly schedules and
+manual dispatch. Weekly Dependabot PRs cover Python and GitHub Actions.
+The existing functional and real PomeloMe integration gates remain
+mandatory. The workflows have read-only repository permissions, pinned
+checkout/setup actions and no persisted checkout credentials.
+
+**Owner-only GitHub setup is still required:** Configure branch protection
+on main requiring the functional suite, pinned PomeloMe integration and
+all dependency/SAST jobs to succeed. Block direct pushes and unreviewed
+administrator bypasses; require review for dependency and action updates.
+A checked-in workflow does **not** itself prevent unverified merges.
+
+These tools do not certify safety: Bandit only gates high-confidence high
+severity Python issues; medium/low and JavaScript/infrastructure findings
+need separate review. OSV covers only known public vulnerabilities in
+the currently resolved runtime packages. Production still requires
+real-host scanner results, secret/history review, multi-tenant
+penetration tests, reverse-proxy load/abuse testing, backup restore,
+credential rotation and signed legal/privacy acceptance. No local or
+CI scan can replace G1–G5 live release gates.
+
 ## 5. Actual live acceptance – mandatory
 
 A human operator, engineering and legal owner must verify all of the
