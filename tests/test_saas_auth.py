@@ -383,6 +383,62 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(code.startswith("403"))
         self.assertEqual(self.store.overview("tenant-a")["opportunities"],2)
 
+    def test_operator_case_review_route_is_current_and_never_a_contact_grant(self):
+        from greengrapeme.pilot_metrics import PilotLedger
+        from greengrapeme.pilot_sales_flow import PilotSalesFlow
+        PilotLedger(self.store).create(
+            "tenant-a","pilot-0042","offer","Example inbound qualification",
+            monthly_fee_cents=25000)
+        flow=PilotSalesFlow(self.store)
+        flow.open_inbound(
+            "tenant-a","pilot-0042","case-0042",
+            company_name="Example Customer GmbH",channel="WEB_FORM",
+            evidence_ref="urn:gg:public-inquiry:verified-reference-0042",
+            reporter_ref="operator-0042")
+        params={"pilot":"pilot-0042","case":"case-0042"}
+        code,denied,_=self.request(
+            path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("403"),denied)
+        self.members.grant("tenant-a",self.alice,"operator")
+        code,data,headers=self.request(
+            path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("200"),(code,data))
+        self.assertEqual(data["state"],"INBOUND_REVIEW")
+        self.assertEqual(data["available_transitions"],
+                         ["CLOSED_LOST","QUALIFIED_REPORTED"])
+        self.assertEqual(data["contact_authority"],"NONE")
+        self.assertEqual(data["step_history"],[])
+        self.assertEqual(headers["Cache-Control"],"no-store, max-age=0")
+        code,_,_=self.request(
+            path="/api/pilot-case-review",tenant="tenant-b",params=params)
+        self.assertTrue(code.startswith("403"))
+        code,_,_=self.request(
+            path="/api/pilot-case-review",
+            params={"pilot":"pilot-0042","case":"missing-case"})
+        self.assertTrue(code.startswith("404"))
+        code,result,_=self.request(
+            path="/api/pilot-step",method="POST",origin=ORIGIN,
+            payload={
+                "pilot_id":"pilot-0042","case_id":"case-0042",
+                "step_id":"qualify-0042","expected_state":"INBOUND_REVIEW",
+                "to_state":"QUALIFIED_REPORTED",
+                "evidence_ref":"urn:crm:review:qualified-0042",
+                "followup_at":"",
+            })
+        self.assertTrue(code.startswith("202"),(code,result))
+        code,updated,_=self.request(
+            path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("200"),(code,updated))
+        self.assertEqual(updated["step_history_total"],1)
+        self.assertEqual(updated["step_history"][0]["to_state"],
+                         "QUALIFIED_REPORTED")
+        self.assertIn("FOLLOWUP_SCHEDULED",
+                      updated["available_transitions"])
+        self.members.grant("tenant-a",self.alice,"viewer")
+        code,_,_=self.request(
+            path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("403"))
+
     def test_customer_journey_get_uses_current_tenant_membership(self):
         from greengrapeme.pilot_metrics import PilotLedger
         from greengrapeme.pilot_sales_flow import PilotSalesFlow

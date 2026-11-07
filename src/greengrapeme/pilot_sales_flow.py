@@ -251,6 +251,80 @@ class PilotSalesFlow:
                 "identity_verified":False,"contact_authority":"NONE",
                 "reported_only":True,"external_actions_executed":0}
 
+    def review(self, tenant: str, pilot_id: str, case_id: str) -> dict:
+        """Operator decision view of one immutable CRM case and its reported steps.
+
+        Read-only: source and suppression rechecked from the current DB
+        snapshot; never a contact, sales, identity or provider authority.
+        """
+        tenant=self.store._required(tenant,"tenant")
+        pilot_id=_id(pilot_id,"pilot_id")
+        case_id=_id(case_id,"case_id")
+        with self.store._db() as db:
+            db.execute("BEGIN")
+            pilot=db.execute("""
+                SELECT offer_id FROM sales_pilots
+                WHERE tenant=? AND pilot_id=?
+            """,(tenant,pilot_id)).fetchone()
+            if not pilot:
+                raise LookupError("unknown tenant pilot")
+            case=db.execute("""
+                SELECT * FROM sales_pilot_cases
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+            """,(tenant,pilot_id,case_id)).fetchone()
+            if not case:
+                raise LookupError("unknown tenant CRM case")
+            linked=db.execute("""
+                SELECT offer_id,source_json FROM opportunities
+                WHERE tenant=? AND opportunity_id=?
+            """,(tenant,case["opportunity_id"])).fetchone()
+            source_current=bool(
+                linked and linked["offer_id"]==pilot["offer_id"]
+                and isinstance(linked["source_json"],str)
+                and hashlib.sha256(linked["source_json"].encode()).hexdigest()
+                    == case["source_sha256"])
+            suppressed=db.execute("""
+                SELECT 1 FROM suppressions
+                WHERE tenant=? AND opportunity_id=?
+            """,(tenant,case["opportunity_id"])).fetchone() is not None
+            steps=db.execute("""
+                SELECT step_id,from_state,to_state,evidence_ref,
+                       reporter_ref,followup_at,occurred_at
+                FROM sales_pilot_case_steps
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+                ORDER BY occurred_at DESC,step_id DESC LIMIT 100
+            """,(tenant,pilot_id,case_id)).fetchall()
+            step_total=db.execute("""
+                SELECT count(*) FROM sales_pilot_case_steps
+                WHERE tenant=? AND pilot_id=? AND case_id=?
+            """,(tenant,pilot_id,case_id)).fetchone()[0]
+
+        available=sorted(_STEPS.get(case["state"],set()))
+        if not source_current:
+            available=[]
+        elif suppressed:
+            available=[state for state in available if state=="CLOSED_LOST"]
+        return {
+            "tenant":tenant,"pilot_id":pilot_id,"case_id":case_id,
+            "company_name":case["company_name"],
+            "opportunity_id":case["opportunity_id"],
+            "reported_channel":case["reported_channel"],
+            "source_ref":case["inbound_ref"],
+            "state":case["state"],
+            "next_followup_at":case["next_followup_at"],
+            "source_current":source_current,
+            "suppressed":suppressed,
+            "contact_authority":"NONE",
+            "identity_verified":False,
+            "reported_only":True,
+            "available_transitions":available,
+            "step_history":[dict(row) for row in steps],
+            "step_history_total":step_total,
+            "history_truncated":step_total>len(steps),
+            "can_record_manual_step":bool(available),
+            "external_effects_executed":0,
+        }
+
     def step(self, tenant: str, pilot_id: str, case_id: str, *,
              step_id: str, expected_state: str, to_state: str,
              reporter_ref: str, evidence_ref: str,

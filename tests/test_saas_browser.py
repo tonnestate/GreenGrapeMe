@@ -281,6 +281,51 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("clearJourney();",js[js.index("function clearCrmWorklist()"):
                                             js.index("async function openTenant(")])
 
+    def test_guided_case_workbench_links_manual_handoff_to_current_step(self):
+        html=self.get("/")["body"].decode()
+        js=self.get("/saas.js")["body"].decode()
+        for element in (
+            "crm-review-section","crm-review-summary","crm-review-evidence",
+            "crm-review-history","crm-review-history-count",
+            "step-pilot","step-case","step-from","step-to",
+            "step-evidence","step-followup"):
+            self.assertIn('id="'+element+'"',html)
+        self.assertIn('id="step-from" required readonly',html)
+        self.assertIn('id="step-pilot" required readonly',html)
+        self.assertIn('id="step-case" required readonly',html)
+        self.assertIn('<select id="step-to" required>',html)
+        review=js[js.index("async function openCrmCase("):
+                  js.index("async function crmWorklist()")]
+        self.assertIn('api("/api/pilot-case-review?pilot="',review)
+        self.assertIn("assertGeneration(generation)",review)
+        self.assertIn("revision !== state.caseReviewRevision",review)
+        self.assertIn("review.available_transitions",review)
+        self.assertIn("review.source_current",review)
+        self.assertIn("review.suppressed",review)
+        self.assertIn("Kontaktfreigabe: KEINE",review)
+        self.assertIn("textContent",review)
+        self.assertNotIn("innerHTML",review)
+        worklist=js[js.index("async function crmWorklist()"):
+                    js.index("function clearCrmWorklist()")]
+        self.assertIn("await openCrmCase(pilot,item.case_id)",worklist)
+        self.assertIn("Nur Leserecht",worklist)
+        self.assertIn("emptyRow(casesBody, 6,",worklist)
+        self.assertIn("clearCaseReview();",js[
+            js.index("function clearCrmWorklist()"):
+            js.index("function clearTenantWorkspace()")])
+        submit=js[js.index('onForm("sales-step-form"'):
+                  js.index('onForm("pilot-form"')]
+        self.assertIn("selected.transitions.includes",submit)
+        self.assertIn("crypto.randomUUID()",submit)
+        self.assertIn("old.serialized===serialized",submit)
+        self.assertIn('api("/api/pilot-step"',submit)
+        self.assertNotIn('api("/api/pilot-reply',submit)
+        self.assertNotIn("innerHTML",submit)
+        adoption=js[js.index('onForm("public-inquiry-review-form"'):
+                    js.index('onForm("source-case-form"')]
+        self.assertIn("await crmWorklist()",adoption)
+        self.assertIn("await openCrmCase(result.pilot_id,result.case_id)",adoption)
+
     def test_public_inquiry_review_ui_is_private_operator_only_and_no_auto_send(self):
         html=self.get("/")["body"].decode()
         js=self.get("/saas.js")["body"].decode()

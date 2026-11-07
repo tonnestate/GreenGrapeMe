@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
+                caseReviewRevision: 0, caseReview: null, caseStepDraft: null,
                 publicInquiryRevision: 0, publicInboxEnabled: false,
                 journeyQueryRevision: 0, companyDetailRevision: 0,
                 discoveryDraft: null };
@@ -389,21 +390,127 @@ async function publicInquiries() {
     for (const field of [item.inquiry_id, item.company_name,
       item.contact_email, item.message, item.submitted_at, item.state,
       item.case_id ? (item.pilot_id + " / " + item.case_id) : "–"]) td(row, field);
+    const action=td(row,"");
+    const button=document.createElement("button");
+    button.type="button";
+    if (item.state==="ADOPTED" && item.pilot_id && item.case_id) {
+      button.textContent="CRM öffnen";
+      button.addEventListener("click",async () => {
+        try {
+          $("crm-pilot-id").value=item.pilot_id;
+          await crmWorklist();
+          await openCrmCase(item.pilot_id,item.case_id);
+          await customerJourney();
+          say("");
+        } catch (error) {
+          if (!(error instanceof StaleContextError)) say(error.message);
+        }
+      });
+    } else {
+      button.textContent="Anfrage prüfen";
+      button.addEventListener("click",() => {
+        $("inquiry-review-id").value=item.inquiry_id;
+        $("inquiry-review-pilot").focus();
+      });
+    }
+    action.replaceChildren(button);
     fragment.appendChild(row);
   }
   $("public-inquiry-list").replaceChildren(fragment);
   if (!data.items?.length) {
-    emptyRow($("public-inquiry-list"),7,"Keine öffentlichen Pilotanfragen.");
+    emptyRow($("public-inquiry-list"),8,"Keine öffentlichen Pilotanfragen.");
   }
   $("public-inquiry-count").textContent =
     String(data.pending ?? 0) + " neue oder in Übernahme befindliche Anfragen; " +
     String(data.total ?? 0) + " insgesamt sichtbar (maximal 50).";
 }
 
+const CRM_NEXT_LABELS = {
+  QUALIFIED_REPORTED: "Als qualifiziert gemeldet",
+  FOLLOWUP_SCHEDULED: "Wiedervorlage planen",
+  FOLLOWUP_RECORDED: "Wiedervorlage als bearbeitet melden",
+  MEETING_HELD_REPORTED: "Gespräch als durchgeführt melden",
+  PROPOSAL_DELIVERED_REPORTED: "Angebot als übergeben melden",
+  DEAL_SIGNED_REPORTED: "Abschluss nur als gemeldet dokumentieren",
+  CLOSED_LOST: "Vorgang ohne Abschluss schließen",
+};
+function clearCaseReview() {
+  state.caseReviewRevision += 1;
+  state.caseReview = null;
+  state.caseStepDraft = null;
+  $("crm-review-section").hidden = true;
+  $("crm-review-summary").textContent = "";
+  $("crm-review-evidence").textContent = "";
+  $("crm-review-history").replaceChildren();
+  $("crm-review-history-count").textContent = "";
+  $("sales-step-form").hidden = true;
+  $("step-to").replaceChildren();
+  for (const id of ["step-pilot","step-case","step-from",
+    "step-evidence","step-followup"]) $(id).value = "";
+}
+async function openCrmCase(pilot, caseId) {
+  const generation=state.generation;
+  clearCaseReview();
+  const revision=state.caseReviewRevision;
+  const review=await api("/api/pilot-case-review?pilot=" +
+    encodeURIComponent(pilot) + "&case=" + encodeURIComponent(caseId));
+  assertGeneration(generation);
+  if (revision !== state.caseReviewRevision) return;
+  state.caseReview={
+    pilot,caseId,current:review.state,
+    transitions:[...(review.available_transitions || [])],
+  };
+  $("crm-review-section").hidden = false;
+  $("crm-review-summary").textContent = review.company_name +
+    " | Eingang: " + review.reported_channel + " | Status: " + review.state +
+    " | Fälligkeit: " + (review.next_followup_at || "keine");
+  $("crm-review-evidence").textContent =
+    "Quelle: " + review.source_ref +
+    " | Quelle aktuell: " + (review.source_current ? "ja" : "NEIN") +
+    " | Kontaktsperre: " + (review.suppressed ? "JA" : "nein") +
+    " | Kontaktfreigabe: KEINE";
+  const history=document.createDocumentFragment();
+  for (const item of review.step_history || []) {
+    const row=document.createElement("tr");
+    td(row,item.from_state + " → " + item.to_state);
+    td(row,item.evidence_ref);
+    td(row,item.occurred_at);
+    history.appendChild(row);
+  }
+  $("crm-review-history").replaceChildren(history);
+  if (!(review.step_history || []).length) {
+    emptyRow($("crm-review-history"),3,"Noch keine manuellen CRM-Schritte.");
+  }
+  $("crm-review-history-count").textContent =
+    String(review.step_history_total || 0) +
+    " dokumentierte Schritte" + (review.history_truncated
+      ? " (nur 100 jüngste angezeigt)." : ".");
+  $("journey-case").value = caseId;
+  $("appointment-pilot").value = pilot;
+  $("appointment-case").value = caseId;
+  const authorized=["operator","admin"].includes(state.role);
+  $("sales-step-form").hidden = !authorized || !review.can_record_manual_step;
+  $("step-pilot").value = pilot;
+  $("step-case").value = caseId;
+  $("step-from").value = review.state;
+  const options=document.createDocumentFragment();
+  for (const action of review.available_transitions || []) {
+    const option=document.createElement("option");
+    option.value=action;
+    option.textContent=CRM_NEXT_LABELS[action] || action;
+    options.appendChild(option);
+  }
+  $("step-to").replaceChildren(options);
+  $("step-evidence").value = "";
+  $("step-followup").value = "";
+  $("step-followup").required = value("step-to") === "FOLLOWUP_SCHEDULED";
+}
+
 async function crmWorklist() {
   const generation = state.generation;
   const revision = ++state.crmQueryRevision;
   clearJourney();
+  clearCaseReview();
   const pilot = value("crm-pilot-id");
   if (!pilot) throw new Error("Bitte eine Pilot-ID eingeben.");
   const filter = "?pilot=" + encodeURIComponent(pilot);
@@ -433,6 +540,24 @@ async function crmWorklist() {
     for (const field of [item.case_id, item.company_name, item.state,
       item.next_followup_at || "–",
       item.suppressed ? "Gesperrt" : "Keine lokale Sperre"]) td(row, field);
+    const actionCell=td(row,"");
+    if (["operator","admin"].includes(state.role)) {
+      const open=document.createElement("button");
+      open.type="button";
+      open.textContent="Bearbeiten";
+      open.addEventListener("click",async () => {
+        try {
+          await openCrmCase(pilot,item.case_id);
+          await customerJourney();
+          say("");
+        } catch (error) {
+          if (!(error instanceof StaleContextError)) say(error.message);
+        }
+      });
+      actionCell.replaceChildren(open);
+    } else {
+      actionCell.textContent="Nur Leserecht";
+    }
     caseRows.appendChild(row);
   }
   const dueRows = document.createDocumentFragment();
@@ -452,7 +577,7 @@ async function crmWorklist() {
   casesBody.replaceChildren(caseRows);
   dueBody.replaceChildren(dueRows);
   appointmentBody.replaceChildren(appointmentRows);
-  if (!cases.items?.length) emptyRow(casesBody, 5, "Keine CRM-Vorgänge.");
+  if (!cases.items?.length) emptyRow(casesBody, 6, "Keine CRM-Vorgänge.");
   if (!due.items?.length) emptyRow(dueBody, 4, "Keine fälligen Wiedervorlagen.");
   if (!appointments.items?.length) emptyRow(appointmentBody, 5, "Keine Kalendertermine erfasst.");
   $("crm-case-count").textContent =
@@ -465,6 +590,7 @@ async function crmWorklist() {
 function clearCrmWorklist() {
   state.crmQueryRevision += 1;
   clearJourney();
+  clearCaseReview();
   $("journey-case").value = "";
   $("crm-pilot-id").value = "";
   $("crm-case-list").replaceChildren();
@@ -550,7 +676,7 @@ async function openTenant(event) {
     $("inbound-form").hidden = !operates;
     $("source-case-form").hidden = !operates;
     $("appointment-form").hidden = !operates;
-    $("sales-step-form").hidden = !operates;
+    $("sales-step-form").hidden = true;
     $("public-inquiry-section").hidden = !operates || !state.publicInboxEnabled;
     $("public-inquiry-review-form").hidden = !operates || !state.publicInboxEnabled;
     $("pilot-form").hidden = !finance;
@@ -697,6 +823,10 @@ async function main() {
     $("inquiry-review-pilot").required=adopting;
     if (!adopting) $("inquiry-review-pilot").value="";
   });
+  $("step-to").addEventListener("change", () => {
+    $("step-followup").required = value("step-to") === "FOLLOWUP_SCHEDULED";
+    if (!$("step-followup").required) $("step-followup").value = "";
+  });
   $("crm-case-filter").addEventListener("submit", async (event) => {
     event.preventDefault();
     try { await crmWorklist(); say(""); }
@@ -816,6 +946,7 @@ async function main() {
       " (kein Kalendertermin erstellt, keine Einladung versandt).";
   });
   onForm("public-inquiry-review-form", async () => {
+    const generation=state.generation;
     if (!state.publicInboxEnabled) throw new Error("Pilotanfragen sind nicht freigeschaltet.");
     const decision=value("inquiry-review-decision");
     const pilotId=decision==="ADOPT" ? value("inquiry-review-pilot") : "";
@@ -825,6 +956,7 @@ async function main() {
         inquiry_id:value("inquiry-review-id"), decision, pilot_id:pilotId,
       },
     });
+    assertGeneration(generation);
     let refreshFailed=false;
     try { await publicInquiries(); }
     catch (error) {
@@ -836,8 +968,17 @@ async function main() {
       : "";
     if (result.state==="ADOPTED") {
       $("crm-pilot-id").value=result.pilot_id;
+      let crmRefreshFailed=false;
+      try {
+        await crmWorklist();
+        await openCrmCase(result.pilot_id,result.case_id);
+      } catch (error) {
+        if (error instanceof StaleContextError) throw error;
+        crmRefreshFailed=true;
+      }
       return "Anfrage als gemeldeter CRM-Vorgang übernommen: " +
-        result.case_id + ". Keine automatische Kontaktfreigabe." + suffix;
+        result.case_id + ". Keine automatische Kontaktfreigabe." + suffix +
+        (crmRefreshFailed ? " Die Arbeitsakte konnte nicht geöffnet werden." : "");
     }
     return "Pilotanfrage abgelehnt. Kein CRM-Vorgang angelegt." + suffix;
   });
@@ -865,15 +1006,54 @@ async function main() {
     return "Eingang dokumentiert: " + result.state;
   });
   onForm("sales-step-form", async () => {
-    const result = await api("/api/pilot-step", {
-      method: "POST", body: {
-        pilot_id: value("step-pilot"), case_id: value("step-case"),
-        step_id: value("step-id"), expected_state: value("step-from"),
-        to_state: value("step-to"), evidence_ref: value("step-evidence"),
-        followup_at: value("step-followup"),
-      },
+    const generation=state.generation;
+    const selected=state.caseReview;
+    if (!selected || !["operator","admin"].includes(state.role) ||
+        selected.pilot!==value("step-pilot") ||
+        selected.caseId!==value("step-case") ||
+        selected.current!==value("step-from") ||
+        !selected.transitions.includes(value("step-to"))) {
+      throw new Error("Vorgang geändert. Bitte den aktuellen CRM-Vorgang neu öffnen.");
+    }
+    const next=value("step-to");
+    const followup=next==="FOLLOWUP_SCHEDULED"
+      ? value("step-followup") : "";
+    if (next==="FOLLOWUP_SCHEDULED" && !followup) {
+      throw new Error("Eine Wiedervorlage benötigt eine Fälligkeit mit Zeitzone.");
+    }
+    const spec={
+      pilot_id:selected.pilot, case_id:selected.caseId,
+      expected_state:selected.current, to_state:next,
+      evidence_ref:value("step-evidence"), followup_at:followup,
+    };
+    // Preserve one step ID for identical retries after a lost HTTP reply.
+    // New evidence/transition is a new draft, never a silent retry.
+    const serialized=JSON.stringify(spec);
+    const old=state.caseStepDraft;
+    const draft=old && old.serialized===serialized &&
+      old.generation===state.generation ? old : {
+        generation:state.generation,serialized,
+        step_id:"step-"+crypto.randomUUID(),
+      };
+    state.caseStepDraft=draft;
+    const result=await api("/api/pilot-step", {
+      method:"POST",body:{...spec,step_id:draft.step_id},
     });
-    return "CRM-Status dokumentiert: " + result.state;
+    assertGeneration(generation);
+    state.caseStepDraft=null;
+    let refreshFailed=false;
+    try {
+      $("crm-pilot-id").value=selected.pilot;
+      await crmWorklist();
+      await openCrmCase(selected.pilot,selected.caseId);
+      await customerJourney();
+    } catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      refreshFailed=true;
+    }
+    return "CRM-Schritt dokumentiert: "+result.state+
+      " (gemeldet, keine unabhängige Bestätigung oder Kontaktfreigabe)." +
+      (refreshFailed ? " Die Anzeige konnte nicht vollständig aktualisiert werden." : "");
   });
   onForm("pilot-form", async () => {
     await api("/api/pilots", {method: "POST", body: {

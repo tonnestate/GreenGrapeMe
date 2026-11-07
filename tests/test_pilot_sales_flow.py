@@ -41,6 +41,71 @@ class PilotSalesFlowTests(unittest.TestCase):
         params.update(kwargs)
         return self.flow.step("tenant-01","pilot-0001",self.case,**params)
 
+    def test_case_review_follows_actual_steps_and_never_grants_authority(self):
+        self.open()
+        with self.store._db() as db:
+            audit_before=db.execute("SELECT count(*) FROM audit").fetchone()[0]
+        review=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertEqual(review["state"],"INBOUND_REVIEW")
+        self.assertTrue(review["source_current"])
+        self.assertFalse(review["suppressed"])
+        self.assertFalse(review["identity_verified"])
+        self.assertEqual(review["contact_authority"],"NONE")
+        self.assertEqual(review["step_history_total"],0)
+        self.assertEqual(review["available_transitions"],
+                         ["CLOSED_LOST","QUALIFIED_REPORTED"])
+        self.assertTrue(review["can_record_manual_step"])
+        with self.store._db() as db:
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM audit").fetchone()[0],audit_before)
+
+        self.step("QUALIFIED_REPORTED","INBOUND_REVIEW","qualify-0001")
+        qualified=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertEqual(qualified["state"],"QUALIFIED_REPORTED")
+        self.assertEqual(qualified["step_history_total"],1)
+        self.assertEqual(qualified["step_history"][0]["from_state"],"INBOUND_REVIEW")
+        self.assertEqual(qualified["step_history"][0]["to_state"],
+                         "QUALIFIED_REPORTED")
+        self.assertIn("FOLLOWUP_SCHEDULED",qualified["available_transitions"])
+        self.assertEqual(qualified["contact_authority"],"NONE")
+        with self.assertRaises(LookupError):
+            self.flow.review("tenant-02","pilot-0001",self.case)
+        with self.assertRaises(LookupError):
+            self.flow.review("tenant-01","pilot-0001","unknown-case-01")
+
+        with self.store._db() as db:
+            oid=qualified["opportunity_id"]
+            db.execute("INSERT INTO suppressions VALUES (?,?,?,?)",(
+                "tenant-01",oid,"OPT_OUT",self.store._now()))
+        suppressed=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertTrue(suppressed["suppressed"])
+        self.assertEqual(suppressed["available_transitions"],["CLOSED_LOST"])
+        with self.assertRaises(PermissionError):
+            self.step("MEETING_HELD_REPORTED","QUALIFIED_REPORTED",
+                      "meeting-0001")
+        self.step("CLOSED_LOST","QUALIFIED_REPORTED","lost-0001")
+        closed=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertFalse(closed["can_record_manual_step"])
+        self.assertEqual(closed["available_transitions"],[])
+        self.assertEqual(closed["step_history_total"],2)
+
+    def test_case_review_denies_actions_when_original_evidence_changes(self):
+        self.open()
+        with self.store._db() as db:
+            row=db.execute(
+                "SELECT opportunity_id FROM sales_pilot_cases "
+                "WHERE tenant=? AND pilot_id=? AND case_id=?",(
+                "tenant-01","pilot-0001",self.case)).fetchone()
+            db.execute("UPDATE opportunities SET source_json='{}' "
+                       "WHERE tenant=? AND opportunity_id=?",(
+                "tenant-01",row["opportunity_id"]))
+        review=self.flow.review("tenant-01","pilot-0001",self.case)
+        self.assertFalse(review["source_current"])
+        self.assertFalse(review["can_record_manual_step"])
+        self.assertEqual(review["available_transitions"],[])
+        with self.assertRaises(ValueError):
+            self.step("QUALIFIED_REPORTED","INBOUND_REVIEW","qualify-0001")
+
     def test_discovery_account_handoff_preserves_source_and_never_claims_inbound(self):
         from greengrapeme.sales import Opportunity, Evidence
         from greengrapeme.reply_effects import ReplyEffects

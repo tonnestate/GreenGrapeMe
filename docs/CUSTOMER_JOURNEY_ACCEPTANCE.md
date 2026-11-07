@@ -19,6 +19,43 @@ aufrufbar. Der dazugehörige REST-Endpunkt heißt
 `GET /api/pilot-journey?pilot=<id>&case=<id>`, mit
 aktuell geprüftem OIDC-/Mandantenzugriff und rein lesenden Rechten.
 
+## Bedienbarer Übergang aus der öffentlichen Pilotanfrage
+
+Im geschützten SaaS-Cockpit werden neu eingegangene Pilotanfragen nur
+einem berechtigten Operator angezeigt. Nach der expliziten Übernahme in
+einen bestehenden Pilot wird nun die **zugeordnete CRM-Arbeitsakte direkt
+geöffnet**. Auch bereits übernommene Anfragen lassen sich mit
+`CRM öffnen` wieder aufrufen. Die CRM-Arbeitsliste bietet für jede Zeile
+`Bearbeiten`; Viewer haben ausschließlich Leserechte.
+
+Die neue Abfrage
+`GET /api/pilot-case-review?pilot=<id>&case=<id>` erfordert eine aktuelle
+OIDC-Operator-/Adminberechtigung. Sie liest in einer konsistenten
+Datenbanktransaktion den tatsächlichen Vorgang, den letzten CRM-Status,
+Quellenfingerabdruck, Sperrstatus und höchstens 100 zuletzt dokumentierte
+Schritte. Sie liefert ausschließlich die in der bestehenden
+`PilotSalesFlow`-Statusmaschine erlaubten **manuellen Statusübergänge**.
+Bei fehlender/veränderter Quellengrundlage werden alle Schritte gesperrt;
+bei Kontaktsperre bleibt nur der zulässige Abschluss ohne Deal. Ein
+bereits geschlossener Vorgang darf nicht erneut gestartet werden.
+
+Die Bedienoberfläche befüllt Pilot-ID, Fall-ID und aktuellen Status
+automatisch und unveränderbar aus der geprüften Abfrage. Der Operator
+wählt nur einen fachlich erlaubten Folgeschritt, trägt einen eigenen
+nachvollziehbaren URN-/HTTPS-Beleg ein und ergänzt gegebenenfalls eine
+Wiedervorlage mit Zeitzone. Es erfolgt **keine automatische
+Kontaktaufnahme**. Die bestehende Schreib-API prüft den ursprünglichen
+Status, die Quellenbindung, Sperren, Berechtigungen und Idempotenz erneut.
+Wird eine HTTP-Antwort verloren, verwendet das Frontend für denselben
+unveränderten Entwurf dieselbe Meilenstein-ID; erst nach bestätigter
+Speicherung wird ein neuer Entwurf begonnen. Ein Mandantenwechsel
+verwirft offene Leseantworten und leert alle dazugehörigen Daten.
+
+`tests/test_public_inquiries.py`, `tests/test_pilot_sales_flow.py`,
+`tests/test_saas_auth.py` und `tests/test_saas_browser.py` prüfen diese
+Ende-zu-Ende-Kette, Quelländerungen, Sperren, geänderte Zustände,
+Replay-Sicherheit und die Zugriffskontrolle.
+
 ## Fachliche Evidenzklassen
 
 | Phase | Was das System belegen darf | Was es nicht behaupten darf |
