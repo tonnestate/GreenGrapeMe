@@ -248,7 +248,7 @@ class ResendProviderTests(unittest.TestCase):
         self.assertIsNone(attempt["provider_email_id"])
         self.assertIsNone(self.adapter.probe(self.gateway.intent))
         self.assertEqual(len(self.transport.calls),1)
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(PermissionError):
             self.adapter.dispatch(self.gateway.intent)
         self.assertEqual(len(self.transport.calls),1)
         self.assertIn("UNRECONCILED_EXECUTION_OR_EFFECTS",
