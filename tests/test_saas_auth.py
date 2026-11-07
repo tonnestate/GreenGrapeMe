@@ -383,6 +383,79 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(code.startswith("403"))
         self.assertEqual(self.store.overview("tenant-a")["opportunities"],2)
 
+    def test_operator_workbench_prepares_only_local_reply_and_calendar_intent(self):
+        from datetime import datetime,timedelta,timezone
+        from greengrapeme.pilot_metrics import PilotLedger
+        from greengrapeme.pilot_sales_flow import PilotSalesFlow
+        self.members.grant("tenant-a",self.alice,"operator")
+        PilotLedger(self.store).create(
+            "tenant-a","pilot-0061","offer","Inbound follow-up",
+            monthly_fee_cents=16000)
+        PilotSalesFlow(self.store).open_inbound(
+            "tenant-a","pilot-0061","case-0061",
+            company_name="Inbound Customer GmbH",channel="WEB_FORM",
+            evidence_ref="urn:gg:public-inquiry:inbound-evidence-0061",
+            reporter_ref="operator-0061")
+        params={"pilot":"pilot-0061","case":"case-0061"}
+        code,review,_=self.request(
+            path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("200"),(code,review))
+        self.assertTrue(review["can_prepare_reply_metadata"])
+        self.assertFalse(review["can_prepare_appointment_intent"])
+        self.assertEqual(review["reply_total"],0)
+
+        code,prepared,_=self.request(
+            path="/api/pilot-reply-prepare",method="POST",origin=ORIGIN,
+            payload={"pilot_id":"pilot-0061","case_id":"case-0061",
+                     "reply_id":"reply-0061",
+                     "recipient_ref":"urn:recipient:reviewed-0061",
+                     "content_ref":"urn:content:approved-0061",
+                     "content_sha256":"a"*64})
+        self.assertTrue(code.startswith("202"),(code,prepared))
+        self.assertEqual(prepared["state"],"PREPARED")
+        code,review,_=self.request(path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("200"))
+        self.assertEqual(review["replies"][0]["state"],"PREPARED")
+        self.assertIsNone(review["replies"][0]["provider_delivery_state"])
+
+        start=(datetime.now(timezone.utc)+timedelta(days=5)).isoformat()
+        end=(datetime.now(timezone.utc)+timedelta(days=5,minutes=45)).isoformat()
+        booking={"pilot_id":"pilot-0061","case_id":"case-0061",
+                 "booking_id":"booking-0061",
+                 "calendar_ref":"urn:calendar:owned-0061",
+                 "slot_start_at":start,"slot_end_at":end}
+        code,blocked,_=self.request(
+            path="/api/pilot-appointment-prepare",method="POST",
+            origin=ORIGIN,payload=booking)
+        self.assertTrue(code.startswith("403"),(code,blocked))
+        code,step,_=self.request(
+            path="/api/pilot-step",method="POST",origin=ORIGIN,
+            payload={"pilot_id":"pilot-0061","case_id":"case-0061",
+                "step_id":"step-0061","expected_state":"INBOUND_REVIEW",
+                "to_state":"QUALIFIED_REPORTED",
+                "evidence_ref":"urn:crm:manual:qualified-0061",
+                "followup_at":""})
+        self.assertTrue(code.startswith("202"),(code,step))
+        code,created,_=self.request(
+            path="/api/pilot-appointment-prepare",method="POST",
+            origin=ORIGIN,payload=booking)
+        self.assertTrue(code.startswith("202"),(code,created))
+        self.assertEqual(created["state"],"REQUESTED")
+        code,review,_=self.request(path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("200"))
+        self.assertTrue(review["can_prepare_appointment_intent"])
+        self.assertEqual(review["appointment_total"],1)
+        self.assertEqual(review["appointments"][0]["state"],"REQUESTED")
+        self.assertIsNone(review["appointments"][0]["provider_event_id"])
+        self.assertEqual(review["contact_authority"],"NONE")
+        code,blocked,_=self.request(
+            path="/api/pilot-case-review",tenant="tenant-b",params=params)
+        self.assertTrue(code.startswith("403"))
+        self.members.grant("tenant-a",self.alice,"viewer")
+        code,blocked,_=self.request(
+            path="/api/pilot-case-review",params=params)
+        self.assertTrue(code.startswith("403"))
+
     def test_operator_case_review_route_is_current_and_never_a_contact_grant(self):
         from greengrapeme.pilot_metrics import PilotLedger
         from greengrapeme.pilot_sales_flow import PilotSalesFlow
