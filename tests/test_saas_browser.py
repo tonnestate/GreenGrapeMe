@@ -318,8 +318,8 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("keine Kalenderbuchung",booking)
         self.assertNotIn("reconcile",booking)
         self.assertNotIn("innerHTML",reply+booking)
-        self.assertIn("state.replyDraft = null;",js)
-        self.assertIn("state.bookingDraft = null;",js)
+        self.assertIn("revision !== state.caseReviewRevision",reply)
+        self.assertIn("revision !== state.caseReviewRevision",booking)
 
     def test_guided_case_workbench_links_manual_handoff_to_current_step(self):
         html=self.get("/")["body"].decode()
