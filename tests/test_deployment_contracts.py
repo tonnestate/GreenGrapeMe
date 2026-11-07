@@ -66,8 +66,7 @@ class DeploymentContractsTests(unittest.TestCase):
             "idp","real", "DNS", "TLS",
         ):
             self.assertIn(requirement.casefold(),text.casefold())
-        self.assertIn("production_ready",text if "production_ready" in text
-                      else "production_ready=false")
+        self.assertIn("production_ready=false",text)
 
 
 if __name__=="__main__":
