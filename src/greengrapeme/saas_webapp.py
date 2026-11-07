@@ -12,6 +12,8 @@ from importlib import resources
 from os import environ
 import hashlib
 import json
+import math
+import re
 from typing import Callable
 from urllib.parse import parse_qs, urlsplit
 
@@ -27,6 +29,9 @@ from .tenant_access import TenantMemberships
 
 
 _MAX_JSON = 8192
+_MAX_QUERY = 2048
+_MAX_JSON_DEPTH = 32
+_BAD_QUERY_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 @dataclass(frozen=True)
@@ -97,7 +102,14 @@ def _reply(start_response: Callable, status: str, data: object) -> list[bytes]:
 
 
 def _query_params(environ: dict):
-    params = parse_qs(environ.get("QUERY_STRING", ""), max_num_fields=16)
+    raw = environ.get("QUERY_STRING", "")
+    if (not isinstance(raw, str) or len(raw) > _MAX_QUERY
+            or _BAD_QUERY_ESCAPE.search(raw)):
+        raise ValueError("invalid query string")
+    # Default parse_qs silently discards blank values; an attacker could
+    # otherwise supply ?id=&id=real without triggering duplicate detection.
+    params = parse_qs(raw, keep_blank_values=True, strict_parsing=True,
+                      encoding="utf-8", errors="strict", max_num_fields=16)
     def single(key: str, default: str = "") -> str:
         values = params.get(key, [default])
         if len(values) != 1:
@@ -106,12 +118,63 @@ def _query_params(environ: dict):
     return single
 
 
+def _unique_object(items: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _finite_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("non-finite JSON number")
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError("non-JSON numeric constant")
+
+
+def _strict_json(raw: bytes) -> dict:
+    # UTF-8 and Unicode must survive an exact roundtrip. Escaped unpaired
+    # surrogate characters can otherwise reach SQLite or logs as 500 errors.
+    text = raw.decode("utf-8", errors="strict")
+    try:
+        data = json.loads(text, object_pairs_hook=_unique_object,
+                          parse_constant=_reject_constant,
+                          parse_float=_finite_float)
+    except RecursionError:
+        raise ValueError("JSON nesting limit exceeded") from None
+    if not isinstance(data, dict):
+        raise ValueError("JSON object required")
+    # Iterative, bounded walk prevents deeply nested (or invalid Unicode)
+    # payloads from getting through to individual business domains.
+    todo = [(data, 1)]
+    while todo:
+        item, depth = todo.pop()
+        if depth > _MAX_JSON_DEPTH:
+            raise ValueError("JSON nesting limit exceeded")
+        if isinstance(item, dict):
+            for key, value in item.items():
+                key.encode("utf-8", errors="strict")
+                todo.append((value, depth + 1))
+        elif isinstance(item, list):
+            todo.extend((value, depth + 1) for value in item)
+        elif isinstance(item, str):
+            item.encode("utf-8", errors="strict")
+    return data
+
+
 def _request_json(environ: dict, allowed: frozenset[str]) -> dict:
     mime = environ.get("CONTENT_TYPE", "").split(";")[0].strip().lower()
     if mime != "application/json":
         raise ValueError("JSON required")
     raw_length = environ.get("CONTENT_LENGTH", "")
-    if not isinstance(raw_length, str) or not raw_length.isdecimal():
+    if (not isinstance(raw_length, str) or len(raw_length) > 6
+            or not raw_length.isdecimal()):
         raise ValueError("missing bounded body length")
     length = int(raw_length)
     if not 1 <= length <= _MAX_JSON:
@@ -119,8 +182,8 @@ def _request_json(environ: dict, allowed: frozenset[str]) -> dict:
     raw = environ["wsgi.input"].read(length)
     if not isinstance(raw, bytes) or len(raw) != length:
         raise ValueError("incomplete request body")
-    data = json.loads(raw)
-    if not isinstance(data, dict) or set(data) != allowed:
+    data = _strict_json(raw)
+    if set(data) != allowed:
         raise ValueError("invalid request fields")
     return data
 
@@ -131,8 +194,13 @@ def create_saas_app(
     browser: BrowserOIDCConfig | None = None,
 ):
     origin = urlsplit(allowed_origin)
-    if (origin.scheme != "https" or not origin.netloc or origin.path not in ("", "/")
-            or origin.query or origin.fragment or allowed_origin.endswith("/")):
+    if (not isinstance(allowed_origin, str) or
+            origin.scheme != "https" or not origin.hostname or
+            origin.username is not None or origin.password is not None or
+            origin.path not in ("", "/") or origin.query or origin.fragment or
+            allowed_origin.endswith("/") or
+            any(ord(ch) < 33 or ord(ch) == 127 for ch in allowed_origin) or
+            "@" in origin.netloc or "%" in origin.netloc):
         raise ValueError("SaaS API must have a canonical HTTPS origin")
     if browser is not None and not isinstance(browser, BrowserOIDCConfig):
         raise ValueError("invalid browser OIDC configuration")
