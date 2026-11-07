@@ -352,7 +352,7 @@ class ResendReplyEffectAdapter:
             raise ValueError("invalid Resend response; dispatch uncertain") from None
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
-            db.execute("""
+            changed=db.execute("""
                 UPDATE sales_reply_provider_attempts
                 SET provider_email_id=?,state='HTTP_ACCEPTED_NOT_DELIVERED',
                     updated_at=?
@@ -360,6 +360,8 @@ class ResendReplyEffectAdapter:
                   AND state='DISPATCH_UNCERTAIN'
             """,(email_id,self.store._now(),row["tenant"],row["pilot_id"],
                  row["case_id"],row["reply_id"]))
+            if changed.rowcount != 1:
+                raise RuntimeError("provider accepted, local receipt uncertain")
         return EffectObservation(
             success=True,external_ref="resend-"+email_id,
             message="Resend accepted; actual delivery not independently confirmed")
@@ -400,7 +402,7 @@ class ResendReplyEffectAdapter:
             new_state=_RECEIPT_STATES.get(doc.get("last_event"))
             if new_state is None:
                 return None
-        except (HTTPError,URLError,OSError,TimeoutError,ValueError,TypeError):
+        except (HTTPError,URLError,OSError,TimeoutError,ValueError,TypeError,AttributeError):
             return None
         with self.store._db() as db:
             db.execute("BEGIN IMMEDIATE")
