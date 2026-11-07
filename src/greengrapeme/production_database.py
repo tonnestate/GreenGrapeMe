@@ -14,7 +14,7 @@ from .database_recovery import verify_database
 from .release_audit import _REQUIRED_OPERATIONS_TABLES
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _initialize_operational_schema(staging: Path) -> None:
@@ -27,6 +27,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     from .pilot_metrics import PilotLedger
     from .pilot_sales_flow import PilotSalesFlow
     from .reply_effects import ReplyEffects
+    from .resend_reply_provider import initialize_reply_provider_schema
     from .calendar_bookings import CalendarBookings
     from .sales_contracts import SalesContracts
     from .sales_terminations import SalesTerminations
@@ -41,6 +42,7 @@ def _initialize_operational_schema(staging: Path) -> None:
     PilotLedger(store)
     PilotSalesFlow(store)
     ReplyEffects(store)
+    initialize_reply_provider_schema(store)
     CalendarBookings(store, initialize=True)
     SalesContracts(store, initialize=True)
     SalesTerminations(store, initialize=True)
