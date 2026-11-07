@@ -114,6 +114,26 @@
       <section id="sales-view" aria-labelledby="sales-title" hidden>
         <h2 id="sales-title">CRM-Vorgänge</h2>
         <p>Eine gemeldete Kundenanfrage ist kein geprüfter Identitäts- oder Kontaktberechtigungsnachweis.</p>
+        <section id="public-inquiry-section" hidden aria-labelledby="public-inquiry-title">
+          <h3 id="public-inquiry-title">Pilotanfragen von der öffentlichen Website</h3>
+          <p>Alle Angaben sind ungeprüfte Formulareingaben. Die Übernahme ins CRM ist nur nach manueller Sichtung möglich und verleiht keine Kontaktberechtigung.</p>
+          <button id="public-inquiry-refresh" type="button">Anfragen aktualisieren</button>
+          <p id="public-inquiry-count" aria-live="polite"></p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Referenz</th><th>Unternehmen</th><th>Kontakt-E-Mail</th><th>Anliegen</th><th>Eingang</th><th>Status</th><th>CRM-Zuordnung</th></tr></thead>
+              <tbody id="public-inquiry-list"></tbody>
+            </table>
+          </div>
+          <form id="public-inquiry-review-form" class="discovery-form" hidden>
+            <div><label for="inquiry-review-id">Anfrage-Referenz</label><input id="inquiry-review-id" required maxlength="160"></div>
+            <div><label for="inquiry-review-decision">Entscheidung</label>
+              <select id="inquiry-review-decision"><option value="ADOPT">Manuell geprüft – als gemeldete Anfrage ins CRM übernehmen</option><option value="DECLINE">Anfrage ablehnen</option></select>
+            </div>
+            <div><label for="inquiry-review-pilot">Bestehende Pilot-ID (nur bei Übernahme)</label><input id="inquiry-review-pilot" maxlength="120" required></div>
+            <button type="submit">Prüfentscheidung speichern</button>
+          </form>
+        </section>
         <form id="crm-case-filter" class="filters">
           <div><label for="crm-pilot-id">Pilot-ID für CRM-Arbeitsliste</label><input id="crm-pilot-id" required maxlength="120"></div>
           <button type="submit">Vorgänge und Wiedervorlagen laden</button>
