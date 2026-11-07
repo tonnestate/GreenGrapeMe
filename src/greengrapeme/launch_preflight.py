@@ -9,6 +9,7 @@ from __future__ import annotations
 from io import BytesIO
 from os import environ, path as os_path
 from wsgiref.util import setup_testing_defaults
+from urllib.parse import urlsplit
 
 from .operations import SalesWorkspace
 from .saas_webapp import create_service_from_env
@@ -90,8 +91,8 @@ def launch_preflight(component: str) -> dict:
         checks["DISTINCT_MARKETING_AND_SAAS_ORIGINS"] = (
             bool(environ.get("GG_PUBLIC_ORIGIN"))
             and bool(environ.get("GG_PUBLIC_APP_URL"))
-            and environ["GG_PUBLIC_ORIGIN"].rstrip("/") !=
-                environ["GG_PUBLIC_APP_URL"].rstrip("/"))
+            and urlsplit(environ["GG_PUBLIC_ORIGIN"]).hostname !=
+                urlsplit(environ["GG_PUBLIC_APP_URL"]).hostname)
     else:
         checks["SEPARATE_OPERATIONAL_AND_INBOX_DATABASE"] = (
             checks["REQUIRED_CONFIG_PRESENT"] and
