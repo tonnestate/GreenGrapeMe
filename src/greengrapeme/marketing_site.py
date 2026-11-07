@@ -511,17 +511,79 @@ def create_marketing_app(config: PublicSiteConfig, *,
             return _response(start_response,"403 Forbidden",b"TLS required",
                              "text/plain; charset=utf-8")
         method = environ.get("REQUEST_METHOD")
+        path = environ.get("PATH_INFO","")
+        if path == "/pilot-anfrage" and method == "POST" and inbox is not None:
+            # Same-origin HTML form only. No cookies, CORS or access to SaaS.
+            if (environ.get("HTTP_ORIGIN") != config.origin or
+                    environ.get("HTTP_SEC_FETCH_SITE","same-origin")
+                        not in ("same-origin","none")):
+                return _response(start_response,"403 Forbidden",b"Origin denied",
+                                 "text/plain; charset=utf-8",private=True)
+            mime=environ.get("CONTENT_TYPE","").split(";")[0].strip().lower()
+            size=environ.get("CONTENT_LENGTH","")
+            if (mime!="application/x-www-form-urlencoded" or
+                    not isinstance(size,str) or not size.isdecimal()
+                    or len(size)>5 or not 1<=int(size)<=3000):
+                return _response(start_response,"400 Bad Request",b"Invalid form",
+                                 "text/plain; charset=utf-8",private=True)
+            try:
+                raw=environ["wsgi.input"].read(int(size))
+                if not isinstance(raw,bytes) or len(raw)!=int(size):
+                    raise ValueError("incomplete form")
+                values=parse_qs(raw.decode("utf-8"),keep_blank_values=True,
+                    strict_parsing=True,encoding="utf-8",errors="strict",
+                    max_num_fields=8)
+                allowed={"form_token","unternehmen","email","anliegen",
+                         "datenschutz","website"}
+                if set(values)!=allowed or any(len(v)!=1 for v in values.values()):
+                    raise ValueError("ambiguous form")
+                inbox.submit(
+                    token=values["form_token"][0],
+                    company_name=values["unternehmen"][0],
+                    contact_email=values["email"][0],
+                    message=values["anliegen"][0],
+                    privacy_ack=values["datenschutz"][0],
+                    honeypot=values["website"][0],
+                    remote_addr=environ.get("REMOTE_ADDR",""))
+            except PermissionError:
+                return _response(start_response,"429 Too Many Requests",
+                                 b"Please retry later",
+                                 "text/plain; charset=utf-8",private=True)
+            except (ValueError,UnicodeError,OverflowError):
+                return _response(start_response,"400 Bad Request",b"Invalid form",
+                                 "text/plain; charset=utf-8",private=True)
+            return _response(start_response,"303 See Other",b"",
+                             "text/plain; charset=utf-8",private=True,
+                             location="/anfrage-erhalten")
         if method not in ("GET","HEAD"):
             return _response(start_response,"405 Method Not Allowed",
                              b"Method not allowed","text/plain; charset=utf-8")
-        path = environ.get("PATH_INFO","")
+
         if not isinstance(path,str) or len(path)>_PAGE_LIMIT:
             return _response(start_response,"404 Not Found",b"Not found",
                              "text/plain; charset=utf-8",head=method=="HEAD")
+        if path == "/anfrage-erhalten" and inbox is not None:
+            payload=(
+                '<!doctype html><html lang="de"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<meta name="robots" content="noindex,nofollow">'
+                '<title>Pilotanfrage eingegangen | GreenGrapeMe</title>'
+                '<link rel="stylesheet" href="/app.css">'
+                '<link rel="stylesheet" href="/marketing.css"></head>'
+                '<body class="marketing-body"><main><h1>Anfrage zur Prüfung eingegangen</h1>'
+                '<p>Die Übermittlung wurde angenommen. Es wurde noch kein '
+                'Vertriebsauftrag gestartet und keine Kontaktfreigabe erteilt.</p>'
+                '<a href="/">Zur Startseite</a></main></body></html>'
+            ).encode("utf-8")
+            return _response(start_response,"200 OK",payload,
+                             "text/html; charset=utf-8",
+                             private=True,head=method=="HEAD")
         if path in PAGES:
+            form_enabled=path=="/pilotprojekt" and inbox is not None
             return _response(
-                start_response,"200 OK",_html(config,PAGES[path]),
-                "text/html; charset=utf-8",indexable=True,head=method=="HEAD")
+                start_response,"200 OK",_html(config,PAGES[path],inbox),
+                "text/html; charset=utf-8",indexable=True,
+                private=form_enabled,forms=form_enabled,head=method=="HEAD")
         if path in ("/marketing.css","/app.css"):
             filename = "marketing.css" if path=="/marketing.css" else "app.css"
             content = (resources.files("greengrapeme") / "web" / filename).read_bytes()
