@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
+                caseReviewRevision: 0, caseReview: null, caseStepDraft: null,
                 publicInquiryRevision: 0, publicInboxEnabled: false,
                 journeyQueryRevision: 0, companyDetailRevision: 0,
                 discoveryDraft: null };
@@ -400,10 +401,92 @@ async function publicInquiries() {
     String(data.total ?? 0) + " insgesamt sichtbar (maximal 50).";
 }
 
+const CRM_NEXT_LABELS = {
+  QUALIFIED_REPORTED: "Als qualifiziert gemeldet",
+  FOLLOWUP_SCHEDULED: "Wiedervorlage planen",
+  FOLLOWUP_RECORDED: "Wiedervorlage als bearbeitet melden",
+  MEETING_HELD_REPORTED: "Gespräch als durchgeführt melden",
+  PROPOSAL_DELIVERED_REPORTED: "Angebot als übergeben melden",
+  DEAL_SIGNED_REPORTED: "Abschluss nur als gemeldet dokumentieren",
+  CLOSED_LOST: "Vorgang ohne Abschluss schließen",
+};
+function clearCaseReview() {
+  state.caseReviewRevision += 1;
+  state.caseReview = null;
+  state.caseStepDraft = null;
+  $("crm-review-section").hidden = true;
+  $("crm-review-summary").textContent = "";
+  $("crm-review-evidence").textContent = "";
+  $("crm-review-history").replaceChildren();
+  $("crm-review-history-count").textContent = "";
+  $("sales-step-form").hidden = true;
+  $("step-to").replaceChildren();
+  for (const id of ["step-pilot","step-case","step-from",
+    "step-evidence","step-followup"]) $(id).value = "";
+}
+async function openCrmCase(pilot, caseId) {
+  const generation=state.generation;
+  clearCaseReview();
+  const revision=state.caseReviewRevision;
+  const review=await api("/api/pilot-case-review?pilot=" +
+    encodeURIComponent(pilot) + "&case=" + encodeURIComponent(caseId));
+  assertGeneration(generation);
+  if (revision !== state.caseReviewRevision) return;
+  state.caseReview={
+    pilot,caseId,current:review.state,
+    transitions:[...(review.available_transitions || [])],
+  };
+  $("crm-review-section").hidden = false;
+  $("crm-review-summary").textContent = review.company_name +
+    " | Eingang: " + review.reported_channel + " | Status: " + review.state +
+    " | Fälligkeit: " + (review.next_followup_at || "keine");
+  $("crm-review-evidence").textContent =
+    "Quelle: " + review.source_ref +
+    " | Quelle aktuell: " + (review.source_current ? "ja" : "NEIN") +
+    " | Kontaktsperre: " + (review.suppressed ? "JA" : "nein") +
+    " | Kontaktfreigabe: KEINE";
+  const history=document.createDocumentFragment();
+  for (const item of review.step_history || []) {
+    const row=document.createElement("tr");
+    td(row,item.from_state + " → " + item.to_state);
+    td(row,item.evidence_ref);
+    td(row,item.occurred_at);
+    history.appendChild(row);
+  }
+  $("crm-review-history").replaceChildren(history);
+  if (!(review.step_history || []).length) {
+    emptyRow($("crm-review-history"),3,"Noch keine manuellen CRM-Schritte.");
+  }
+  $("crm-review-history-count").textContent =
+    String(review.step_history_total || 0) +
+    " dokumentierte Schritte" + (review.history_truncated
+      ? " (nur 100 jüngste angezeigt)." : ".");
+  $("journey-case").value = caseId;
+  $("appointment-pilot").value = pilot;
+  $("appointment-case").value = caseId;
+  const authorized=["operator","admin"].includes(state.role);
+  $("sales-step-form").hidden = !authorized || !review.can_record_manual_step;
+  $("step-pilot").value = pilot;
+  $("step-case").value = caseId;
+  $("step-from").value = review.state;
+  const options=document.createDocumentFragment();
+  for (const action of review.available_transitions || []) {
+    const option=document.createElement("option");
+    option.value=action;
+    option.textContent=CRM_NEXT_LABELS[action] || action;
+    options.appendChild(option);
+  }
+  $("step-to").replaceChildren(options);
+  $("step-evidence").value = "";
+  $("step-followup").value = "";
+  $("step-followup").required = value("step-to") === "FOLLOWUP_SCHEDULED";
+}
+
 async function crmWorklist() {
   const generation = state.generation;
   const revision = ++state.crmQueryRevision;
   clearJourney();
+  clearCaseReview();
   const pilot = value("crm-pilot-id");
   if (!pilot) throw new Error("Bitte eine Pilot-ID eingeben.");
   const filter = "?pilot=" + encodeURIComponent(pilot);
@@ -433,6 +516,24 @@ async function crmWorklist() {
     for (const field of [item.case_id, item.company_name, item.state,
       item.next_followup_at || "–",
       item.suppressed ? "Gesperrt" : "Keine lokale Sperre"]) td(row, field);
+    const actionCell=td(row,"");
+    if (["operator","admin"].includes(state.role)) {
+      const open=document.createElement("button");
+      open.type="button";
+      open.textContent="Bearbeiten";
+      open.addEventListener("click",async () => {
+        try {
+          await openCrmCase(pilot,item.case_id);
+          await customerJourney();
+          say("");
+        } catch (error) {
+          if (!(error instanceof StaleContextError)) say(error.message);
+        }
+      });
+      actionCell.replaceChildren(open);
+    } else {
+      actionCell.textContent="Nur Leserecht";
+    }
     caseRows.appendChild(row);
   }
   const dueRows = document.createDocumentFragment();
@@ -452,7 +553,7 @@ async function crmWorklist() {
   casesBody.replaceChildren(caseRows);
   dueBody.replaceChildren(dueRows);
   appointmentBody.replaceChildren(appointmentRows);
-  if (!cases.items?.length) emptyRow(casesBody, 5, "Keine CRM-Vorgänge.");
+  if (!cases.items?.length) emptyRow(casesBody, 6, "Keine CRM-Vorgänge.");
   if (!due.items?.length) emptyRow(dueBody, 4, "Keine fälligen Wiedervorlagen.");
   if (!appointments.items?.length) emptyRow(appointmentBody, 5, "Keine Kalendertermine erfasst.");
   $("crm-case-count").textContent =
@@ -465,6 +566,7 @@ async function crmWorklist() {
 function clearCrmWorklist() {
   state.crmQueryRevision += 1;
   clearJourney();
+  clearCaseReview();
   $("journey-case").value = "";
   $("crm-pilot-id").value = "";
   $("crm-case-list").replaceChildren();
@@ -550,7 +652,7 @@ async function openTenant(event) {
     $("inbound-form").hidden = !operates;
     $("source-case-form").hidden = !operates;
     $("appointment-form").hidden = !operates;
-    $("sales-step-form").hidden = !operates;
+    $("sales-step-form").hidden = true;
     $("public-inquiry-section").hidden = !operates || !state.publicInboxEnabled;
     $("public-inquiry-review-form").hidden = !operates || !state.publicInboxEnabled;
     $("pilot-form").hidden = !finance;
@@ -696,6 +798,10 @@ async function main() {
     const adopting=value("inquiry-review-decision")==="ADOPT";
     $("inquiry-review-pilot").required=adopting;
     if (!adopting) $("inquiry-review-pilot").value="";
+  });
+  $("step-to").addEventListener("change", () => {
+    $("step-followup").required = value("step-to") === "FOLLOWUP_SCHEDULED";
+    if (!$("step-followup").required) $("step-followup").value = "";
   });
   $("crm-case-filter").addEventListener("submit", async (event) => {
     event.preventDefault();
