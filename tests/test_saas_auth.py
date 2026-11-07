@@ -289,6 +289,37 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(self.request(tenant="tenant-b",
                         token=self.token("bob-0001"))[0].startswith("200"))
 
+    def test_customer_journey_get_uses_current_tenant_membership(self):
+        from greengrapeme.pilot_metrics import PilotLedger
+        from greengrapeme.pilot_sales_flow import PilotSalesFlow
+        PilotLedger(self.store).create(
+            "tenant-a","pilot-0009","offer","Buyer journey",
+            monthly_fee_cents=18000)
+        PilotSalesFlow(self.store).open_inbound(
+            "tenant-a","pilot-0009","case-0009",
+            company_name="Buyer GmbH",channel="CRM_INBOUND",
+            evidence_ref="urn:crm:inbound:buyer-0009",
+            reporter_ref="operator-0009")
+        params={"pilot":"pilot-0009","case":"case-0009"}
+        code,journey,_=self.request(
+            path="/api/pilot-journey",params=params)
+        self.assertTrue(code.startswith("200"),(code,journey))
+        self.assertEqual(journey["crm_state"],"INBOUND_REVIEW")
+        self.assertEqual(journey["next_action"],"QUALIFY_INBOUND_REQUEST")
+        self.assertEqual(journey["financials"]["confirmed_customer_net_cash_cents"],0)
+        self.assertFalse(journey["next_action_is_automatic_effect"])
+        code,denied,_=self.request(
+            path="/api/pilot-journey",tenant="tenant-b",params=params)
+        self.assertTrue(code.startswith("403"),denied)
+        code,missing,_=self.request(
+            path="/api/pilot-journey",
+            params={"pilot":"pilot-0009","case":"case-xxxx"})
+        self.assertTrue(code.startswith("404"),missing)
+        self.assertTrue(self.members.revoke("tenant-a",self.alice))
+        code,denied,_=self.request(
+            path="/api/pilot-journey",params=params)
+        self.assertTrue(code.startswith("403"),denied)
+
     def test_read_only_viewer_cannot_mutate_or_upgrade_from_jwt_claim(self):
         code, _, _ = self.request(
             method="POST", path="/api/discovery-jobs",
