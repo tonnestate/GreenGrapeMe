@@ -23,6 +23,7 @@ from .oidc_auth import AuthenticationFailure, IdentityConfig, OIDCTokenVerifier
 from .operations import SalesWorkspace
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
+from .sales_journey import SalesJourney
 from .reply_effects import ReplyEffects
 from .calendar_bookings import CalendarBookings
 from .tenant_access import TenantMemberships
@@ -293,6 +294,9 @@ def create_saas_app(
                     data = PilotLedger(store).summary(tenant, arg("id"))
                 elif path == "/api/pilot-cases":
                     data = PilotSalesFlow(store).list(tenant, arg("pilot"))
+                elif path == "/api/pilot-journey":
+                    data = SalesJourney(store).get(
+                        tenant, arg("pilot"), arg("case"))
                 elif path == "/api/pilot-appointments":
                     data = CalendarBookings(store).list(
                         tenant, arg("pilot"),limit=int(arg("limit","100")))
