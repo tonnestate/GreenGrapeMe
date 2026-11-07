@@ -280,6 +280,10 @@ def create_saas_app(
                         "subject": principal.subject,
                         "tenant": tenant,
                         "role": memberships.role(principal, tenant),
+                        "public_inquiry_enabled":bool(
+                            public_inbox is not None and
+                            public_inbox.tenant==tenant and
+                            memberships.permitted(principal,tenant,"operate")),
                     }
                 elif path == "/api/overview":
                     data = catalog.overview(tenant)
