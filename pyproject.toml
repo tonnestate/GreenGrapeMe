@@ -10,7 +10,7 @@ description = "Evidence-first sales team execution contracts for FruitStack"
 dependencies = ["PyJWT[crypto]>=2.10,<3"]
 
 [project.optional-dependencies]
-serve = ["gunicorn>=22,<25"]
+serve = ["gunicorn>=22,<27"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
