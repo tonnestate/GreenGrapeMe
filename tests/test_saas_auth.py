@@ -140,6 +140,102 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(code.startswith("200"))
         self.assertEqual(data["company_name"], "Beta GmbH")
 
+    def test_adversarial_post_json_is_rejected_without_business_mutation(self):
+        """Duplicate keys, non-finite numbers and invalid Unicode are 400."""
+        self.members.grant("tenant-a", self.alice, "finance")
+        valid = (
+            b'{"pilot_id":"pilot-0001","offer_id":"offer",'
+            b'"label":"Pilot","monthly_fee_cents":10000,'
+            b'"setup_fee_cents":0}'
+        )
+        malicious = {
+            "duplicate_top_level": valid.replace(
+                b'"pilot_id":"pilot-0001"',
+                b'"pilot_id":"pilot-0001","pilot_id":"pilot-0002"'),
+            "duplicate_nested": (
+                b'{"pilot_id":"pilot-0001","offer_id":"offer",'
+                b'"label":{"safe":"value","safe":"overwritten"},'
+                b'"monthly_fee_cents":10000,"setup_fee_cents":0}'),
+            "nan": valid.replace(b'10000', b'NaN'),
+            "positive_infinity": valid.replace(b'10000', b'Infinity'),
+            "negative_infinity": valid.replace(b'10000', b'-Infinity'),
+            "float_overflow": valid.replace(b'10000', b'1e10000'),
+            "unpaired_surrogate": valid.replace(
+                b'"label":"Pilot"', b'"label":"\\uD800"'),
+            "invalid_utf8": valid.replace(b'Pilot', b'\\xff'),
+            "truncated_json": valid[:-3],
+            "excess_nesting": valid.replace(
+                b'"label":"Pilot"', b'"label":' + b'[' * 40 +
+                b'"Pilot"' + b']' * 40),
+        }
+        for label, raw in malicious.items():
+            with self.subTest(case=label):
+                code, data, headers = self.request(
+                    method="POST", path="/api/pilots", origin=ORIGIN,
+                    headers={
+                        "wsgi.input": BytesIO(raw),
+                        "CONTENT_LENGTH": str(len(raw)),
+                    },
+                )
+                self.assertTrue(code.startswith("400"), (label,code,data))
+                self.assertEqual(data, {"error": "invalid_request"})
+                self.assertEqual(headers["Cache-Control"], "no-store, max-age=0")
+        code, data, _ = self.request(
+            method="POST", path="/api/pilots", origin=ORIGIN,
+            headers={
+                "wsgi.input": BytesIO(valid),
+                "CONTENT_LENGTH": "9" * 6000,
+            })
+        self.assertTrue(code.startswith("400"), data)
+        with self.store._db() as db:
+            self.assertEqual(
+                db.execute("SELECT count(*) FROM sales_pilots "
+                           "WHERE tenant='tenant-a'").fetchone()[0],0)
+
+        # A legitimate, unchanged browser JSON payload must still work.
+        code, created, _ = self.request(
+            method="POST", path="/api/pilots", origin=ORIGIN,
+            headers={"wsgi.input":BytesIO(valid),
+                     "CONTENT_LENGTH":str(len(valid))})
+        self.assertTrue(code.startswith("202"), (code,created))
+
+    def test_http_query_argument_pollution_and_invalid_encoding_fail_closed(self):
+        bad_queries = (
+            "id=&id=shared-company",
+            "id=shared-company&id=",
+            "id=%ZZ",
+            "id=%FF",
+            "id=shared-company&bad",
+            "q=" + "a" * 2050,
+            "id=shared-company&" + "&".join("x=1" for _ in range(25)),
+        )
+        for query in bad_queries:
+            with self.subTest(query=query[:70]):
+                code, body, _ = self.request(
+                    path="/api/company",
+                    headers={"QUERY_STRING":query})
+                self.assertTrue(code.startswith("400"),(code,body))
+                self.assertEqual(body,{"error":"invalid_request"})
+        # An explicitly blank optional search term remains legal.
+        code, _, _ = self.request(
+            path="/api/companies", headers={"QUERY_STRING":"q="})
+        self.assertTrue(code.startswith("200"))
+
+    def test_saas_origin_cannot_include_userinfo_or_encoded_host(self):
+        for malicious_origin in (
+            "https://user@app.greengrapeme.example",
+            "https://user:pass@app.greengrapeme.example",
+            "https://app%40greengrapeme.example",
+            "https://app.greengrapeme.example/",
+            "https://app.greengrapeme.example?next=other",
+            "https://app.greengrapeme.example#fragment",
+        ):
+            with self.subTest(origin=malicious_origin):
+                with self.assertRaises(ValueError):
+                    create_saas_app(
+                        DiscoveryCatalog(self.store),self.members,
+                        self.verifier,allowed_origin=malicious_origin)
+
     def test_rejects_missing_jwt_wrong_audience_expiration_and_bad_signature(self):
         bad = [
             self.token(claims={"aud": "another-api"}),
