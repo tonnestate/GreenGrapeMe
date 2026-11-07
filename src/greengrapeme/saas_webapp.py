@@ -264,7 +264,7 @@ def create_saas_app(
         tenant = environ.get("HTTP_X_GREEN_GRAPE_TENANT", "")
         required = (
             "operate" if method == "GET" and
-            path == "/api/public-pilot-inquiries" else
+            path in {"/api/public-pilot-inquiries","/api/pilot-case-review"} else
             "read" if method == "GET" else
             "finance" if path in {"/api/pilots", "/api/pilot-record"} else
             "operate")
@@ -310,6 +310,9 @@ def create_saas_app(
                     data = PilotSalesFlow(store).list(tenant, arg("pilot"))
                 elif path == "/api/pilot-journey":
                     data = SalesJourney(store).get(
+                        tenant, arg("pilot"), arg("case"))
+                elif path == "/api/pilot-case-review":
+                    data = PilotSalesFlow(store).review(
                         tenant, arg("pilot"), arg("case"))
                 elif path == "/api/public-pilot-inquiries" and public_inbox is not None:
                     data = public_inbox.list(
