@@ -289,6 +289,73 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(self.request(tenant="tenant-b",
                         token=self.token("bob-0001"))[0].startswith("200"))
 
+    def test_public_pilot_inquiry_private_approval_to_existing_crm(self):
+        from greengrapeme.public_inquiries import (
+            PublicPilotInbox,bootstrap_public_inbox)
+        from greengrapeme.pilot_metrics import PilotLedger
+
+        path=Path(self.temp.name)/"public-inquiries.sqlite"
+        bootstrap_public_inbox(path)
+        form=PublicPilotInbox(path,tenant="tenant-a",signing_key="x"*64)
+        inbox=PublicPilotInbox(path,tenant="tenant-a")
+        form.submit(
+            token=form.issue_token(),company_name="Interested GmbH",
+            contact_email="interested@example.org",
+            message="Interest in a bounded pilot",
+            privacy_ack="on",honeypot="",remote_addr="192.0.2.12")
+        inquiry=form.list("tenant-a")["items"][0]["inquiry_id"]
+        self.app=create_saas_app(
+            DiscoveryCatalog(self.store),self.members,self.verifier,
+            allowed_origin=ORIGIN,public_inbox=inbox)
+        code,data,_=self.request("/api/me")
+        self.assertTrue(code.startswith("200"))
+        self.assertFalse(data["public_inquiry_enabled"])
+        code,data,_=self.request("/api/public-pilot-inquiries")
+        self.assertTrue(code.startswith("403"))
+        self.members.grant("tenant-a",self.alice,"operator")
+        code,data,_=self.request("/api/me")
+        self.assertTrue(code.startswith("200"))
+        self.assertTrue(data["public_inquiry_enabled"])
+        code,data,headers=self.request("/api/public-pilot-inquiries")
+        self.assertTrue(code.startswith("200"),(code,data))
+        self.assertEqual(data["items"][0]["contact_email"],
+                         "interested@example.org")
+        self.assertEqual(headers["Cache-Control"],"no-store, max-age=0")
+        code,_,_=self.request(
+            "/api/public-pilot-inquiries",tenant="tenant-b",
+            token=self.token("bob-0001"))
+        self.assertTrue(code.startswith("403"))
+        PilotLedger(self.store).create(
+            "tenant-a","pilot-0012","offer","Accepted web request",
+            monthly_fee_cents=10000)
+        payload={"inquiry_id":inquiry,"decision":"ADOPT",
+                 "pilot_id":"pilot-0012"}
+        code,result,_=self.request("/api/public-pilot-inquiry-review",
+            method="POST",payload=payload,origin=ORIGIN)
+        self.assertTrue(code.startswith("202"),(code,result))
+        self.assertEqual(result["state"],"ADOPTED")
+        self.assertEqual(result["contact_authority"],"NONE")
+        code,replayed,_=self.request("/api/public-pilot-inquiry-review",
+            method="POST",payload=payload,origin=ORIGIN)
+        self.assertTrue(code.startswith("202"),(code,replayed))
+        self.assertEqual(replayed,result)
+        code,data,_=self.request("/api/pilot-cases",
+            params={"pilot":"pilot-0012"})
+        self.assertTrue(code.startswith("200"),(code,data))
+        self.assertEqual(data["total"],1)
+        self.assertEqual(data["items"][0]["reported_channel"],"WEB_FORM")
+        self.assertEqual(data["items"][0]["contact_authority"],"NONE")
+        code,data,_=self.request("/api/public-pilot-inquiries")
+        self.assertEqual(data["items"][0]["state"],"ADOPTED")
+        self.assertEqual(data["items"][0]["case_id"],result["case_id"])
+        self.members.grant("tenant-a",self.alice,"viewer")
+        code,_,_=self.request("/api/public-pilot-inquiries")
+        self.assertTrue(code.startswith("403"))
+        code,_,_=self.request("/api/public-pilot-inquiry-review",
+            method="POST",payload=payload)
+        self.assertTrue(code.startswith("403"))
+        self.assertEqual(self.store.overview("tenant-a")["opportunities"],2)
+
     def test_customer_journey_get_uses_current_tenant_membership(self):
         from greengrapeme.pilot_metrics import PilotLedger
         from greengrapeme.pilot_sales_flow import PilotSalesFlow
