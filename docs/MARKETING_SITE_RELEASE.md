@@ -89,6 +89,15 @@ noch Einwilligung zu Werbung.
    Konfiguration vollständig vorliegen.
 2. Separate Datei, **nicht** die operative SaaS-SQLite-Datei:
    `python -m greengrapeme.cli --db /srv/gg/public-inquiries.sqlite public-inbox-bootstrap`.
+   **Verbindliches OS-Gate:** Den öffentlichen Dienst unter einer eigenen,
+   unprivilegierten Benutzeridentität betreiben, die weder die operative
+   `GG_SAAS_DB` noch deren Backups, Schlüssel oder Verzeichnisse lesen
+   darf. Dem SaaS-Dienst ausschließlich den benötigten Zugriff auf
+   die getrennte Inbox (einschließlich SQLite-Journaldateien und
+   Verzeichnis) über gezielte Dateisystem-ACLs erteilen. Die beim
+   Bootstrap gesetzten Dateirechte `0600` sind lediglich der sichere
+   Ausgangszustand. Ein gemeinsames Dienstkonto würde diese Isolation
+   **nicht** gewährleisten.
 3. Öffentlicher WSGI-Prozess benötigt zusätzlich
    `GG_PUBLIC_INBOX_DB` (genau diese Datei),
    `GG_PUBLIC_INQUIRY_TENANT` (fest zugeordneter SaaS-Mandant) und
@@ -124,6 +133,12 @@ die manuelle Bearbeitung. **Es ist keine Kontakt- oder Werbedatenbank.**
 Die getrennte Datei muss auf einem verschlüsselten Datenträger mit
 rollenbegrenztem Zugriff liegen; Zugriff und Backups dürfen personenbezogene
 Daten nicht in öffentliche Logs oder Git bringen.
+
+Dabei werden nicht nur E-Mail und Freitext, sondern auch
+IP-abgeleitete Ratenprüfsummen und Inhaltsprüfsummen entfernt. Für
+abgelehnte oder abgelaufene Anfragen wird ebenfalls der Firmenname
+gelöscht. Bereits übernommene CRM-Fälle behalten den im CRM
+gespeicherten Firmennamen als getrennte fachliche Quelle.
 
 Ein täglicher, vom Host einzurichtender Aufbewahrungsjob muss
 `python -m greengrapeme.cli --db /srv/gg/public-inquiries.sqlite --tenant <echter-mandant> public-inbox-purge --max-age-days 30`
