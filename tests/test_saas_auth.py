@@ -289,6 +289,33 @@ class SaasIdentityAPITests(unittest.TestCase):
         self.assertTrue(self.request(tenant="tenant-b",
                         token=self.token("bob-0001"))[0].startswith("200"))
 
+    def test_saas_factory_requires_complete_private_inbox_wiring(self):
+        from greengrapeme.public_inquiries import bootstrap_public_inbox
+
+        path=Path(self.temp.name)/"public-config.sqlite"
+        bootstrap_public_inbox(path)
+        settings={
+            "GG_SAAS_DB":str(self.db),
+            "GG_OIDC_ISSUER":ISSUER,
+            "GG_OIDC_AUDIENCE":AUD,
+            "GG_OIDC_JWKS_URI":JWKS,
+            "GG_SAAS_ORIGIN":ORIGIN,
+            "GG_SAAS_PUBLIC_INBOX_DB":str(path),
+            "GG_PUBLIC_INQUIRY_TENANT":"tenant-a",
+        }
+        with patch.dict("os.environ",settings,clear=True):
+            self.assertTrue(callable(create_service_from_env()))
+        with patch.dict("os.environ",{
+            key:value for key,value in settings.items()
+            if key!="GG_PUBLIC_INQUIRY_TENANT"},clear=True):
+            with self.assertRaises(ValueError):
+                create_service_from_env()
+        with patch.dict("os.environ",{
+            **settings, "GG_SAAS_PUBLIC_INBOX_DB":str(path)+"missing"
+        },clear=True):
+            with self.assertRaises(ValueError):
+                create_service_from_env()
+
     def test_public_pilot_inquiry_private_approval_to_existing_crm(self):
         from greengrapeme.public_inquiries import (
             PublicPilotInbox,bootstrap_public_inbox)
