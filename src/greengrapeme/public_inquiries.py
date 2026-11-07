@@ -208,17 +208,23 @@ class PublicPilotInbox:
         with self._db() as db:
             total=db.execute("""
                 SELECT count(*) FROM public_pilot_inquiries
+                WHERE tenant=? AND state IN ('NEW','ADOPTING','ADOPTED')
+            """,(tenant,)).fetchone()[0]
+            pending=db.execute("""
+                SELECT count(*) FROM public_pilot_inquiries
                 WHERE tenant=? AND state IN ('NEW','ADOPTING')
             """,(tenant,)).fetchone()[0]
             rows=db.execute("""
                 SELECT inquiry_id,company_name,contact_email,message,
                        submitted_at,state,pilot_id,case_id
                 FROM public_pilot_inquiries
-                WHERE tenant=? AND state IN ('NEW','ADOPTING')
-                ORDER BY submitted_at,inquiry_id LIMIT ?
+                WHERE tenant=? AND state IN ('NEW','ADOPTING','ADOPTED')
+                ORDER BY CASE state WHEN 'NEW' THEN 0
+                         WHEN 'ADOPTING' THEN 1 ELSE 2 END,
+                         submitted_at,inquiry_id LIMIT ?
             """,(tenant,limit)).fetchall()
         return {"items":[dict(row) for row in rows],"total":total,
-                "contact_authority":"NONE",
+                "pending":pending,"contact_authority":"NONE",
                 "inquiries_are_unverified":True}
 
     def decline(self, tenant: str, inquiry_id: str, *, reviewer_ref: str) -> dict:
@@ -258,6 +264,10 @@ class PublicPilotInbox:
         inquiry_id=_id(inquiry_id,"inquiry_id")
         pilot_id=_id(pilot_id,"pilot_id")
         reviewer_ref=_id(reviewer_ref,"reviewer_ref")
+        # Validate target pilot BEFORE claiming the inquiry, otherwise a
+        # typo could strand it in ADOPTING under an unusable pilot ID.
+        from .pilot_metrics import PilotLedger
+        PilotLedger(crm_flow.store).get(tenant,pilot_id)
         case_id="public-"+inquiry_id
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
