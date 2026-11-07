@@ -299,7 +299,7 @@ class BrowserTests(unittest.TestCase):
                   js.index('onForm("source-case-form"')]
         self.assertIn('api("/api/public-pilot-inquiry-review"',review)
         self.assertIn('decision==="ADOPT"',review)
-        self.assertIn('contact',review.lower())
+        self.assertIn('kontaktfreigabe',review.lower())
         self.assertNotIn("innerHTML",review)
         self.assertNotIn('api("/api/pilot-reply',review)
         self.assertNotIn('api("/api/pilot-step',review)
