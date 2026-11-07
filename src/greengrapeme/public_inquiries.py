@@ -335,8 +335,10 @@ class PublicPilotInbox:
             db.execute("BEGIN IMMEDIATE")
             changed=db.execute("""
                 UPDATE public_pilot_inquiries
-                SET contact_email='',message='',
-                    company_name=CASE WHEN state='NEW' THEN '' ELSE company_name END,
+                SET contact_email='',message='',rate_bucket='',
+                    request_sha256='',
+                    company_name=CASE WHEN state IN ('NEW','DECLINED')
+                        THEN '' ELSE company_name END,
                     state=CASE WHEN state='NEW' THEN 'EXPIRED' ELSE state END,
                     updated_at=?
                 WHERE tenant=? AND submitted_at<?
