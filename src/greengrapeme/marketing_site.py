@@ -453,7 +453,7 @@ def _html(config: PublicSiteConfig, page: Page,
         '<section class="marketing-next"><h2>Nächster Schritt</h2>'+
         '<p>Ein begrenzter Pilot klärt Anforderungen, externe Freigaben und die überprüfbaren Erfolgskriterien.</p>'+
         '<a href="/pilotprojekt">Pilotablauf ansehen</a> · '+
-        '<a href="/kontakt">Pilotprojekt anfragen</a></section>'+
+        '<a href="/pilotprojekt">Pilotprojekt anfragen</a></section>'+
         (('<aside class="marketing-related"><h2>Weiterführende Informationen</h2><ul>'+
           related+'</ul></aside>') if related else "")+
         '</article></main>'+
