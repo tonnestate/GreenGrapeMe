@@ -12,6 +12,7 @@ from .release_audit import release_audit
 from .tenant_access import Principal, TenantMemberships
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
+from .public_inquiries import bootstrap_public_inbox, PublicPilotInbox
 from .dittofeed_lifecycle import DittofeedLifecycleProjection
 from .dittofeed_outbox import DittofeedOutbox
 from .dittofeed_admin import DittofeedReadOnlyAdmin
@@ -58,6 +59,11 @@ def main(argv: list[str] | None = None) -> int:
                            help="Unused destination path; source is never changed")
     sub.add_parser("release-audit",
         help="Read-only NO-GO production gate and unresolved external effect counts")
+    sub.add_parser("public-inbox-bootstrap",
+        help="Provision a distinct NEW limited public pilot inquiry database")
+    public_purge=sub.add_parser("public-inbox-purge",
+        help="Scrub expired visitor contact fields in existing public inbox")
+    public_purge.add_argument("--max-age-days",type=int,default=30)
     backup = sub.add_parser("db-backup",
         help="Consistent SQLite snapshot; no overwrite, all tenants")
     backup.add_argument("--output", required=True, help="New backup file path")
@@ -219,6 +225,18 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = restore_database(a.backup, a.output)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
+    if a.command=="public-inbox-bootstrap":
+        bootstrap_public_inbox(a.db)
+        print(json.dumps({"public_inbox_created":True},
+                         ensure_ascii=False,sort_keys=True))
+        return 0
+    if a.command=="public-inbox-purge":
+        if not a.tenant:
+            p.error("--tenant is required for inbox retention")
+        result=PublicPilotInbox(a.db,tenant=a.tenant).purge_expired(
+            max_age_days=a.max_age_days)
+        print(json.dumps(result,ensure_ascii=False,sort_keys=True))
         return 0
     if not a.tenant:
         p.error("--tenant is required for tenant-scoped operations")
