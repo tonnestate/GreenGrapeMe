@@ -132,7 +132,9 @@ class PublicPilotInbox:
         if not isinstance(token,str) or len(token)>128:
             raise ValueError("invalid form token")
         parts = token.split(".")
-        if len(parts)!=3 or not parts[0].isdecimal() or not _HEX.fullmatch(parts[1]):
+        if (len(parts)!=3 or not 1<=len(parts[0])<=12
+                or not parts[0].isdecimal() or not _HEX.fullmatch(parts[1])
+                or re.fullmatch(r"[0-9a-f]{64}",parts[2]) is None):
             raise ValueError("invalid form token")
         try:
             timestamp = int(parts[0])
