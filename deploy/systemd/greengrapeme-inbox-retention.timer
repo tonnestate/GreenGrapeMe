@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily GreenGrapeMe privacy retention for public pilot inquiries
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=greengrapeme-inbox-retention.service
+
+[Install]
+WantedBy=timers.target

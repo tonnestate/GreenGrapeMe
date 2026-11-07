@@ -1,0 +1,30 @@
+[Unit]
+Description=GreenGrapeMe authenticated tenant SaaS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gg-saas
+Group=gg-saas
+WorkingDirectory=/opt/greengrapeme
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/greengrapeme/saas.env
+UMask=0077
+ExecStartPre=/opt/greengrapeme/.venv/bin/python -m greengrapeme.cli launch-preflight --component saas
+ExecStart=/opt/greengrapeme/.venv/bin/gunicorn --workers 2 --threads 4 --bind 127.0.0.1:8082 --forwarded-allow-ips 127.0.0.1 --access-logfile - --error-logfile - greengrapeme.saas_webapp:create_service_from_env()
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/greengrapeme/sales /var/lib/greengrapeme/public
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -268,6 +268,44 @@ class PublicInquiryJourneyTests(unittest.TestCase):
             form=self.form(),remote="198.51.100.19")["status"],"303 See Other")
         self.assertEqual(self.inbox.list("tenant-a")["total"],4)
 
+    def test_loopback_proxy_client_ip_is_validated_and_rate_limits_are_per_client(self):
+        # Actual deployment: Nginx replaces X-Real-IP, Gunicorn sees local
+        # loopback REMOTE_ADDR. Without this check all visitors share a
+        # single three-requests-per-hour bucket.
+        for i in range(3):
+            form=self.form()
+            form["unternehmen"]="Public Client "+str(i)
+            response=self.request(
+                "/pilot-anfrage",method="POST",form=form,
+                remote="127.0.0.1",
+                headers={"HTTP_X_REAL_IP":"203.0.113.17"})
+            self.assertEqual(response["status"],"303 See Other")
+        throttled=self.request(
+            "/pilot-anfrage",method="POST",form=self.form(),
+            remote="127.0.0.1",
+            headers={"HTTP_X_REAL_IP":"203.0.113.17"})
+        self.assertEqual(throttled["status"],"429 Too Many Requests")
+        second=self.request(
+            "/pilot-anfrage",method="POST",form=self.form(),
+            remote="127.0.0.1",
+            headers={"HTTP_X_REAL_IP":"203.0.113.18"})
+        self.assertEqual(second["status"],"303 See Other")
+        # Direct, non-loopback requests cannot spoof an IP using a header.
+        direct=self.request(
+            "/pilot-anfrage",method="POST",form=self.form(),
+            remote="198.51.100.99",
+            headers={"HTTP_X_REAL_IP":"203.0.113.17"})
+        self.assertEqual(direct["status"],"303 See Other")
+        for invalid in ("bad-ip","203.0.113.17,198.51.100.1","",
+                        "2001:db8:zz::1"):
+            with self.subTest(invalid=invalid):
+                denied=self.request(
+                    "/pilot-anfrage",method="POST",form=self.form(),
+                    remote="127.0.0.1",
+                    headers={"HTTP_X_REAL_IP":invalid})
+                self.assertEqual(denied["status"],"400 Bad Request")
+        self.assertEqual(self.inbox.list("tenant-a")["total"],5)
+
     def test_strict_form_validation_and_no_secret_leakage(self):
         form=self.form()
         invalids=[

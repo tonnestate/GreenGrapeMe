@@ -4,7 +4,23 @@
 
 **An autonomous sales organization for FruitStack — focused on verified business outcomes, not message volume.**
 
-Status: **P0 development / not deployed**. This repository is currently **public**; it must contain no proprietary FruitStack implementation, private configuration, credentials, sales contacts, provider secrets, or customer data.
+Status: **LOCAL RELEASE CANDIDATE / NOT DEPLOYED / PRODUCTION NO-GO**. This repository is currently **public**; it must contain no proprietary FruitStack implementation, private configuration, credentials, sales contacts, provider secrets, or customer data.
+
+## Release candidate / installation (November 2026)
+
+The connected public landing pages → signed pilot form → isolated inbox →
+OIDC operator review → CRM qualification → bounded response/calendar
+preparation → evidence-linked contract/invoice/cash journey are implemented
+and covered by CI. **No legitimate live sales/customer execution has been
+verified or deployed by these tests.** The correct deliverable is a
+**tested local release candidate**, not production approval.
+
+The [deployment and launch checklist](docs/RELEASE_CANDIDATE_DEPLOYMENT.md)
+contains independent `launch-preflight --component public|saas` commands,
+actual systemd/Nginx templates, separate service accounts, privacy
+retention and the exact remaining external G1–G5/legal/operations
+acceptance. `release-audit` remains **NO-GO**. The older development
+milestones below document historical steps, not the current feature state.
 
 ## Public product website, SEO and E-E-A-T (development)
 
