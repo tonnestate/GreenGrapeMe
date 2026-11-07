@@ -9,6 +9,7 @@ from .database_recovery import backup_database, restore_database, verify_databas
 from .production_database import bootstrap_operational_database
 from .schema_migration import migrate_database
 from .release_audit import release_audit
+from .launch_preflight import launch_preflight
 from .tenant_access import Principal, TenantMemberships
 from .pilot_metrics import PilotLedger
 from .pilot_sales_flow import PilotSalesFlow
@@ -59,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
                            help="Unused destination path; source is never changed")
     sub.add_parser("release-audit",
         help="Read-only NO-GO production gate and unresolved external effect counts")
+    launch = sub.add_parser("launch-preflight",
+        help="Read-only, secret-redacted LOCAL deployment preflight; never live GO")
+    launch.add_argument("--component",required=True,choices=("public","saas"))
     sub.add_parser("public-inbox-bootstrap",
         help="Provision a distinct NEW limited public pilot inquiry database")
     public_purge=sub.add_parser("public-inbox-purge",
@@ -204,6 +208,10 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--once", action="store_true", help="Process one queued item and exit")
     worker.add_argument("--interval", type=int, default=5)
     a = p.parse_args(argv)
+    if a.command == "launch-preflight":
+        report = launch_preflight(a.component)
+        print(json.dumps(report,ensure_ascii=False,sort_keys=True))
+        return 0 if report["local_launch_checks_passed"] else 2
     if a.command in {"db-verify", "db-backup", "db-restore",
                      "db-bootstrap", "db-migrate", "release-audit"}:
         if a.command == "db-migrate":
