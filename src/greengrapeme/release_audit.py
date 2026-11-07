@@ -18,6 +18,7 @@ _REQUIRED_OPERATIONS_TABLES = frozenset({
     "saas_tenants", "saas_memberships",
     "sales_pilots", "sales_pilot_events", "sales_pilot_cases",
     "sales_pilot_case_steps", "sales_pilot_reply_effects",
+    "sales_reply_provider_attempts",
     "sales_pilot_contracts", "sales_contract_terminations",
     "sales_customer_invoices",
     "sales_customer_movements",
@@ -38,6 +39,9 @@ _UNCERTAIN_STATES = {
     ),
     "sales_calendar_dispatch_attempts": (
         "DISPATCH_UNCERTAIN", "HTTP_ACCEPTED_UNVERIFIED",
+    ),
+    "sales_reply_provider_attempts": (
+        "DISPATCH_UNCERTAIN", "HTTP_ACCEPTED_NOT_DELIVERED",
     ),
     "sales_pilot_reply_effects": (
         "DISPATCH_IN_FLIGHT", "DISPATCH_UNCERTAIN",
@@ -103,6 +107,9 @@ def release_audit(path: str | Path) -> dict:
         "unconfirmed_customer_credit_note_count": 0,
         "confirmed_customer_credit_note_count": 0,
         "orphaned_provider_attempt_count": 0,
+        "resend_unverified_delivery_count": 0,
+        "resend_delivered_count": 0,
+        "resend_bounce_or_complaint_count": 0,
         "live_release_gates": {name: "UNVERIFIED" for name in _EXTERNAL_GATES},
         "blockers": list(_EXTERNAL_GATES),
         "no_external_effects_executed": True,
@@ -134,6 +141,18 @@ def release_audit(path: str | Path) -> dict:
             report["uncertain_external_effect_counts"] = uncertain
             if any(uncertain.values()):
                 report["blockers"].insert(0, "UNRECONCILED_EXECUTION_OR_EFFECTS")
+            if "sales_reply_provider_attempts" in verified:
+                statuses = dict(db.execute(
+                    "SELECT state,count(*) FROM sales_reply_provider_attempts "
+                    "GROUP BY state").fetchall())
+                report["resend_unverified_delivery_count"] = (
+                    statuses.get("DISPATCH_UNCERTAIN",0) +
+                    statuses.get("HTTP_ACCEPTED_NOT_DELIVERED",0))
+                report["resend_delivered_count"] = statuses.get(
+                    "DELIVERED_CONFIRMED",0)
+                report["resend_bounce_or_complaint_count"] = (
+                    statuses.get("BOUNCED_CONFIRMED",0) +
+                    statuses.get("COMPLAINT_CONFIRMED",0))
             if "sales_customer_credit_notes" in verified:
                 credit_counts = dict(db.execute(
                     "SELECT state,count(*) FROM sales_customer_credit_notes "
