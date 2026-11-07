@@ -583,8 +583,17 @@ function onForm(id, operation) {
     try {
       const message = await operation();
       assertGeneration(generation);
-      say(message || "Vorgang gespeichert.");
-      await overview();
+      const confirmed=message || "Vorgang gespeichert.";
+      say(confirmed);
+      // A successful mutation must not become a false failure just because
+      // the subsequent, independent dashboard refresh cannot be fetched.
+      try { await overview(); }
+      catch (refreshError) {
+        if (refreshError instanceof StaleContextError) throw refreshError;
+        if (generation === state.generation) {
+          say(confirmed + " Die Übersicht konnte nicht aktualisiert werden.");
+        }
+      }
     } catch (error) {
       if (generation === state.generation && !(error instanceof StaleContextError)) {
         say(error.message);
@@ -816,13 +825,21 @@ async function main() {
         inquiry_id:value("inquiry-review-id"), decision, pilot_id:pilotId,
       },
     });
-    await publicInquiries();
+    let refreshFailed=false;
+    try { await publicInquiries(); }
+    catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      refreshFailed=true;
+    }
+    const suffix=refreshFailed
+      ? " Die Liste konnte nicht aktualisiert werden; Speicherung ist bestätigt."
+      : "";
     if (result.state==="ADOPTED") {
       $("crm-pilot-id").value=result.pilot_id;
       return "Anfrage als gemeldeter CRM-Vorgang übernommen: " +
-        result.case_id + ". Keine automatische Kontaktfreigabe.";
+        result.case_id + ". Keine automatische Kontaktfreigabe." + suffix;
     }
-    return "Pilotanfrage abgelehnt. Kein CRM-Vorgang angelegt.";
+    return "Pilotanfrage abgelehnt. Kein CRM-Vorgang angelegt." + suffix;
   });
   onForm("source-case-form", async () => {
     const result = await api("/api/pilot-discovery", {
