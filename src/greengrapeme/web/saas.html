@@ -138,6 +138,19 @@
           <div><label for="crm-pilot-id">Pilot-ID für CRM-Arbeitsliste</label><input id="crm-pilot-id" required maxlength="120"></div>
           <button type="submit">Vorgänge und Wiedervorlagen laden</button>
         </form>
+        <section id="crm-review-section" aria-labelledby="crm-review-title" hidden>
+          <h3 id="crm-review-title">Ausgewählten CRM-Vorgang bearbeiten</h3>
+          <p id="crm-review-summary" aria-live="polite"></p>
+          <p id="crm-review-evidence"></p>
+          <p>Diese Vorgangsprüfung erteilt weder eine Kontaktberechtigung noch bestätigt sie bereits einen Vertriebserfolg. Die nächsten Statuswechsel werden aus dem aktuellen CRM-Zustand abgeleitet.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Dokumentierter Schritt</th><th>Belegreferenz</th><th>Erfasst am</th></tr></thead>
+              <tbody id="crm-review-history"></tbody>
+            </table>
+          </div>
+          <p id="crm-review-history-count"></p>
+        </section>
         <h3>Vertriebsverlauf eines Kunden</h3>
         <p>Zeigt den echten CRM- und Belegstand. Gemeldete Termine und Angebote sind kein unabhängiger Erfolgsnachweis.</p>
         <form id="journey-form" class="filters">
@@ -155,7 +168,7 @@
         <p id="crm-case-count" aria-live="polite"></p>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Vorgang</th><th>Unternehmen</th><th>Status</th><th>Fälligkeit</th><th>Kontaktsperre</th></tr></thead>
+            <thead><tr><th>Vorgang</th><th>Unternehmen</th><th>Status</th><th>Fälligkeit</th><th>Kontaktsperre</th><th>Bearbeitung</th></tr></thead>
             <tbody id="crm-case-list"></tbody>
           </table>
         </div>
@@ -204,14 +217,14 @@
           <button type="submit">Anfrage dokumentieren</button>
         </form>
         <form id="sales-step-form" class="discovery-form" hidden>
-          <div><label for="step-pilot">Pilot-ID</label><input id="step-pilot" required></div>
-          <div><label for="step-case">Vorgangs-ID</label><input id="step-case" required></div>
-          <div><label for="step-id">Meilenstein-ID</label><input id="step-id" required></div>
-          <div><label for="step-from">Aktueller Status</label><input id="step-from" required placeholder="INBOUND_REVIEW"></div>
-          <div><label for="step-to">Neuer Status</label><input id="step-to" required placeholder="QUALIFIED_REPORTED"></div>
-          <div><label for="step-evidence">Belegreferenz</label><input id="step-evidence" required placeholder="urn:crm:step:…"></div>
-          <div><label for="step-followup">Fälligkeit (ISO, nur bei Follow-up)</label><input id="step-followup" placeholder="2026-11-12T10:00:00+01:00"></div>
-          <button type="submit">Meilenstein dokumentieren</button>
+          <p>Den Vorgang über „Bearbeiten“ aus der CRM-Arbeitsliste auswählen. Der bisherige Status ist nicht manuell überschreibbar. Jeder Schritt benötigt einen eigenständigen Beleg.</p>
+          <div><label for="step-pilot">Pilot-ID</label><input id="step-pilot" required readonly></div>
+          <div><label for="step-case">Vorgangs-ID</label><input id="step-case" required readonly></div>
+          <div><label for="step-from">Aktueller Status</label><input id="step-from" required readonly></div>
+          <div><label for="step-to">Fachlich zulässiger nächster Status</label><select id="step-to" required></select></div>
+          <div><label for="step-evidence">Belegreferenz (URN/HTTPS)</label><input id="step-evidence" required maxlength="1024" placeholder="urn:crm:review:…"></div>
+          <div><label for="step-followup">Fälligkeit mit Zeitzone (nur bei Wiedervorlage)</label><input id="step-followup" placeholder="2026-11-12T10:00:00+01:00"></div>
+          <button type="submit">Manuellen CRM-Schritt mit Beleg dokumentieren</button>
         </form>
       </section>
 
