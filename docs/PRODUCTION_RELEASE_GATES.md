@@ -67,9 +67,10 @@ It is **never** equivalent to `production_ready=true`.
    signature and consistent actual CRM update.
 5. **G5**: Independent invoices, bank settlements, refunds and partial
    payments, real provider/campaign costs and defensible revenue attribution.
-6. **SaaS identity**: Authenticated tenant/workspace membership and user
-   authorization in the actually deployed service (the current loopback
-   shared-token WSGI UI is **not** this).
+6. **SaaS identity**: Actual deployment and verification of the
+   implemented OIDC+PKCE tenant membership and role-based API, including
+   IdP rotation and revocation. Its existing authenticated SaaS code and
+   offline tests do **not** prove a live IdP-backed installation.
 7. **Operations**: Real host monitoring, alerting, secure offsite
    backups, operational disaster-recovery exercise, credentials and
    signing-key rotation, incident procedures and access reviews.
@@ -127,10 +128,14 @@ never trigger implicit re-creation. The old implicit-bootstrap constructor
 remains for existing developer test fixtures and CLI workflows; it must
 **not** be used as the production web startup path.
 
-**Still required:** production-grade authenticated SaaS HTTP gateway,
-actual host deployment, backups/offsite recovery, schema-versioned
-migrations for **existing** databases, secret rotation and real G1–G5
-provider/business acceptance. The explicit bootstrap is a safe initial
+**Still required:** actual deployment of the implemented OIDC SaaS
+gateway and public funnel behind two distinct trusted TLS hosts,
+offsite backups/restore exercises, credential rotation and real G1–G5
+provider/business acceptance. Existing-database upgrades use the
+implemented offline copy-forward schema migrations, not live DDL.
+The [release-candidate deployment runbook](RELEASE_CANDIDATE_DEPLOYMENT.md)
+includes the protected WSGI launch preflight; its exit 0 is strictly a
+local technical readiness result, never production GO. The explicit bootstrap is a safe initial
 schema creation operation, **not** a production-ready service on its own.
 
 ## CLI entrypoints cannot bypass protected web/worker startup
