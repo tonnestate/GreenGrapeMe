@@ -56,6 +56,52 @@ verwirft offene Leseantworten und leert alle dazugehörigen Daten.
 Ende-zu-Ende-Kette, Quelländerungen, Sperren, geänderte Zustände,
 Replay-Sicherheit und die Zugriffskontrolle.
 
+## Kommunikations- und Kalenderbelege direkt in derselben CRM-Akte
+
+Die Fallprüfung `GET /api/pilot-case-review` liest nun zusätzlich in
+**derselben SQLite-Lesetransaktion** den tatsächlichen Stand des
+Antwortregisters, der unabhängigen Resend-Providerbelege und aller
+Buchungsabsichten bzw. bestätigten Kalenderereignisse **dieses einen
+Mandanten/Piloten/Vorgangs**. Es entstehen keine neuen Wahrheitstabellen.
+
+Die Bearbeitungsansicht zeigt:
+
+- **Kommunikation:** Antwort-ID, referenzierten Empfänger, lokalen
+  `PREPARED`-/Effektzustand und den **separaten** Providerstatus.
+  `PREPARED` und `HTTP_ACCEPTED_NOT_DELIVERED` sind keine Zustellung.
+  `DELIVERED_CONFIRMED` darf nur aus der bereits implementierten,
+  extern verifizierten Providerabfrage stammen.
+- **Kalender:** Referenz, Zeitfenster und `REQUESTED`,
+  `BOOKED_CONFIRMED` oder `CANCELLED_CONFIRMED`. `REQUESTED`
+  bedeutet **keine** externe Buchung, und eine bestätigte Buchung ist
+  weiterhin kein Beweis für die Teilnahme an einem Gespräch.
+- **Nächste Aktionen:** Nur Operatoren/Admins erhalten die durch die
+  vorhandenen Domainmodule bestimmten Optionen
+  `can_prepare_reply_metadata` bzw.
+  `can_prepare_appointment_intent`. Eine geänderte Quelle,
+  Kontaktsperre, fehlende passende Anfrage oder unzulässiger CRM-Status
+  verhindern die Vorbereitung.
+
+Ein Operator kann einen bereits im **separaten, autorisierten Host-Store**
+freigegebenen Empfänger- und Inhaltsbeleg samt SHA-256 als lokale
+Antwortmetadaten über die bestehende API vorbereiten. **Die öffentliche
+Website, das CRM-Browserformular und die SaaS-API versenden dabei
+keine einzige Nachricht.** Eine echte Freigabe der konkreten Nachricht
+erfolgt unabhängig über die PomeloMe-/Provider-Host-Strecke.
+
+Analog wird eine zukünftige lokale Terminabsicht aus der **ausgewählten
+CRM-Akte** mit fest gebundenen Pilot-/Fall-IDs angelegt. Der echte
+Kalenderanbieter muss getrennt bestätigen. Browserseitige Referenz-IDs
+bleiben bei identischen Wiederholungsversuchen stabil, während die
+serverseitigen Quell-/Berechtigungs-/Idempotenzprüfungen weiterhin
+allein maßgeblich sind. Mandanten- und Aktenwechsel verhindern
+nachlaufende Anzeigeaktualisierungen.
+
+Tests prüfen sowohl die Domainzustände als auch die echte OIDC-SaaS-API
+und die sichere, nur lesende Beleganzeige. Das bleibt eine **lokale
+Integrationsabnahme**, keine Live-Kommunikations- oder
+Kalenderabnahme.
+
 ## Fachliche Evidenzklassen
 
 | Phase | Was das System belegen darf | Was es nicht behaupten darf |
