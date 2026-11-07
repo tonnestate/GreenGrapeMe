@@ -8,6 +8,7 @@ const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
                 caseReviewRevision: 0, caseReview: null, caseStepDraft: null,
+                replyDraft: null, bookingDraft: null,
                 publicInquiryRevision: 0, publicInboxEnabled: false,
                 journeyQueryRevision: 0, companyDetailRevision: 0,
                 discoveryDraft: null };
@@ -438,15 +439,25 @@ function clearCaseReview() {
   state.caseReviewRevision += 1;
   state.caseReview = null;
   state.caseStepDraft = null;
+  state.replyDraft = null;
+  state.bookingDraft = null;
   $("crm-review-section").hidden = true;
   $("crm-review-summary").textContent = "";
   $("crm-review-evidence").textContent = "";
   $("crm-review-history").replaceChildren();
   $("crm-review-history-count").textContent = "";
+  for (const id of ["crm-reply-list","crm-booking-list"]) $(id).replaceChildren();
+  for (const id of ["crm-reply-count","crm-booking-count"]) $(id).textContent = "";
+  $("reply-metadata-form").hidden = true;
+  $("appointment-form").hidden = true;
+  $("reply-id").value = "";
+  for (const id of ["reply-recipient","reply-content","reply-content-sha"]) $(id).value = "";
   $("sales-step-form").hidden = true;
   $("step-to").replaceChildren();
   for (const id of ["step-pilot","step-case","step-from",
     "step-evidence","step-followup"]) $(id).value = "";
+  for (const id of ["appointment-pilot","appointment-case","appointment-id",
+    "appointment-calendar","appointment-start","appointment-end"]) $(id).value = "";
 }
 async function openCrmCase(pilot, caseId) {
   const generation=state.generation;
@@ -485,11 +496,55 @@ async function openCrmCase(pilot, caseId) {
     String(review.step_history_total || 0) +
     " dokumentierte Schritte" + (review.history_truncated
       ? " (nur 100 jüngste angezeigt)." : ".");
+  const replyRows=document.createDocumentFragment();
+  for (const item of review.replies || []) {
+    const row=document.createElement("tr");
+    td(row,item.reply_id);
+    td(row,item.recipient_ref);
+    td(row,item.state);
+    td(row,item.provider_delivery_state || "KEIN PROVIDER-NACHWEIS");
+    replyRows.appendChild(row);
+  }
+  $("crm-reply-list").replaceChildren(replyRows);
+  if (!(review.replies || []).length) {
+    emptyRow($("crm-reply-list"),4,"Keine Antwort vorbereitet oder bestätigt.");
+  }
+  $("crm-reply-count").textContent=String(review.reply_total ?? 0)+
+    " Antwortdatensätze" + (review.replies_truncated
+      ? " (50 jüngste angezeigt)." : ".") +
+    " Eine Providerannahme ist keine Zustellung.";
+  const bookingRows=document.createDocumentFragment();
+  for (const item of review.appointments || []) {
+    const row=document.createElement("tr");
+    for (const value of [item.booking_id,item.slot_start_at,
+      item.slot_end_at,item.state,item.calendar_ref]) td(row,value);
+    bookingRows.appendChild(row);
+  }
+  $("crm-booking-list").replaceChildren(bookingRows);
+  if (!(review.appointments || []).length) {
+    emptyRow($("crm-booking-list"),5,"Noch keine Buchungsabsicht.");
+  }
+  $("crm-booking-count").textContent=String(review.appointment_total ?? 0)+
+    " Terminabsichten/Buchungen" + (review.appointments_truncated
+      ? " (50 jüngste angezeigt)." : ".") +
+    " Eine Buchung beweist keine Teilnahme.";
   $("journey-case").value = caseId;
   $("appointment-pilot").value = pilot;
   $("appointment-case").value = caseId;
   const authorized=["operator","admin"].includes(state.role);
   $("sales-step-form").hidden = !authorized || !review.can_record_manual_step;
+  $("reply-metadata-form").hidden =
+    !authorized || !review.can_prepare_reply_metadata;
+  $("appointment-form").hidden =
+    !authorized || !review.can_prepare_appointment_intent;
+  if (authorized && review.can_prepare_reply_metadata) {
+    $("reply-id").value = "reply-"+crypto.randomUUID();
+  }
+  if (authorized && review.can_prepare_appointment_intent) {
+    $("appointment-id").value = "booking-"+crypto.randomUUID();
+  }
+  state.caseReview.canPrepareReply = authorized && review.can_prepare_reply_metadata;
+  state.caseReview.canPrepareAppointment = authorized && review.can_prepare_appointment_intent;
   $("step-pilot").value = pilot;
   $("step-case").value = caseId;
   $("step-from").value = review.state;
@@ -675,7 +730,7 @@ async function openTenant(event) {
     $("discovery-form").hidden = !operates;
     $("inbound-form").hidden = !operates;
     $("source-case-form").hidden = !operates;
-    $("appointment-form").hidden = !operates;
+    $("appointment-form").hidden = true;
     $("sales-step-form").hidden = true;
     $("public-inquiry-section").hidden = !operates || !state.publicInboxEnabled;
     $("public-inquiry-review-form").hidden = !operates || !state.publicInboxEnabled;
