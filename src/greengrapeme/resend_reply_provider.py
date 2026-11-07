@@ -195,7 +195,9 @@ class ResendReplyEffectAdapter:
                 SELECT * FROM sales_pilot_reply_effects
                 WHERE tenant=? AND pilot_id=? AND case_id=? AND effect_id=?
             """, (self.tenant,a["pilot_id"],a["case_id"],intent.effect_id)).fetchone()
-        if (row is None or row["state"] != "DISPATCH_IN_FLIGHT" or
+        if (row is None or row["state"] not in (
+                "DISPATCH_IN_FLIGHT", "DISPATCH_UNCERTAIN",
+                "PROVIDER_ACCEPTED", "PROVIDER_FAILED") or
                 any(row[key] != a[key] for key in (
                     "opportunity_id","recipient_ref","content_ref","content_sha256")) or
                 row["permission_receipt_ref"] != a["permission_receipt_ref"]):
