@@ -390,11 +390,35 @@ async function publicInquiries() {
     for (const field of [item.inquiry_id, item.company_name,
       item.contact_email, item.message, item.submitted_at, item.state,
       item.case_id ? (item.pilot_id + " / " + item.case_id) : "–"]) td(row, field);
+    const action=td(row,"");
+    const button=document.createElement("button");
+    button.type="button";
+    if (item.state==="ADOPTED" && item.pilot_id && item.case_id) {
+      button.textContent="CRM öffnen";
+      button.addEventListener("click",async () => {
+        try {
+          $("crm-pilot-id").value=item.pilot_id;
+          await crmWorklist();
+          await openCrmCase(item.pilot_id,item.case_id);
+          await customerJourney();
+          say("");
+        } catch (error) {
+          if (!(error instanceof StaleContextError)) say(error.message);
+        }
+      });
+    } else {
+      button.textContent="Anfrage prüfen";
+      button.addEventListener("click",() => {
+        $("inquiry-review-id").value=item.inquiry_id;
+        $("inquiry-review-pilot").focus();
+      });
+    }
+    action.replaceChildren(button);
     fragment.appendChild(row);
   }
   $("public-inquiry-list").replaceChildren(fragment);
   if (!data.items?.length) {
-    emptyRow($("public-inquiry-list"),7,"Keine öffentlichen Pilotanfragen.");
+    emptyRow($("public-inquiry-list"),8,"Keine öffentlichen Pilotanfragen.");
   }
   $("public-inquiry-count").textContent =
     String(data.pending ?? 0) + " neue oder in Übernahme befindliche Anfragen; " +
@@ -942,8 +966,17 @@ async function main() {
       : "";
     if (result.state==="ADOPTED") {
       $("crm-pilot-id").value=result.pilot_id;
+      let crmRefreshFailed=false;
+      try {
+        await crmWorklist();
+        await openCrmCase(result.pilot_id,result.case_id);
+      } catch (error) {
+        if (error instanceof StaleContextError) throw error;
+        crmRefreshFailed=true;
+      }
       return "Anfrage als gemeldeter CRM-Vorgang übernommen: " +
-        result.case_id + ". Keine automatische Kontaktfreigabe." + suffix;
+        result.case_id + ". Keine automatische Kontaktfreigabe." + suffix +
+        (crmRefreshFailed ? " Die Arbeitsakte konnte nicht geöffnet werden." : "");
     }
     return "Pilotanfrage abgelehnt. Kein CRM-Vorgang angelegt." + suffix;
   });
@@ -971,15 +1004,52 @@ async function main() {
     return "Eingang dokumentiert: " + result.state;
   });
   onForm("sales-step-form", async () => {
-    const result = await api("/api/pilot-step", {
-      method: "POST", body: {
-        pilot_id: value("step-pilot"), case_id: value("step-case"),
-        step_id: value("step-id"), expected_state: value("step-from"),
-        to_state: value("step-to"), evidence_ref: value("step-evidence"),
-        followup_at: value("step-followup"),
-      },
+    const selected=state.caseReview;
+    if (!selected || !["operator","admin"].includes(state.role) ||
+        selected.pilot!==value("step-pilot") ||
+        selected.caseId!==value("step-case") ||
+        selected.current!==value("step-from") ||
+        !selected.transitions.includes(value("step-to"))) {
+      throw new Error("Vorgang geändert. Bitte den aktuellen CRM-Vorgang neu öffnen.");
+    }
+    const next=value("step-to");
+    const followup=next==="FOLLOWUP_SCHEDULED"
+      ? value("step-followup") : "";
+    if (next==="FOLLOWUP_SCHEDULED" && !followup) {
+      throw new Error("Eine Wiedervorlage benötigt eine Fälligkeit mit Zeitzone.");
+    }
+    const spec={
+      pilot_id:selected.pilot, case_id:selected.caseId,
+      expected_state:selected.current, to_state:next,
+      evidence_ref:value("step-evidence"), followup_at:followup,
+    };
+    // Preserve one step ID for identical retries after a lost HTTP reply.
+    // New evidence/transition is a new draft, never a silent retry.
+    const serialized=JSON.stringify(spec);
+    const old=state.caseStepDraft;
+    const draft=old && old.serialized===serialized &&
+      old.generation===state.generation ? old : {
+        generation:state.generation,serialized,
+        step_id:"step-"+crypto.randomUUID(),
+      };
+    state.caseStepDraft=draft;
+    const result=await api("/api/pilot-step", {
+      method:"POST",body:{...spec,step_id:draft.step_id},
     });
-    return "CRM-Status dokumentiert: " + result.state;
+    state.caseStepDraft=null;
+    let refreshFailed=false;
+    try {
+      $("crm-pilot-id").value=selected.pilot;
+      await crmWorklist();
+      await openCrmCase(selected.pilot,selected.caseId);
+      await customerJourney();
+    } catch (error) {
+      if (error instanceof StaleContextError) throw error;
+      refreshFailed=true;
+    }
+    return "CRM-Schritt dokumentiert: "+result.state+
+      " (gemeldet, keine unabhängige Bestätigung oder Kontaktfreigabe)." +
+      (refreshFailed ? " Die Anzeige konnte nicht vollständig aktualisiert werden." : "");
   });
   onForm("pilot-form", async () => {
     await api("/api/pilots", {method: "POST", body: {
