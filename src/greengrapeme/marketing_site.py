@@ -15,7 +15,7 @@ import json
 import re
 
 
-_EMAIL = re.compile(r"^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$")
+_EMAIL = re.compile(r"^[A-Za-z0-9_.+%-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
 _PAGE_LIMIT = 200
 
 
