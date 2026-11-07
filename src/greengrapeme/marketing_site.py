@@ -471,31 +471,40 @@ def _html(config: PublicSiteConfig, page: Page,
 
 
 def _response(start_response, status: str, payload: bytes, mimetype: str,
-              *, indexable: bool = False, head: bool = False):
+              *, indexable: bool = False, head: bool = False,
+              private: bool = False, forms: bool = False,
+              location: str | None = None):
     headers = [
         ("Content-Type",mimetype),
         ("Content-Length",str(len(payload))),
-        ("Cache-Control","public, max-age=300" if indexable else "public, max-age=3600"),
+        ("Cache-Control","no-store, max-age=0" if private else
+         "public, max-age=300" if indexable else "public, max-age=3600"),
         ("Strict-Transport-Security","max-age=31536000"),
         ("X-Content-Type-Options","nosniff"),
         ("X-Frame-Options","DENY"),
         ("Referrer-Policy","strict-origin-when-cross-origin"),
         ("Content-Security-Policy",
          "default-src 'none'; style-src 'self'; script-src 'none'; "
-         "img-src 'self'; base-uri 'none'; form-action 'none'; "
+         "img-src 'self'; base-uri 'none'; form-action "+
+         ("'self'" if forms else "'none'")+"; "
          "frame-ancestors 'none'; connect-src 'none'"),
         ("Content-Language","de-DE"),
     ]
     if not indexable:
         headers.append(("X-Robots-Tag","noindex, nofollow"))
+    if location is not None:
+        headers.append(("Location",location))
     start_response(status,headers)
     return [] if head else [payload]
 
 
-def create_marketing_app(config: PublicSiteConfig):
+def create_marketing_app(config: PublicSiteConfig, *,
+                         inbox: PublicPilotInbox | None = None):
     """Standalone public WSGI app: deploy at GG_PUBLIC_ORIGIN, NOT SaaS origin."""
     if not isinstance(config,PublicSiteConfig):
         raise ValueError("verified public site configuration required")
+    if inbox is not None and not isinstance(inbox,PublicPilotInbox):
+        raise ValueError("verified separate public inquiry inbox required")
 
     def app(environ,start_response):
         if environ.get("wsgi.url_scheme") != "https":
@@ -547,5 +556,11 @@ def create_marketing_service_from_env():
         "privacy_url":"GG_PUBLIC_PRIVACY_URL",
         "app_url":"GG_PUBLIC_APP_URL",
     }
+    # Public web process only holds access to its own narrow PII inbox.
+    # The SaaS business database and OIDC credentials never enter this host.
+    inbox=PublicPilotInbox(
+        environ["GG_PUBLIC_INBOX_DB"],
+        tenant=environ["GG_PUBLIC_INQUIRY_TENANT"],
+        signing_key=environ["GG_PUBLIC_FORM_KEY"])
     return create_marketing_app(PublicSiteConfig(
-        **{key:environ[name] for key,name in keys.items()}))
+        **{key:environ[name] for key,name in keys.items()}),inbox=inbox)
