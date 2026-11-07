@@ -8,7 +8,6 @@ const state = { config: null, token: null, expiresAt: 0, tenant: "",
                 role: "", companyOffset: 0, companyTotal: 0, generation: 0,
                 companyQueryRevision: 0, crmQueryRevision: 0,
                 caseReviewRevision: 0, caseReview: null, caseStepDraft: null,
-                replyDraft: null, bookingDraft: null,
                 publicInquiryRevision: 0, publicInboxEnabled: false,
                 journeyQueryRevision: 0, companyDetailRevision: 0,
                 discoveryDraft: null };
@@ -439,8 +438,6 @@ function clearCaseReview() {
   state.caseReviewRevision += 1;
   state.caseReview = null;
   state.caseStepDraft = null;
-  state.replyDraft = null;
-  state.bookingDraft = null;
   $("crm-review-section").hidden = true;
   $("crm-review-summary").textContent = "";
   $("crm-review-evidence").textContent = "";
@@ -1004,6 +1001,7 @@ async function main() {
   }
   onForm("reply-metadata-form", async () => {
     const generation=state.generation;
+    const revision=state.caseReviewRevision;
     const selected=state.caseReview;
     if (!selected?.canPrepareReply || !["operator","admin"].includes(state.role)) {
       throw new Error("Diese Kundenanfrage ist nicht für eine Antwortvorbereitung freigegeben.");
@@ -1022,6 +1020,9 @@ async function main() {
       method:"POST",body:metadata,
     });
     assertGeneration(generation);
+    if (revision !== state.caseReviewRevision) {
+      return "Antwortdatensatz "+result.reply_id+" gespeichert. Die inzwischen geöffnete Akte bleibt unverändert.";
+    }
     let refreshFailed=false;
     try { await openCrmCase(selected.pilot,selected.caseId); }
     catch (error) {
@@ -1034,6 +1035,7 @@ async function main() {
   });
   onForm("appointment-form", async () => {
     const generation=state.generation;
+    const revision=state.caseReviewRevision;
     const selected=state.caseReview;
     if (!selected?.canPrepareAppointment ||
         !["operator","admin"].includes(state.role) ||
@@ -1051,6 +1053,9 @@ async function main() {
       method:"POST",body:metadata,
     });
     assertGeneration(generation);
+    if (revision !== state.caseReviewRevision) {
+      return "Terminabsicht "+result.booking_id+" gespeichert. Die inzwischen geöffnete Akte bleibt unverändert.";
+    }
     let refreshFailed=false;
     try { await openCrmCase(selected.pilot,selected.caseId); }
     catch (error) {
